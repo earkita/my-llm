@@ -1,0 +1,4 @@
+interface:
+  display_name: "Diagnose R9700 Log"
+  short_description: "Diagnose the latest R9700 runtime log"
+  default_prompt: "Use $diagnose-r9700-log to inspect the latest runtime log and explain why the service stopped."

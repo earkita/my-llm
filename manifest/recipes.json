@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "default_recipe": "vllm-dspark-v0280",
+  "recipes": {
+    "vllm-dspark-v0280": {
+      "backend": "vllm",
+      "path": "manifest/vllm-dspark-v0280.json",
+      "install_path": ".runtime/recipes/vllm-dspark-v0280/install.json",
+      "smoke_profile": "deepseek-v4-flash"
+    },
+    "vllm-qwen38-flash-next-v0280-pr53896": {
+      "backend": "vllm",
+      "path": "manifest/vllm-qwen38-flash-next-v0280-pr53896.json",
+      "install_path": ".runtime/recipes/vllm-qwen38-flash-next-v0280-pr53896/install.json",
+      "smoke_profile": "qwen38-flash"
+    },
+    "llama-cpp-glm53-pr27754": {
+      "backend": "llama-cpp",
+      "path": "manifest/llama-cpp-glm53-pr27754.json",
+      "install_path": ".runtime/recipes/llama-cpp-glm53-pr27754/install.json",
+      "foundation_recipe": "vllm-dspark-v0280",
+      "smoke_profile": "glm53-flash"
+    }
+  }
+}

@@ -1,0 +1,3689 @@
+diff --git a/tests/v1/kv_connector/unit/test_nixl_connector_hma.py b/tests/v1/kv_connector/unit/test_nixl_connector_hma.py
+index 11538f0219..8ea380903d 100644
+--- a/tests/v1/kv_connector/unit/test_nixl_connector_hma.py
++++ b/tests/v1/kv_connector/unit/test_nixl_connector_hma.py
+@@ -923,7 +923,8 @@ class _FakeBlock:
+ 
+ 
+ class _FakeSingleTypeManager:
+-    def __init__(self, records, block_size, block_ids):
++    def __init__(self, group_id, records, block_size, block_ids):
++        self.kv_cache_group_id = group_id
+         self.records_new_block_ids = records
+         self.block_size = block_size
+         self.req_to_blocks = {"req-1": [_FakeBlock(b) for b in block_ids]}
+@@ -943,8 +944,8 @@ def _make_fake_kv_cache_manager():
+     manager = object.__new__(KVCacheManager)
+     manager.coordinator = MagicMock()
+     manager.coordinator.single_type_managers = (
+-        _FakeSingleTypeManager(True, 16, [10, 11, 12, 13, 14, 15]),  # attention
+-        _FakeSingleTypeManager(False, 16, [20, 21, 22, 23, 24, 25]),  # mamba
++        _FakeSingleTypeManager(0, True, 16, [10, 11, 12, 13, 14, 15]),
++        _FakeSingleTypeManager(1, False, 16, [20, 21, 22, 23, 24, 25]),
+     )
+     return manager
+ 
+@@ -973,7 +974,7 @@ def test_scheduler_filters_connector_loaded_blocks_from_zeroing():
+     scheduler.kv_cache_manager = FakeKVCacheManager()
+     scheduler._skip_zero_block_ids = {10, 12}
+ 
+-    assert scheduler._get_new_block_ids_to_zero() == [9, 11]
++    assert scheduler._get_new_block_ids_to_zero() == [(0, [9, 11])]
+     assert not scheduler._skip_zero_block_ids
+ 
+ 
+@@ -1002,7 +1003,7 @@ def test_failed_load_rezeroes_unwritten_skipped_blocks():
+     # Attention blocks covering tokens >= 48 are re-recorded for zeroing
+     # and flow into the next step's zero list; Mamba blocks are not.
+     scheduler._skip_zero_block_ids = set()
+-    assert scheduler._get_new_block_ids_to_zero() == [13, 14, 15]
++    assert scheduler._get_new_block_ids_to_zero() == [(0, [13, 14, 15])]
+ 
+ 
+ # ── Mamba N-1 prefill tests ──────────────────────────────────────────────
+diff --git a/vllm/_aiter_ops.py b/vllm/_aiter_ops.py
+index 2721dec0be..6d851010b7 100644
+--- a/vllm/_aiter_ops.py
++++ b/vllm/_aiter_ops.py
+@@ -134,7 +134,7 @@ _maybe_promote_torch_hip_runtime()
+ def is_aiter_found_and_supported() -> bool:
+     """Check if AITER library is available and platform supports it.
+ 
+-    Checks: platform (ROCm), device arch is CDNA 3 or better, and library existence.
++    Checks: platform (ROCm), supported architecture, and library existence.
+     Does NOT check environment variables - that's handled by rocm_aiter_ops.is_enabled().
+ 
+     This function determines if aiter CAN be used, not if it SHOULD be used.
+@@ -148,9 +148,15 @@ def is_aiter_found_and_supported() -> bool:
+     VLLM_ROCM_USE_AITER=0, while preventing unwanted JIT warnings for auto-discovery.
+     """
+     if current_platform.is_rocm() and IS_AITER_FOUND:
+-        from vllm.platforms.rocm import get_cdna_version
+-
+-        return get_cdna_version() > 2
++        from vllm.platforms.rocm import on_gfx1x, on_mi3xx
++
++        # AITER provides architecture-guarded Triton/FlyDSL/HIP paths and
++        # tuned FP8 block-scale kernels for gfx1201. Individual feature flags
++        # still decide which subsystems are enabled.
++        if on_gfx1x():
++            arch = torch.cuda.get_device_properties("cuda").gcnArchName
++            return arch.lower().split(":")[0] == "gfx1201"
++        return on_mi3xx()
+     return False
+ 
+ 
+diff --git a/vllm/config/speculative.py b/vllm/config/speculative.py
+index 2b93113b7e..781019c7fd 100644
+--- a/vllm/config/speculative.py
++++ b/vllm/config/speculative.py
+@@ -3,6 +3,7 @@
+ 
+ import copy
+ import functools
++import os
+ from collections.abc import Callable
+ from typing import TYPE_CHECKING, Any, Literal, get_args
+ 
+@@ -14,7 +15,7 @@ from vllm.config.cache import CacheDType
+ from vllm.config.kernel import MoEBackend
+ from vllm.config.model import HfOverrides, ModelConfig
+ from vllm.config.parallel import ParallelConfig
+-from vllm.config.utils import config
++from vllm.config.utils import config, replace
+ from vllm.logger import init_logger
+ from vllm.transformers_utils.config import get_hf_text_config
+ from vllm.utils.hashing import safe_hash
+@@ -1137,10 +1138,20 @@ class SpeculativeConfig:
+                         self.target_parallel_config, self.draft_tensor_parallel_size
+                     )
+                 )
++                if (
++                    self.method == "dspark"
++                    and self.target_parallel_config.pipeline_parallel_size > 1
++                    and os.getenv("VLLM_DSPARK_PP_EXPERIMENTAL") == "1"
++                ):
++                    # The DeepSeek-V4 DSpark head is colocated with the final
++                    # target PP stage. It uses that stage's TP group but is a
++                    # complete local model rather than a pipeline partition.
++                    self.draft_parallel_config = replace(
++                        self.draft_parallel_config, pipeline_parallel_size=1
++                    )
+ 
+         if self.method != "dspark" and self.enable_adaptive_verification:
+             raise ValueError("Adaptive verification only supported with DSpark")
+-
+         return self
+ 
+     def _validate_suffix_decoding(self):
+diff --git a/vllm/distributed/parallel_state.py b/vllm/distributed/parallel_state.py
+index 128db903d4..77f998a301 100644
+--- a/vllm/distributed/parallel_state.py
++++ b/vllm/distributed/parallel_state.py
+@@ -25,6 +25,7 @@ If you only need to use the distributed environment without model/pipeline
+ 
+ import contextlib
+ import gc
++import os
+ import pickle
+ import weakref
+ from collections import namedtuple
+@@ -498,6 +499,13 @@ class GroupCoordinator:
+         else:
+             self.device = torch.device("cpu")
+ 
++        # batch_isend_irecv requires the full NCCL/RCCL process group to be
++        # initialized collectively when it is the first operation on that
++        # group.  Prime PP groups while every rank is still in deterministic
++        # GroupCoordinator construction, rather than lazily from asymmetric
++        # pipeline send/recv paths.
++        self._ensure_batch_pp_group_initialized()
++
+         self.use_device_communicator = use_device_communicator
+         self.device_communicator = None
+         if use_device_communicator and self.world_size > 1:
+@@ -978,6 +986,35 @@ class GroupCoordinator:
+             use_all_gather = all_gather_tensors.get(key, use_all_gather)
+         return use_all_gather
+ 
++    def _use_batch_pp_p2p(self) -> bool:
++        return (
++            os.environ.get("R9700_BATCH_PP_P2P", "0") == "1"
++            and self.unique_name.startswith("pp")
++            and self.world_size > 1
++        )
++
++    def _ensure_batch_pp_group_initialized(self) -> None:
++        """Collectively initialize the full PP device communicator once.
++
++        PyTorch requires all ranks to participate when batch_isend_irecv is the
++        first operation on an NCCL/RCCL process group. This method is called
++        during deterministic GroupCoordinator construction, before pipeline
++        stages can diverge into asymmetric send/recv paths. Initializing the
++        full group here also avoids private two-rank communicators.
++        """
++        if not self._use_batch_pp_p2p() or getattr(
++            self, "_batch_pp_group_initialized", False
++        ):
++            return
++        token = torch.zeros(1, dtype=torch.uint8, device=self.device)
++        torch.distributed.all_reduce(token, group=self.device_group)
++        torch.distributed.barrier(group=self.cpu_group)
++        self._batch_pp_group_initialized = True
++        logger.info_once(
++            "Initialized full PP communicator for batched P2P group %s",
++            tuple(self.ranks),
++        )
++
+     def send_tensor_dict(
+         self,
+         tensor_dict: dict[str, torch.Tensor | Any],
+@@ -1054,6 +1091,8 @@ class GroupCoordinator:
+         assert len(tensor_keys) == len(tensor_list)
+ 
+         handles: list[Handle] = []
++        batch_ops: dict[ProcessGroup, list[torch.distributed.P2POp]] = {}
++        cuda_tensors: list[torch.Tensor] = []
+         for key, tensor in zip(tensor_keys, tensor_list):
+             if tensor.numel() == 0:
+                 continue
+@@ -1064,12 +1103,29 @@ class GroupCoordinator:
+                 tensor = tensor.reshape(all_gather_size, -1)[all_gather_rank]
+ 
+             comm_group = metadata_group if tensor.is_cpu else group
+-            handle = torch.distributed.isend(
+-                tensor, dst=self.ranks[dst], group=comm_group
+-            )
+-            if tensor.is_cuda:
+-                tensor.record_stream(torch.cuda.current_stream(tensor.device))
+-            handles.append(handle)
++            if self._use_batch_pp_p2p():
++                batch_ops.setdefault(comm_group, []).append(
++                    torch.distributed.P2POp(
++                        torch.distributed.isend,
++                        tensor,
++                        self.ranks[dst],
++                        comm_group,
++                    )
++                )
++                if tensor.is_cuda:
++                    cuda_tensors.append(tensor)
++            else:
++                handle = torch.distributed.isend(
++                    tensor, dst=self.ranks[dst], group=comm_group
++                )
++                if tensor.is_cuda:
++                    tensor.record_stream(torch.cuda.current_stream(tensor.device))
++                handles.append(handle)
++
++        for ops in batch_ops.values():
++            handles.extend(torch.distributed.batch_isend_irecv(ops))
++        for tensor in cuda_tensors:
++            tensor.record_stream(torch.cuda.current_stream(tensor.device))
+ 
+         return handles
+ 
+@@ -1149,6 +1205,7 @@ class GroupCoordinator:
+         tensor_dict: dict[str, Any] = {}
+         handles: list[Handle] = []
+         postprocess: list[Callable[[], None]] = []
++        batch_ops: dict[ProcessGroup, list[torch.distributed.P2POp]] = {}
+ 
+         for key, value in recv_metadata_list:
+             if isinstance(value, TensorMetadata):
+@@ -1167,10 +1224,20 @@ class GroupCoordinator:
+                         all_gather_rank
+                     ]
+                     comm_group = metadata_group if slice_tensor.is_cpu else group
+-                    handle = torch.distributed.irecv(
+-                        slice_tensor, src=self.ranks[src], group=comm_group
+-                    )
+-                    handles.append(handle)
++                    if self._use_batch_pp_p2p():
++                        batch_ops.setdefault(comm_group, []).append(
++                            torch.distributed.P2POp(
++                                torch.distributed.irecv,
++                                slice_tensor,
++                                self.ranks[src],
++                                comm_group,
++                            )
++                        )
++                    else:
++                        handle = torch.distributed.irecv(
++                            slice_tensor, src=self.ranks[src], group=comm_group
++                        )
++                        handles.append(handle)
+ 
+                     def _postprocess(
+                         key: str = key,
+@@ -1187,14 +1254,27 @@ class GroupCoordinator:
+                     tensor_dict[key] = slice_tensor
+                 else:
+                     comm_group = metadata_group if full_tensor.is_cpu else group
+-                    handle = torch.distributed.irecv(
+-                        full_tensor, src=self.ranks[src], group=comm_group
+-                    )
+-                    handles.append(handle)
++                    if self._use_batch_pp_p2p():
++                        batch_ops.setdefault(comm_group, []).append(
++                            torch.distributed.P2POp(
++                                torch.distributed.irecv,
++                                full_tensor,
++                                self.ranks[src],
++                                comm_group,
++                            )
++                        )
++                    else:
++                        handle = torch.distributed.irecv(
++                            full_tensor, src=self.ranks[src], group=comm_group
++                        )
++                        handles.append(handle)
+                     tensor_dict[key] = full_tensor
+             else:
+                 tensor_dict[key] = value
+ 
++        for ops in batch_ops.values():
++            handles.extend(torch.distributed.batch_isend_irecv(ops))
++
+         return tensor_dict, handles, postprocess
+ 
+     def barrier(self):
+diff --git a/vllm/envs.py b/vllm/envs.py
+index ed62659cfa..312885314a 100755
+--- a/vllm/envs.py
++++ b/vllm/envs.py
+@@ -238,6 +238,7 @@ if TYPE_CHECKING:
+     VLLM_MQ_MAX_CHUNK_BYTES_MB: int = 16
+     VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS: int = 300
+     VLLM_WORKER_SHUTDOWN_TIMEOUT_SECONDS: int = 5
++    VLLM_ENGINE_PROCESS_SHUTDOWN_GRACE_SECONDS: int = 5
+     VLLM_KV_CACHE_LAYOUT: Literal["NHD", "HND"] | None = None
+     VLLM_SSM_CONV_STATE_LAYOUT: Literal["SD", "DS"] | None = None
+     VLLM_COMPUTE_NANS_IN_LOGITS: bool = False
+@@ -286,6 +287,14 @@ if TYPE_CHECKING:
+     VLLM_GC_DEBUG: str = ""
+     VLLM_DEBUG_WORKSPACE: bool = False
+     VLLM_DISABLE_SHARED_EXPERTS_STREAM: bool = False
++    VLLM_DSPARK_PP_EXPERIMENTAL: bool = False
++    VLLM_DSPARK_PP_DIAGNOSTICS: bool = False
++    VLLM_DSPARK_FAIL_AFTER: int = -1
++    VLLM_DSPARK_PREFILL_CACHE_ONLY: bool = False
++    VLLM_DSPARK_PREFILL_LATE_MATERIALIZE: bool = False
++    VLLM_DSPARK_PREFILL_SKIP_PP_BROADCAST: bool = False
++    VLLM_DSPARK_SKIP_REDUNDANT_HIDDEN_COPY: bool = False
++    VLLM_DSPARK_MAX_VERIFY_TOKENS: int = 0
+     VLLM_SHARED_EXPERTS_STREAM_TOKEN_THRESHOLD: int = 256
+     VLLM_MULTI_STREAM_GEMM_TOKEN_THRESHOLD: int = 1024
+     VLLM_COMPILE_CACHE_SAVE_FORMAT: Literal["binary", "unpacked"] = "binary"
+@@ -601,6 +610,30 @@ def _resolve_rust_cli_path() -> str | None:
+ 
+ 
+ environment_variables: dict[str, Callable[[], Any]] = {
++    "VLLM_DSPARK_PP_EXPERIMENTAL": lambda: bool(
++        int(os.getenv("VLLM_DSPARK_PP_EXPERIMENTAL", "0"))
++    ),
++    "VLLM_DSPARK_PP_DIAGNOSTICS": lambda: bool(
++        int(os.getenv("VLLM_DSPARK_PP_DIAGNOSTICS", "0"))
++    ),
++    "VLLM_DSPARK_FAIL_AFTER": lambda: int(
++        os.getenv("VLLM_DSPARK_FAIL_AFTER", "-1")
++    ),
++    "VLLM_DSPARK_PREFILL_CACHE_ONLY": lambda: bool(
++        int(os.getenv("VLLM_DSPARK_PREFILL_CACHE_ONLY", "0"))
++    ),
++    "VLLM_DSPARK_PREFILL_LATE_MATERIALIZE": lambda: bool(
++        int(os.getenv("VLLM_DSPARK_PREFILL_LATE_MATERIALIZE", "0"))
++    ),
++    "VLLM_DSPARK_PREFILL_SKIP_PP_BROADCAST": lambda: bool(
++        int(os.getenv("VLLM_DSPARK_PREFILL_SKIP_PP_BROADCAST", "0"))
++    ),
++    "VLLM_DSPARK_SKIP_REDUNDANT_HIDDEN_COPY": lambda: bool(
++        int(os.getenv("VLLM_DSPARK_SKIP_REDUNDANT_HIDDEN_COPY", "0"))
++    ),
++    "VLLM_DSPARK_MAX_VERIFY_TOKENS": lambda: int(
++        os.getenv("VLLM_DSPARK_MAX_VERIFY_TOKENS", "0")
++    ),
+     # ================== Installation Time Env Vars ==================
+     # Target device of vLLM, supporting [cuda (by default),
+     # rocm, cpu]
+@@ -1775,6 +1808,12 @@ environment_variables: dict[str, Callable[[], Any]] = {
+     "VLLM_WORKER_SHUTDOWN_TIMEOUT_SECONDS": lambda: int(
+         os.getenv("VLLM_WORKER_SHUTDOWN_TIMEOUT_SECONDS", "5")
+     ),
++    # Process-manager grace used only when request shutdown mode is immediate
++    # abort (shutdown_timeout=0). It prevents EngineCore from being SIGKILLed
++    # before workers can release GPU and IPC resources.
++    "VLLM_ENGINE_PROCESS_SHUTDOWN_GRACE_SECONDS": lambda: int(
++        os.getenv("VLLM_ENGINE_PROCESS_SHUTDOWN_GRACE_SECONDS", "5")
++    ),
+     # KV Cache layout used throughout vllm.
+     # Some common values are:
+     # - NHD
+@@ -2265,6 +2304,7 @@ def compile_factors() -> dict[str, object]:
+         "VLLM_HTTP_TIMEOUT_KEEP_ALIVE",
+         "VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS",
+         "VLLM_WORKER_SHUTDOWN_TIMEOUT_SECONDS",
++        "VLLM_ENGINE_PROCESS_SHUTDOWN_GRACE_SECONDS",
+         "VLLM_KEEP_ALIVE_ON_ENGINE_DEATH",
+         "VLLM_IMAGE_FETCH_TIMEOUT",
+         "VLLM_VIDEO_FETCH_TIMEOUT",
+diff --git a/vllm/model_executor/layers/quantization/input_quant_fp8.py b/vllm/model_executor/layers/quantization/input_quant_fp8.py
+index 2d9cf624ab..3bcc2e5c01 100644
+--- a/vllm/model_executor/layers/quantization/input_quant_fp8.py
++++ b/vllm/model_executor/layers/quantization/input_quant_fp8.py
+@@ -141,6 +141,13 @@ class QuantFP8(CustomOp):
+         scale_ub: torch.Tensor | None = None,
+         use_triton: bool = False,
+     ) -> tuple[torch.Tensor, torch.Tensor]:
++        if self.is_group_quant and use_triton:
++            assert scale is None, "Dynamic group quantization does not use scale"
++
++            return torch.ops.vllm.triton_per_token_group_quant_fp8(
++                x, self.group_size
++            )
++
+         use_aiter_quant = self.use_aiter and scale_ub is None and x.is_contiguous()
+         use_aiter_per_tensor_quant = (
+             use_aiter_quant and self.group_shape.is_per_tensor()
+diff --git a/vllm/model_executor/layers/quantization/utils/fp8_utils.py b/vllm/model_executor/layers/quantization/utils/fp8_utils.py
+index 7910db1925..20cee69001 100644
+--- a/vllm/model_executor/layers/quantization/utils/fp8_utils.py
++++ b/vllm/model_executor/layers/quantization/utils/fp8_utils.py
+@@ -35,6 +35,7 @@ from vllm.utils.deep_gemm import (
+     transform_sf_into_required_layout,
+ )
+ from vllm.utils.platform_utils import get_device_name_as_file_name
++from vllm.utils.torch_utils import direct_register_custom_op
+ 
+ logger = init_logger(__name__)
+ 
+@@ -45,6 +46,39 @@ def is_fp8(x: torch.dtype | torch.Tensor) -> bool:
+     return x == torch.float8_e4m3fn or x == torch.float8_e4m3fnuz
+ 
+ 
++def _triton_per_token_group_quant_fp8_impl(
++    x: torch.Tensor,
++    group_size: int,
++) -> tuple[torch.Tensor, torch.Tensor]:
++    return per_token_group_quant_fp8(
++        x, group_size, column_major_scales=False, use_ue8m0=False
++    )
++
++
++def _triton_per_token_group_quant_fp8_fake(
++    x: torch.Tensor,
++    group_size: int,
++) -> tuple[torch.Tensor, torch.Tensor]:
++    M, N = x.shape
++    x_fp8 = torch.empty((M, N), dtype=current_platform.fp8_dtype(), device=x.device)
++    out_bs = torch.empty(
++        (
++            M,
++            (N + group_size - 1) // group_size,
++        ),
++        dtype=torch.float32,
++        device=x.device,
++    )
++    return x_fp8, out_bs
++
++
++direct_register_custom_op(
++    "triton_per_token_group_quant_fp8",
++    _triton_per_token_group_quant_fp8_impl,
++    fake_impl=_triton_per_token_group_quant_fp8_fake,
++)
++
++
+ def input_to_float8(
+     x: torch.Tensor, dtype: torch.dtype | None = None
+ ) -> tuple[torch.Tensor, torch.Tensor]:
+diff --git a/vllm/model_executor/layers/sparse_attn_indexer.py b/vllm/model_executor/layers/sparse_attn_indexer.py
+index d94b377dbe..66ccfaf466 100644
+--- a/vllm/model_executor/layers/sparse_attn_indexer.py
++++ b/vllm/model_executor/layers/sparse_attn_indexer.py
+@@ -750,6 +750,7 @@ class SparseAttnIndexer(CustomOp):
+         topk_indices_buffer: torch.Tensor,
+         skip_k_cache_insert: bool = False,
+         use_fp4_cache: bool = False,
++        max_decode_workspace_rows: int | None = None,
+     ):
+         super().__init__()
+         self.k_cache = k_cache
+@@ -762,6 +763,9 @@ class SparseAttnIndexer(CustomOp):
+         self.topk_indices_buffer = topk_indices_buffer
+         self.skip_k_cache_insert = skip_k_cache_insert
+         self.use_fp4_cache = use_fp4_cache
++        if max_decode_workspace_rows is not None and max_decode_workspace_rows < 1:
++            raise ValueError("max_decode_workspace_rows must be positive")
++        self.max_decode_workspace_rows = max_decode_workspace_rows
+         self.dense_mha_metadata_layer_name = ""
+         # DCP scalars are constant for the run; resolve them here (config is set
+         # during model construction) and pass them into the custom op, rather
+@@ -873,8 +877,28 @@ class SparseAttnIndexer(CustomOp):
+                 self.max_total_seq_len,
+                 self.topk_indices_buffer,
+                 skip_k_cache_insert=self.skip_k_cache_insert,
++                max_decode_workspace_rows=self.max_decode_workspace_rows,
+             )
+-        raise RuntimeError(
+-            "Sparse attention indexer ROCm path is only supported on AITER. "
+-            "Please enable aiter with VLLM_ROCM_USE_AITER=1"
++        # Non-MI3xx ROCm devices cannot enable the global AITER registry, but
++        # the indexer implementation has an architecture-neutral Triton/torch
++        # fallback. Call it directly without enabling AITER MoE/GEMM kernels.
++        from vllm.v1.attention.ops.rocm_aiter_mla_sparse import (
++            rocm_aiter_sparse_attn_indexer,
++        )
++        return rocm_aiter_sparse_attn_indexer(
++            hidden_states,
++            _encode_layer_name(self.k_cache.prefix),
++            self.k_cache.kv_cache,
++            q_quant,
++            k,
++            weights,
++            self.quant_block_size,
++            self.scale_fmt,
++            self.topk_tokens,
++            self.head_dim,
++            self.max_model_len,
++            self.max_total_seq_len,
++            self.topk_indices_buffer,
++            skip_k_cache_insert=self.skip_k_cache_insert,
++            max_decode_workspace_rows=self.max_decode_workspace_rows,
+         )
+diff --git a/vllm/models/deepseek_v4/amd/dspark.py b/vllm/models/deepseek_v4/amd/dspark.py
+index 28056cb550..cd3fd57f5a 100644
+--- a/vllm/models/deepseek_v4/amd/dspark.py
++++ b/vllm/models/deepseek_v4/amd/dspark.py
+@@ -19,6 +19,7 @@ sliding-window context-KV insert, and the checkpoint ``mtp.*`` weight remap —
+ pure torch / Triton and shared with the nvidia implementation unchanged.
+ """
+ 
++import os
+ from collections.abc import Iterable
+ 
+ import regex as re
+@@ -30,6 +31,7 @@ from vllm.distributed import (
+     get_tensor_model_parallel_rank,
+     get_tensor_model_parallel_world_size,
+ )
++from vllm.distributed.parallel_state import get_pp_group
+ from vllm.logger import init_logger
+ from vllm.model_executor.layers.fused_moe import (
+     fused_moe_make_expert_params_mapping,
+@@ -290,7 +292,8 @@ class DSparkDeepseekV4ForCausalLM(nn.Module):
+     # load_dspark_model always aliases the target's.
+     has_own_embed_tokens = False
+     has_own_lm_head = False
+-    # Full-vocab draft: draft ids are target ids, no remapping needed.
++    # DeepSeek V4 uses the full target vocabulary. The probabilistic DSpark
++    # loader still queries this hook, so keep parity with the NVIDIA model.
+     draft_id_to_target_id = None
+ 
+     def __init__(self, *, vllm_config: VllmConfig, prefix: str = "") -> None:
+@@ -363,8 +366,9 @@ class DSparkDeepseekV4ForCausalLM(nn.Module):
+     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
+         """Load the ``mtp.{0,1,2}.*`` draft weights from the target checkpoint.
+ 
+-        Non-mtp weights (embed/head/main layers) belong to the target model and
+-        are skipped here. ``embed_tokens``/``lm_head`` are aliased from the target.
++        Non-mtp weights belong to the target model and are normally skipped.
++        With experimental target PP, the final stage has no target embedding,
++        so its TP shard is loaded into the draft model from the same checkpoint.
+         """
+         # AMD DeepseekV4MoE has no mega-MoE path; always use the standard
+         # per-expert fused-MoE mapping (mirrors amd/mtp.py).
+@@ -469,7 +473,17 @@ class DSparkDeepseekV4ForCausalLM(nn.Module):
+                 weight_loader(param, loaded_weight)
+                 loaded_params.add(name)
+ 
+-        logger.info_once("DSpark draft model loaded: %d params", len(loaded_params))
++        if (
++            get_pp_group().world_size > 1
++            and os.getenv("VLLM_DSPARK_PP_DIAGNOSTICS") == "1"
++        ):
++            logger.warning(
++                "DSpark PP diagnostic loaded=%d embed_norm=%.6f",
++                len(loaded_params),
++                self.model.embed_tokens.weight.float().norm().item(),
++            )
++        elif get_pp_group().world_size == 1:
++            logger.info_once("DSpark draft model loaded: %d params", len(loaded_params))
+         return loaded_params
+ 
+     def _remap_dspark_name(self, name: str) -> str | None:
+@@ -477,6 +491,11 @@ class DSparkDeepseekV4ForCausalLM(nn.Module):
+ 
+         Returns None for non-mtp weights (owned by the target model).
+         """
++        if (
++            get_pp_group().world_size > 1
++            and name in ("embed.weight", "model.embed_tokens.weight")
++        ):
++            return "model.embed_tokens.weight"
+         m = re.match(r"mtp\.(\d+)\.(.*)", name)
+         if m is None:
+             return None
+diff --git a/vllm/models/deepseek_v4/amd/model.py b/vllm/models/deepseek_v4/amd/model.py
+index 5888ae563c..b600a9134a 100644
+--- a/vllm/models/deepseek_v4/amd/model.py
++++ b/vllm/models/deepseek_v4/amd/model.py
+@@ -106,7 +106,9 @@ class DeepseekV4MLP(nn.Module):
+             self.act_fn = SiluAndMul()
+ 
+         # gate_up_proj B-preshuffle (ColumnParallel -> no all-reduce); set at load.
+-        self._gateup = rocm_aiter_ops.is_enabled()
++        # Keep the shared-expert projection on the reference linear path. The
++        # bpreshuffle kernel changes BF16 rounding relative to v0.26.
++        self._gateup = False
+         # Block scale for the preshuffled gate_up weight; None = not preshuffled.
+         self._gateup_scale: torch.Tensor | None = None
+ 
+diff --git a/vllm/models/deepseek_v4/amd/rocm.py b/vllm/models/deepseek_v4/amd/rocm.py
+index 5e7609bd11..8665d9bbdf 100644
+--- a/vllm/models/deepseek_v4/amd/rocm.py
++++ b/vllm/models/deepseek_v4/amd/rocm.py
+@@ -6,6 +6,7 @@ from typing import cast
+ 
+ import torch
+ 
++from vllm.config import VllmConfig
+ from vllm.distributed import (
+     get_tensor_model_parallel_world_size,
+     tensor_model_parallel_all_reduce,
+@@ -50,6 +51,20 @@ def _trust_dsv4_extra_cache_nan_free(
+     )
+ 
+ 
++def get_rocm_dsv4_prefill_chunk_size(
++    max_num_seqs: int,
++    pcp_world_size: int,
++) -> int:
++    """Return the per-instance ROCm prefill request chunk size."""
++    if max_num_seqs < 1:
++        raise ValueError("max_num_seqs must be positive")
++    if pcp_world_size < 1:
++        raise ValueError("pcp_world_size must be positive")
++    if pcp_world_size > 1:
++        return DeepseekV4Attention.PREFILL_CHUNK_SIZE
++    return min(DeepseekV4Attention.PREFILL_CHUNK_SIZE, max_num_seqs)
++
++
+ def _build_indptr_from_lengths(lengths: torch.Tensor) -> torch.Tensor:
+     lengths = lengths.to(dtype=torch.int32).contiguous()
+     indptr = torch.zeros(lengths.shape[0] + 1, dtype=torch.int32, device=lengths.device)
+@@ -479,9 +494,23 @@ class DeepseekV4ROCMAiterMLAAttention(DeepseekV4Attention):
+ 
+     backend_cls = DeepseekV4ROCMAiterMLASparseBackend
+ 
+-    def __init__(self, *args, **kwargs):
+-        vllm_config = args[0] if args else kwargs["vllm_config"]
+-        super().__init__(*args, **kwargs)
++    def __init__(
++        self,
++        vllm_config: VllmConfig,
++        prefix: str,
++        topk_indices_buffer: torch.Tensor | None = None,
++        aux_stream_list: list[torch.cuda.Stream] | None = None,
++    ) -> None:
++        super().__init__(
++            vllm_config,
++            prefix,
++            topk_indices_buffer=topk_indices_buffer,
++            aux_stream_list=aux_stream_list,
++        )
++        self.prefill_chunk_size = get_rocm_dsv4_prefill_chunk_size(
++            vllm_config.scheduler_config.max_num_seqs,
++            vllm_config.parallel_config.prefill_context_parallel_size,
++        )
+         self._has_kv_transfer = vllm_config.kv_transfer_config is not None
+         # Block scale for the preshuffled weight; None = not preshuffled.
+         self._wqa_wkv_scale: torch.Tensor | None = None
+@@ -521,8 +550,11 @@ class DeepseekV4ROCMAiterMLAAttention(DeepseekV4Attention):
+             )
+             return ws
+ 
+-        self._wqa_wkv_scale = _prep(self.fused_wqa_wkv)
+-        self._wo_b_scale = _prep(self.wo_b)
++        # Keep both attention projections on the reference linear path.  The
++        # bpreshuffle kernels change BF16 rounding relative to the v0.26
++        # production baseline before attention has any other differing input.
++        self._wqa_wkv_scale = None
++        self._wo_b_scale = None
+ 
+     def _bpre_attn_gemm(
+         self,
+@@ -594,7 +626,7 @@ class DeepseekV4ROCMAiterMLAAttention(DeepseekV4Attention):
+             )
+             M = N + self.window_size + self.max_num_batched_tokens
+             current_workspace_manager().get_simultaneous(
+-                ((self.PREFILL_CHUNK_SIZE, M, q.shape[-1]), torch.bfloat16),
++                ((self.prefill_chunk_size, M, q.shape[-1]), torch.bfloat16),
+             )
+             output.zero_()
+             return
+@@ -759,17 +791,16 @@ class DeepseekV4ROCMAiterMLAAttention(DeepseekV4Attention):
+             N = 0
+ 
+         M = N + self.window_size + self.max_num_batched_tokens
+-        num_chunks = (num_prefills + self.PREFILL_CHUNK_SIZE - 1) // (
+-            self.PREFILL_CHUNK_SIZE
+-        )
++        prefill_chunk_size = self.prefill_chunk_size
++        num_chunks = (num_prefills + prefill_chunk_size - 1) // prefill_chunk_size
+ 
+         workspace_manager = current_workspace_manager()
+         kv = workspace_manager.get_simultaneous(
+-            ((self.PREFILL_CHUNK_SIZE, M, q.shape[-1]), torch.bfloat16),
++            ((prefill_chunk_size, M, q.shape[-1]), torch.bfloat16),
+         )[0]
+         for chunk_idx in range(num_chunks):
+-            chunk_start = chunk_idx * self.PREFILL_CHUNK_SIZE
+-            chunk_end = min(chunk_start + self.PREFILL_CHUNK_SIZE, num_prefills)
++            chunk_start = chunk_idx * prefill_chunk_size
++            chunk_end = min(chunk_start + prefill_chunk_size, num_prefills)
+             chunk_size = chunk_end - chunk_start
+             if not swa_only:
+                 assert attn_metadata is not None
+diff --git a/vllm/models/deepseek_v4/attention.py b/vllm/models/deepseek_v4/attention.py
+index 128debf70c..35cfe0d5a0 100644
+--- a/vllm/models/deepseek_v4/attention.py
++++ b/vllm/models/deepseek_v4/attention.py
+@@ -57,6 +57,7 @@ from vllm.v1.attention.backend import AttentionBackend, AttentionMetadata
+ from vllm.v1.attention.backends.mla.indexer import (
+     DeepseekV4IndexerBackend,
+     dsa_indexer_uses_fp4,
++    get_max_indexer_decode_workspace_rows,
+     get_max_prefill_buffer_size,
+ )
+ from vllm.v1.attention.backends.mla.sparse_swa import DeepseekV4SWACache
+@@ -841,6 +842,12 @@ class DeepseekV4Indexer(nn.Module):
+         self.max_total_seq_len = (
+             get_max_prefill_buffer_size(vllm_config) // self.compress_ratio
+         )
++        scheduler_config = vllm_config.scheduler_config
++        self.max_decode_workspace_rows = get_max_indexer_decode_workspace_rows(
++            scheduler_config.max_num_batched_tokens,
++            scheduler_config.max_num_seqs,
++            vllm_config.num_speculative_tokens,
++        )
+ 
+         assert cache_config is not None, "Deepseek V4 indexer requires cache_config"
+         if self.use_fp4_kv:
+@@ -883,6 +890,7 @@ class DeepseekV4Indexer(nn.Module):
+             self.topk_indices_buffer,
+             skip_k_cache_insert=True,
+             use_fp4_cache=self.use_fp4_kv,
++            max_decode_workspace_rows=self.max_decode_workspace_rows,
+         )
+ 
+         # None on ROCm — maybe_execute_in_parallel falls back to sequential.
+diff --git a/vllm/models/deepseek_v4/common/ops/fused_compress_quant_cache.py b/vllm/models/deepseek_v4/common/ops/fused_compress_quant_cache.py
+index 4c9f464ef0..7cea63f803 100644
+--- a/vllm/models/deepseek_v4/common/ops/fused_compress_quant_cache.py
++++ b/vllm/models/deepseek_v4/common/ops/fused_compress_quant_cache.py
+@@ -64,6 +64,7 @@ def compress_norm_rope_store_triton(
+     Picks one of the three kernels in this module based on ``head_dim`` and
+     ``use_fp4_cache``. Identical launch signature for all three.
+     """
++    kernel_kwargs = {}
+     if head_dim == 512:
+         kernel = _fused_kv_compress_norm_rope_insert_sparse_attn
+         num_warps = 4
+@@ -75,7 +76,22 @@ def compress_norm_rope_store_triton(
+     else:
+         kernel = _fused_kv_compress_norm_rope_insert_indexer_attn
+         num_warps = 1
+-        kernel_kwargs = {}
++        indexer_preshuffle = current_platform.is_rocm() and kv_cache.shape[1] > 1
++        if indexer_preshuffle and (
++            kv_cache.shape[1] % 16 != 0 or head_dim % 16 != 0
++        ):
++            raise ValueError(
++                "ROCm indexer preshuffle requires cache block size and head "
++                f"dimension divisible by 16, got {kv_cache.shape[1]} and "
++                f"{head_dim}"
++            )
++        if indexer_preshuffle and (token_stride != head_dim or scale_dim != 4):
++            raise ValueError(
++                "ROCm FP8 indexer preshuffle requires token stride equal to "
++                f"head dimension and a 4-byte scale, got {token_stride}, "
++                f"{head_dim}, and {scale_dim}"
++            )
++        kernel_kwargs = {"INDEXER_PRESHUFFLE": indexer_preshuffle}
+ 
+     kernel[(num_actual,)](
+         # state cache
+@@ -111,6 +127,7 @@ def compress_norm_rope_store_triton(
+         TOKEN_STRIDE=token_stride,
+         SCALE_DIM=scale_dim,
+         KV_BLOCK_STRIDE=kv_cache.stride(0),
+        num_warps=num_warps,
+        **kernel_kwargs,
+         **pdl_kwargs,
+@@ -708,6 +725,7 @@ def _fused_kv_compress_norm_rope_insert_indexer_attn(
+     TOKEN_STRIDE: tl.constexpr,  # 128 for indexer
+     SCALE_DIM: tl.constexpr,  # 4 for indexer (1 float32)
+     KV_BLOCK_STRIDE: tl.constexpr,
++    INDEXER_PRESHUFFLE: tl.constexpr,
+ ):
+     """Fused compress → RMSNorm → RoPE → FP8 quant → store.
+ 
+@@ -790,7 +808,17 @@ def _fused_kv_compress_norm_rope_insert_indexer_attn(
+     kv_pos_in_block = kv_slot_idx % kv_cache_block_size
+ 
+     cache_block_ptr = k_cache_ptr + kv_block_idx.to(tl.int64) * KV_BLOCK_STRIDE
+-    fp8_ptr = cache_block_ptr + kv_pos_in_block * TOKEN_STRIDE
++    if INDEXER_PRESHUFFLE:
++        TILE: tl.constexpr = 16
++        value_offset = (
++            (kv_pos_in_block // TILE) * TILE * HEAD_SIZE
++            + (block // TILE) * TILE * TILE
++            + (kv_pos_in_block % TILE) * TILE
++            + block % TILE
++        )
++        fp8_ptr = cache_block_ptr + value_offset
++    else:
++        fp8_ptr = cache_block_ptr + kv_pos_in_block * TOKEN_STRIDE + block
+     scale_ptr = (
+         cache_block_ptr
+         + kv_cache_block_size * TOKEN_STRIDE
+@@ -840,7 +868,7 @@ def _fused_kv_compress_norm_rope_insert_indexer_attn(
+     x_fp8 = x_clamped.to(tl.float8e4nv)
+     x_uint8 = x_fp8.to(tl.uint8, bitcast=True)
+ 
+-    tl.store(fp8_ptr + block, x_uint8, mask=mask)
++    tl.store(fp8_ptr, x_uint8, mask=mask)
+ 
+     # Single float32 scale
+     scale_val = tl.exp2(exponent)
+diff --git a/vllm/platforms/__init__.py b/vllm/platforms/__init__.py
+index 718e2520c4..6097993a6e 100644
+--- a/vllm/platforms/__init__.py
++++ b/vllm/platforms/__init__.py
+@@ -60,6 +60,15 @@ def cuda_platform_plugin() -> str | None:
+     is_cuda = False
+     logger.debug("Checking if CUDA platform is available.")
+     try:
++        import torch
++
++        # A ROCm PyTorch build uses the CUDA-compatible torch API. On a mixed
++        # AMD/NVIDIA host NVML can still see the NVIDIA drafter, but this vLLM
++        # process cannot use CUDA kernels from that device.
++        if torch.version.hip is not None:
++            logger.debug("CUDA platform is disabled because PyTorch uses ROCm.")
++            return None
++
+         from vllm.utils.import_utils import import_pynvml
+ 
+         pynvml = import_pynvml()
+diff --git a/vllm/platforms/rocm.py b/vllm/platforms/rocm.py
+index 9072c71426..3d2f42f7f0 100644
+--- a/vllm/platforms/rocm.py
++++ b/vllm/platforms/rocm.py
+@@ -219,6 +219,7 @@ _ON_GFX11 = "gfx11" in _GCN_ARCH
+ _ON_GFX1100 = "gfx1100" in _GCN_ARCH
+ _ON_GFX1151 = "gfx1151" in _GCN_ARCH
+ _ON_GFX12X = any(arch in _GCN_ARCH for arch in ["gfx12"])
++_ON_GFX1201 = "gfx1201" in _GCN_ARCH
+ _ON_MI3XX = any(arch in _GCN_ARCH for arch in ["gfx942", "gfx950"])
+ _ON_GFX9 = any(arch in _GCN_ARCH for arch in ["gfx90a", "gfx942", "gfx950"])
+ _ON_GFX90A = "gfx90a" in _GCN_ARCH
+@@ -1111,10 +1112,12 @@ class RocmPlatform(Platform):
+         using_inductor = cc.backend == "inductor" and cc.mode != CompilationMode.NONE
+         default = ["native"] if using_inductor else ["vllm_c", "native"]
+ 
+-        #  Aiter rms norm perform best when CUDA Graph capture is enabled.
+-        # TODO(luka/TJ) remove env vars completely
++        # AITER RMSNorm performs best with CUDA Graph capture upstream. The
++        # gfx1201 Opus kernels are also correctness-gated in eager mode, so
++        # allow an explicit A/B there without changing other architectures.
++        eager_aiter_rmsnorm_supported = _GCN_ARCH.split(":")[0] == "gfx1201"
+         if (
+-            cc.cudagraph_mode != CUDAGraphMode.NONE
++            (cc.cudagraph_mode != CUDAGraphMode.NONE or eager_aiter_rmsnorm_supported)
+             and envs.VLLM_ROCM_USE_AITER
+             and envs.VLLM_ROCM_USE_AITER_RMSNORM
+             and not on_rdna4()
+diff --git a/vllm/triton_utils/importing.py b/vllm/triton_utils/importing.py
+index e17450f78d..4156a7593a 100644
+--- a/vllm/triton_utils/importing.py
++++ b/vllm/triton_utils/importing.py
+@@ -23,8 +23,14 @@ if HAS_TRITON:
+         # It's generally expected that x.driver exists and has
+         # an is_active method.
+         # The `x.driver and` check adds a small layer of safety.
++        selected_backend = os.environ.get("TRITON_DEFAULT_BACKEND")
++        candidates = (
++            [backends[selected_backend]]
++            if selected_backend in backends
++            else backends.values()
++        )
+         active_drivers = [
+-            x.driver for x in backends.values() if x.driver and x.driver.is_active()
++            x.driver for x in candidates if x.driver and x.driver.is_active()
+         ]
+ 
+         # Check if we're in a distributed environment where CUDA_VISIBLE_DEVICES
+diff --git a/vllm/v1/attention/backends/mla/indexer.py b/vllm/v1/attention/backends/mla/indexer.py
+index 1177d8b27a..dca0ca379d 100644
+--- a/vllm/v1/attention/backends/mla/indexer.py
++++ b/vllm/v1/attention/backends/mla/indexer.py
+@@ -472,8 +472,18 @@ class DeepseekV32IndexerMetadata:
+     prefill: DeepseekV32IndexerPrefillMetadata | None = None
+ 
+ 
+-def get_max_prefill_buffer_size(vllm_config: VllmConfig):
+-    max_model_len = vllm_config.model_config.max_model_len
++def get_max_indexer_prefill_workspace_tokens(
++    max_model_len: int,
++    max_num_seqs: int,
++    pcp_world_size: int,
++) -> int:
++    """Bound flattened prefill KV rows by context length and concurrency."""
++    if max_model_len < 1:
++        raise ValueError("max_model_len must be positive")
++    if max_num_seqs < 1:
++        raise ValueError("max_num_seqs must be positive")
++    if pcp_world_size < 1:
++        raise ValueError("pcp_world_size must be positive")
+     # NOTE(Chen): 40 is a magic number for controlling the prefill buffer size.
+     # Each entry is 128 fp8 bytes and 4 scale bytes for a total of 132 bytes.
+     # The flashmla_sparse backend uses a workspace size of 5 * max_model_len.
+@@ -482,7 +492,43 @@ def get_max_prefill_buffer_size(vllm_config: VllmConfig):
+     # within the flashmla_sparse workspace.
+     # For DeepSeek-V3.2, the max_model_len is 163840.
+     #   40 * 163840 * 132 = 865075200 bytes = 825 MB
+-    return max_model_len * 40
++    # Without PCP, a batch with at most 40 sequences cannot contain more than
++    # max_num_seqs request histories. PCP may create multiple local segments
++    # per global request, so retain the historical bound there. Also retain it
++    # above 40 sequences rather than extending this proof across chunk splits.
++    num_seq_histories = (
++        max_num_seqs if pcp_world_size == 1 and max_num_seqs <= 40 else 40
++    )
++    return max_model_len * num_seq_histories
++
++
++def get_max_prefill_buffer_size(vllm_config: VllmConfig) -> int:
++    return get_max_indexer_prefill_workspace_tokens(
++        vllm_config.model_config.max_model_len,
++        vllm_config.scheduler_config.max_num_seqs,
++        vllm_config.parallel_config.prefill_context_parallel_size,
++    )
++
++
++def get_max_indexer_decode_workspace_rows(
++    max_num_batched_tokens: int,
++    max_num_seqs: int,
++    num_speculative_tokens: int,
++) -> int:
++    """Return the maximum number of rows in an indexer decode workspace.
++
++    Each scheduled sequence contributes at most one target token plus its
++    speculative tokens. The scheduler token budget is an independent cap.
++    """
++    if max_num_batched_tokens < 1:
++        raise ValueError("max_num_batched_tokens must be positive")
++    if max_num_seqs < 1:
++        raise ValueError("max_num_seqs must be positive")
++    if num_speculative_tokens < 0:
++        raise ValueError("num_speculative_tokens must be non-negative")
++
++    decode_query_len = num_speculative_tokens + 1
++    return min(max_num_batched_tokens, max_num_seqs * decode_query_len)
+ 
+ 
+ def _supports_varlen_paged_mqa_logits() -> bool:
+diff --git a/vllm/v1/attention/ops/rocm_aiter_mla_sparse.py b/vllm/v1/attention/ops/rocm_aiter_mla_sparse.py
+index 5c9ab386d4..947504d1bf 100644
+--- a/vllm/v1/attention/ops/rocm_aiter_mla_sparse.py
++++ b/vllm/v1/attention/ops/rocm_aiter_mla_sparse.py
+@@ -19,8 +19,9 @@ from vllm.v1.attention.ops.common import pack_seq_triton, unpack_seq_triton
+ from vllm.v1.worker.workspace import current_workspace_manager
+ 
+ if current_platform.is_rocm():
+-    from vllm.platforms.rocm import _ON_GFX942, _ON_GFX950
++    from vllm.platforms.rocm import _ON_GFX1201, _ON_GFX942, _ON_GFX950
+ else:
++    _ON_GFX1201 = False
+     _ON_GFX942 = False
+     _ON_GFX950 = False
+ 
+@@ -352,6 +353,37 @@ def cp_gather_indexer_k_quant_cache_triton(
+         )
+ 
+ 
++def _dequantize_indexer_cache_pages(
++    kv_cache: torch.Tensor,
++    pages: torch.Tensor,
++    dim: int,
++) -> torch.Tensor:
++    fp8_dtype = current_platform.fp8_dtype()
++    num_blocks, block_size = kv_cache.shape[:2]
++    cache_flat = kv_cache.view(num_blocks, -1)[pages]
++    value_bytes = block_size * dim
++    values = cache_flat[:, :value_bytes].view(fp8_dtype)
++    if block_size > 1:
++        if block_size % 16 != 0 or dim % 16 != 0:
++            raise ValueError(
++                "preshuffled indexer cache requires block_size and dim "
++                f"divisible by 16, got block_size={block_size}, dim={dim}"
++            )
++        values = (
++            values.view(-1, block_size // 16, dim // 16, 16, 16)
++            .permute(0, 1, 3, 2, 4)
++            .contiguous()
++        )
++    values = values.view(-1, dim).to(torch.float32)
++    scales = (
++        cache_flat[:, value_bytes:]
++        .view(torch.float32)
++        .reshape(-1)
++        .to(torch.float32)
++    )
++    return values * scales[:, None]
++
++
+ # Taken from https://github.com/deepseek-ai/DeepGEMM/blob/main/tests/test_attention.py#L156
+ def fp8_paged_mqa_logits_torch(
+     q: torch.Tensor,
+@@ -363,50 +395,8 @@ def fp8_paged_mqa_logits_torch(
+ ):
+     from vllm.utils.math_utils import cdiv
+ 
+-    fp8_dtype = current_platform.fp8_dtype()
+     batch_size, next_n, _, dim = q.size()
+-    if next_n == 1:
+-        block_size = kv_cache.shape[1]
+-        logits = torch.full(
+-            [batch_size, max_model_len],
+-            float("-inf"),
+-            device=q.device,
+-            dtype=torch.float32,
+-        )
+-        if context_lens.dim() > 1:
+-            context_lens = context_lens.squeeze(-1)
+-        kv_cache_flat = kv_cache.view(-1, block_size * (dim + 4))
+-        for i in range(batch_size):
+-            q_i = q[i, 0].to(torch.float32)
+-            q_scale = weights[i]
+-            seq_len = int(context_lens[i].item())
+-            assert seq_len <= max_model_len
+-            num_pages = cdiv(seq_len, block_size)
+-            padded_seq_len = num_pages * block_size
+-            pages = block_tables[i, :num_pages]
+-            cache = kv_cache_flat[pages]
+-            scale_offset = block_size * dim
+-            cache_value = (
+-                cache[..., :scale_offset].view(dtype=fp8_dtype).to(torch.float32)
+-            )
+-            cache_scale = (
+-                cache[..., scale_offset:].view(dtype=torch.float32).contiguous()
+-            )
+-            cache_value = cache_value.view(padded_seq_len, dim)
+-            cache_scale = cache_scale.view(padded_seq_len)
+-            score = F.linear(cache_value, q_i)
+-            score = F.relu(score)
+-            score *= q_scale[None, :]
+-            score = score.sum(dim=1)
+-            score *= cache_scale
+-            logits[i, :seq_len] = score[:seq_len]
+-        return logits
+-
+-    kv_cache, scale = kv_cache[..., :dim], kv_cache[..., dim:]
+-    scale = scale.contiguous().view(torch.float)
+-    q = q.float()
+-    kv_cache = kv_cache.view(fp8_dtype).float() * scale
+-    num_block, block_size, _, dim = kv_cache.size()
++    block_size = kv_cache.shape[1]
+     logits = torch.full(
+         [batch_size * next_n, max_model_len],
+         float("-inf"),
+@@ -414,44 +404,43 @@ def fp8_paged_mqa_logits_torch(
+         dtype=torch.float32,
+     )
+     for i in range(batch_size):
+-        context_len = context_lens[i]
+-        if context_len.ndim == 0:
+-            context_len_i = int(context_len.item())
+-            q_offsets = torch.arange(
+-                context_len_i - next_n, context_len_i, device=q.device
+-            )
+-            context_limit = torch.full(
+-                (next_n,), context_len_i, dtype=torch.int32, device=q.device
++        if context_lens.dim() == 1:
++            final_context_len = context_lens[i]
++            context_limit = (
++                final_context_len
++                - next_n
++                + 1
++                + torch.arange(next_n, dtype=torch.int32, device=q.device)
+             )
+         else:
+-            context_limit = context_len.to(device=q.device, dtype=torch.int32)
+-            q_offsets = context_limit - 1
+-        weight_slice = (
+-            weights[i * next_n : (i + 1) * next_n, :].transpose(0, 1).contiguous()
+-        )
+-        max_context_len = int(context_limit.max().item())
+-        for block_rk in range(cdiv(max_context_len, block_size)):
+-            block_idx = block_tables[i][block_rk]
+-            qx, kx = q[i], kv_cache[block_idx]
+-            k_offsets = torch.arange(
+-                block_rk * block_size, (block_rk + 1) * block_size, device=q.device
+-            )
+-            mask = (k_offsets[None, :] < context_limit[:, None]) & (
+-                k_offsets[None, :] <= q_offsets[:, None]
++            context_limit = context_lens[i].to(
++                device=q.device, dtype=torch.int32
+             )
+-            s = torch.where(
+-                mask[None, :, :],
+-                (qx.transpose(0, 1) @ kx.transpose(0, 1).transpose(1, 2)).to(
+-                    logits.dtype
+-                ),
+-                float("-inf"),
+-            )
+-            s = torch.relu(s) * weight_slice[..., None]
+-            s = s.sum(dim=0)
+-            logits[
+-                i * next_n : (i + 1) * next_n,
+-                block_rk * block_size : (block_rk + 1) * block_size,
+-            ] = torch.where(k_offsets[None, :] <= q_offsets[:, None], s, float("-inf"))
++        max_context_len = int(context_limit.max().item())
++        if max_context_len <= 0:
++            continue
++        num_pages = cdiv(max_context_len, block_size)
++        pages = block_tables[i, :num_pages]
++        cache = _dequantize_indexer_cache_pages(kv_cache, pages, dim)
++        q_i = q[i].to(torch.float32)
++        scores = torch.einsum("nhd,td->nht", q_i, cache)
++        scores = F.relu(scores)
++        scores *= weights[
++            i * next_n : (i + 1) * next_n, :, None
++        ].to(torch.float32)
++        scores = scores.sum(dim=1)
++        positions = torch.arange(
++            cache.shape[0], dtype=torch.int32, device=q.device
++        )
++        scores = torch.where(
++            positions[None, :] < context_limit[:, None],
++            scores,
++            float("-inf"),
++        )
++        output_width = min(cache.shape[0], max_model_len)
++        logits[
++            i * next_n : (i + 1) * next_n, :output_width
++        ] = scores[:, :output_width]
+     return logits
+ 
+ 
+@@ -513,6 +502,39 @@ def rocm_fp8_paged_mqa_logits(
+         aiter_paged_mqa_logits_module = paged_mqa_logits_module()
+ 
+     if aiter_paged_mqa_logits_module is not None:
++        if _ON_GFX1201:
++            if block_size not in (64, 256) or q_fp8.shape[-1] != 128:
++                raise RuntimeError(
++                    "gfx1201 paged-MQA requires physical cache block_size in "
++                    "{64, 256} and head_dim=128; "
++                    f"got block_size={block_size}, head_dim={q_fp8.shape[-1]}"
++                )
++            stage1_preshuffle = getattr(
++                aiter_paged_mqa_logits_module,
++                "deepgemm_fp8_paged_mqa_logits_stage1_preshuffle",
++                None,
++            )
++            if stage1_preshuffle is None:
++                raise RuntimeError(
++                    "AITER lacks the optimized gfx1201 preshuffled "
++                    "paged-MQA stage-1 kernel"
++                )
++            batch_size, next_n, heads, _ = q_fp8.shape
++            (out_qk,) = current_workspace_manager().get_simultaneous(
++                ((heads, batch_size * next_n, max_model_len), torch.float32),
++            )
++            out_qk.fill_(float("-inf"))
++            stage1_preshuffle(
++                q_fp8,
++                kv_cache_fp8,
++                weights,
++                out_qk,
++                context_lens,
++                block_tables,
++                max_model_len,
++                ChunkQ=heads,
++            )
++            return out_qk.sum(dim=0)
+         if _ON_GFX942 or _ON_GFX950:
+             deepgemm_fp8_paged_mqa_logits = (
+                 aiter_paged_mqa_logits_module.deepgemm_fp8_paged_mqa_logits
+@@ -692,6 +714,7 @@ def rocm_aiter_sparse_attn_indexer_fake(
+     total_seq_lens: int,
+     topk_indices_buffer: torch.Tensor | None,
+     skip_k_cache_insert: bool = False,
++    max_decode_workspace_rows: int | None = None,
+ ) -> torch.Tensor:
+     return topk_indices_buffer
+ 
+@@ -712,6 +735,7 @@ def rocm_aiter_sparse_attn_indexer(
+     total_seq_lens: int,
+     topk_indices_buffer: torch.Tensor | None,
+     skip_k_cache_insert: bool = False,
++    max_decode_workspace_rows: int | None = None,
+ ) -> torch.Tensor:
+     # careful! this will be None in dummy run
+     attn_metadata = get_forward_context().attn_metadata
+@@ -735,16 +759,24 @@ def rocm_aiter_sparse_attn_indexer(
+             ((total_seq_lens, 4), torch.uint8),
+         )
+ 
+-        # Decode logits buffer, used by rocm_fp8_paged_mqa_logits.
+-        # batch_size * next_n <= hidden_states.shape[0] == max_num_batched_tokens
++        # Decode logits buffer, used by rocm_fp8_paged_mqa_logits. Prefill rows
++        # use a separate chunked path, so reserve only the largest possible
++        # decode portion of a pure or mixed batch.
++        # Callers without an authoritative bound retain the original full-batch
++        # reservation, which is conservative and cannot under-allocate.
++        decode_workspace_rows = hidden_states.shape[0]
++        if _ON_GFX1201 and max_decode_workspace_rows is not None:
++            if max_decode_workspace_rows < 1:
++                raise ValueError("max_decode_workspace_rows must be positive")
++            decode_workspace_rows = max_decode_workspace_rows
+         if _ON_GFX942 or _ON_GFX950:
+             workspace_manager.get_simultaneous(
+-                ((hidden_states.shape[0], max_model_len), torch.float32),
++                ((decode_workspace_rows, max_model_len), torch.float32),
+             )
+         else:
+             workspace_manager.get_simultaneous(
+                 (
+-                    (q_fp8.shape[1], hidden_states.shape[0], max_model_len),
++                    (q_fp8.shape[1], decode_workspace_rows, max_model_len),
+                     torch.float32,
+                 ),
+             )
+@@ -773,6 +805,7 @@ def rocm_aiter_sparse_attn_indexer(
+             total_seq_lens,
+             topk_indices_buffer,
+             skip_k_cache_insert,
++            max_decode_workspace_rows,
+         )
+     layer_attn_metadata = attn_metadata[k_cache_prefix]
+     assert isinstance(layer_attn_metadata, DeepseekV32IndexerMetadata)
+diff --git a/vllm/v1/core/kv_cache_manager.py b/vllm/v1/core/kv_cache_manager.py
+index 44097c3da2..b1da6abb3c 100644
+--- a/vllm/v1/core/kv_cache_manager.py
++++ b/vllm/v1/core/kv_cache_manager.py
+@@ -809,6 +809,15 @@ class KVCacheManager:
+             ids.extend(mgr.take_new_block_ids())
+         return ids
+ 
++    def take_new_block_ids_by_group(self) -> list[tuple[int, list[int]]]:
++        """Drain new attention block IDs while retaining their cache group."""
++        grouped_ids: list[tuple[int, list[int]]] = []
++        for mgr in self.coordinator.single_type_managers:
++            ids = mgr.take_new_block_ids()
++            if ids:
++                grouped_ids.append((mgr.kv_cache_group_id, ids))
++        return grouped_ids
++
+     def get_zeroing_block_ids_in_range(
+         self, request_id: str, start_token: int, end_token: int
+     ) -> list[int]:
+diff --git a/vllm/v1/core/sched/output.py b/vllm/v1/core/sched/output.py
+index 8782061356..68048e36c7 100644
+--- a/vllm/v1/core/sched/output.py
++++ b/vllm/v1/core/sched/output.py
+@@ -253,7 +253,7 @@ class SchedulerOutput:
+     # Block IDs freshly allocated from the pool during this scheduling step.
+     # The worker zeros the corresponding GPU memory before the blocks are used,
+     # preventing stale NaN/data from corrupting attention or SSM computation.
+-    new_block_ids_to_zero: list[int] | None = None
++    new_block_ids_to_zero: list[tuple[int, list[int]]] | None = None
+ 
+     # CoW copies to apply after zeroing new blocks and before forward.
+     kv_cache_block_copies: list[KVCacheBlockCopy] | None = None
+@@ -268,6 +268,25 @@ class SchedulerOutput:
+     # Number of spec tokens to schedule for the next step.
+     num_spec_tokens_to_schedule: int = 0
+ 
++    # Runtime circuit-breaker state propagated to every model worker. This is
++    # distinct from K=0 in a dynamic schedule: workers must permanently leave
++    # the speculative PP protocol and clear its deferred result ring.
++    spec_decode_disabled: bool = False
++
++    # Monotonic protocol epoch. Epoch zero is speculative; a positive epoch
++    # means the proposer circuit breaker has committed target-only operation.
++    spec_decode_epoch: int = 0
++
++    # Scheduler-authoritative per-frame decision. When true, every PP rank can
++    # omit the matched DSpark sampled/count/draft broadcasts because every row
++    # remains in a non-final prefill chunk after this schedule.
++    dspark_pp_skip_sample_broadcast: bool = False
++
++    # Immutable companion snapshot for validation metrics. True means the
++    # scheduler advanced a mixture of non-final prefill and full rows in this
++    # frame, so the complete matched PP protocol was required.
++    dspark_pp_mixed_full_frame: bool = False
++
+     @classmethod
+     def make_empty(cls) -> "SchedulerOutput":
+         return cls(
+diff --git a/vllm/v1/core/sched/scheduler.py b/vllm/v1/core/sched/scheduler.py
+index e4a2132866..e9d4c305a4 100644
+--- a/vllm/v1/core/sched/scheduler.py
++++ b/vllm/v1/core/sched/scheduler.py
+@@ -7,6 +7,7 @@ from collections.abc import Iterable
+ from dataclasses import replace
+ from typing import Any
+ 
++from vllm import envs
+ from vllm.compilation.cuda_graph import CUDAGraphStat
+ from vllm.config import KVEventsConfig, VllmConfig
+ from vllm.distributed.ec_transfer.ec_connector.base import (
+@@ -66,6 +67,45 @@ from vllm.v1.utils import record_function_or_nullcontext
+ logger = init_logger(__name__)
+ 
+ 
++def _compute_dspark_pp_frame_flags(
++    enabled: bool,
++    spec_decode_disabled: bool,
++    requests: dict[str, Request],
++    num_scheduled_tokens: dict[str, int],
++) -> tuple[bool, bool]:
++    """Return rank-invariant pure-skip and mixed-full frame snapshots.
++
++    ``num_computed_tokens`` has already been advanced by the current schedule.
++    Comparing it with the real token count (not output placeholders) therefore
++    distinguishes a non-final prefill chunk from final prefill and decode.
++    """
++    if not enabled or spec_decode_disabled or not num_scheduled_tokens:
++        return False, False
++
++    non_final_rows = tuple(
++        requests[req_id].num_computed_tokens < requests[req_id].num_tokens
++        for req_id in num_scheduled_tokens
++    )
++    pure_non_final = all(non_final_rows)
++    mixed_full = any(non_final_rows) and not pure_non_final
++    return pure_non_final, mixed_full
++
++
++def _compute_dspark_pp_skip_sample_broadcast(
++    enabled: bool,
++    spec_decode_disabled: bool,
++    requests: dict[str, Request],
++    num_scheduled_tokens: dict[str, int],
++) -> bool:
++    """Return the scheduler-authoritative PP sampled-broadcast decision."""
++    return _compute_dspark_pp_frame_flags(
++        enabled,
++        spec_decode_disabled,
++        requests,
++        num_scheduled_tokens,
++    )[0]
++
++
+ class Scheduler(SchedulerInterface):
+     def __init__(
+         self,
+@@ -245,7 +285,19 @@ class Scheduler(SchedulerInterface):
+         )
+         speculative_config = vllm_config.speculative_config
+         self.use_eagle = False
++        self.use_dspark = (
++            speculative_config is not None and speculative_config.use_dspark()
++        )
+         self.num_spec_tokens = vllm_config.num_speculative_tokens
++        self.num_spec_tokens_to_verify = self.num_spec_tokens
++        if self.use_dspark and envs.VLLM_DSPARK_MAX_VERIFY_TOKENS > 0:
++            self.num_spec_tokens_to_verify = envs.VLLM_DSPARK_MAX_VERIFY_TOKENS
++            if not 1 <= self.num_spec_tokens_to_verify <= self.num_spec_tokens:
++                raise ValueError(
++                    "VLLM_DSPARK_MAX_VERIFY_TOKENS must be between 1 and "
++                    f"num_speculative_tokens ({self.num_spec_tokens}); got "
++                    f"{self.num_spec_tokens_to_verify}"
++                )
+         self.num_lookahead_tokens = vllm_config.num_lookahead_tokens
+         # Positions past the computed tokens that the drafter reads mid-prefill.
+         # Eagle-family drafters read 1 ahead, but multi-module MTP reads
+@@ -254,6 +306,10 @@ class Scheduler(SchedulerInterface):
+         # manager's re-prefillable window (this minus 1), and how many tokens to
+         # reserve between a chunk boundary and the prefill end.
+         self.num_prefill_lookahead = 0
++        # Runtime circuit breaker set by a failed in-process proposer. Keep the
++        # configured value immutable; this flag only affects future schedules.
++        self.spec_decode_disabled = False
++        self.spec_decode_epoch = 0
+         self.dynamic_sd_lookup: list[int] | None = None
+         if speculative_config is not None:
+             if speculative_config.num_speculative_tokens_per_batch_size:
+@@ -297,6 +353,17 @@ class Scheduler(SchedulerInterface):
+ 
+         self.use_pp = self.parallel_config.pipeline_parallel_size > 1
+         self.use_v2_model_runner = vllm_config.use_v2_model_runner
++        self.enable_dspark_pp_prefill_broadcast_skip = (
++            self.use_pp
++            and self.use_v2_model_runner
++            and self.use_dspark
++            and envs.VLLM_DSPARK_PREFILL_SKIP_PP_BROADCAST
++        )
++        if self.enable_dspark_pp_prefill_broadcast_skip:
++            logger.info(
++                "Scheduler-authoritative DSpark non-final prefill PP broadcast "
++                "skip is enabled"
++            )
+         # Scheduler iteration counter. Drives the V2+PP+async decode-throttle
+         # cadence (`next_decode_eligible_step`).
+         self.current_step = 0
+@@ -935,7 +1002,11 @@ class Scheduler(SchedulerInterface):
+                     # preserve full cudagraph for this step.
+                     # Not for diffusion where draft tokens can't be padded.
+                     if (
+-                        (self.num_spec_tokens > 0 and self.dynamic_sd_lookup is None)
++                        (
++                            self.num_spec_tokens > 0
++                            and not self.spec_decode_disabled
++                            and self.dynamic_sd_lookup is None
++                        )
+                         and self.num_sampled_tokens_per_step > 0
+                         and num_new_tokens == 1
+                         and (scheduled_running_reqs and not prefill_scheduled)
+@@ -1252,11 +1323,21 @@ class Scheduler(SchedulerInterface):
+         pending_kv_cache_block_copies = kv_cache_block_copies or None
+ 
+         # Dynamic speculative decoding: compute optimal K
+-        num_spec_tokens_to_schedule = self.num_spec_tokens
+-        if self.dynamic_sd_lookup is not None and len(num_scheduled_tokens) > 0:
++        num_spec_tokens_to_schedule = (
++            0 if self.spec_decode_disabled else self.num_spec_tokens
++        )
++        if (
++            not self.spec_decode_disabled
++            and self.dynamic_sd_lookup is not None
++            and len(num_scheduled_tokens) > 0
++        ):
+             num_spec_tokens_to_schedule = self.dynamic_sd_lookup[
+                 len(num_scheduled_tokens)
+             ]
++        if self.use_dspark:
++            num_spec_tokens_to_schedule = min(
++                num_spec_tokens_to_schedule, self.num_spec_tokens_to_verify
++            )
+ 
+         scheduled_encoder_input_stats = None
+         if (
+@@ -1312,6 +1393,15 @@ class Scheduler(SchedulerInterface):
+ 
+         with record_function_or_nullcontext("schedule: update_after_schedule"):
+             self._update_after_schedule(scheduler_output)
++        (
++            scheduler_output.dspark_pp_skip_sample_broadcast,
++            scheduler_output.dspark_pp_mixed_full_frame,
++        ) = _compute_dspark_pp_frame_flags(
++            self.enable_dspark_pp_prefill_broadcast_skip,
++            scheduler_output.spec_decode_disabled,
++            self.requests,
++            scheduler_output.num_scheduled_tokens,
++        )
+         return scheduler_output
+ 
+     def _build_kv_connector_meta(
+@@ -1319,16 +1409,33 @@ class Scheduler(SchedulerInterface):
+     ) -> KVConnectorMetadata:
+         return connector.build_connector_meta(scheduler_output)
+ 
+-    def _get_new_block_ids_to_zero(self) -> list[int] | None:
++    def _get_new_block_ids_to_zero(self) -> list[tuple[int, list[int]]] | None:
+         # Drain new attention block ids every step so the manager-side list
+         # does not grow unbounded; only kv-cache zeroing consumes them.
+-        new_block_ids_to_zero = self.kv_cache_manager.take_new_block_ids()
++        take_grouped = getattr(
++            self.kv_cache_manager, "take_new_block_ids_by_group", None
++        )
++        if take_grouped is None:
++            # Compatibility for connector test doubles and out-of-tree cache
++            # managers that still expose only the original flat contract.
++            flat_ids = self.kv_cache_manager.take_new_block_ids()
++            new_block_ids_to_zero = [(0, flat_ids)] if flat_ids else []
++        else:
++            new_block_ids_to_zero = take_grouped()
+         if not self.needs_kv_cache_zeroing:
+             return None
+ 
+         if self._skip_zero_block_ids:
+             skip = self._skip_zero_block_ids
+-            new_block_ids_to_zero = [b for b in new_block_ids_to_zero if b not in skip]
++            new_block_ids_to_zero = [
++                (group_id, [block_id for block_id in block_ids if block_id not in skip])
++                for group_id, block_ids in new_block_ids_to_zero
++            ]
++            new_block_ids_to_zero = [
++                (group_id, block_ids)
++                for group_id, block_ids in new_block_ids_to_zero
++                if block_ids
++            ]
+             skip.clear()
+ 
+         return new_block_ids_to_zero or None
+@@ -1745,6 +1852,14 @@ class Scheduler(SchedulerInterface):
+         ec_connector_output = model_runner_output.ec_connector_output
+         cudagraph_stats = model_runner_output.cudagraph_stats
+ 
++        fault_transition = (
++            model_runner_output.spec_decode_disabled
++            and not self.spec_decode_disabled
++        )
++        if fault_transition:
++            self.spec_decode_disabled = True
++            self.spec_decode_epoch += 1
++
+         # Every GPU write enqueued by this and earlier steps has completed, so it is
+         # safe to return deferred-free blocks to the pool.
+         if self.defer_block_free and scheduler_output.total_num_scheduled_tokens > 0:
+@@ -2126,6 +2241,15 @@ class Scheduler(SchedulerInterface):
+                 perf_stats,
+             )
+         ) is not None:
++            # SchedulerOutput is retired exactly once. Attach per-frame deltas
++            # here instead of draining mutable counters from make_stats(), which
++            # is also called by diagnostic/error paths.
++            stats.dspark_pp_pure_nonfinal_skipped_frames = int(
++                scheduler_output.dspark_pp_skip_sample_broadcast
++            )
++            stats.dspark_pp_mixed_full_frames = int(
++                scheduler_output.dspark_pp_mixed_full_frame
++            )
+             # Return stats to only one of the front-ends.
+             if (eco := next(iter(engine_core_outputs.values()), None)) is None:
+                 # We must return the stats even if there are no request
+diff --git a/vllm/v1/engine/core.py b/vllm/v1/engine/core.py
+index 295c66b360..b0c6525efe 100644
+--- a/vllm/v1/engine/core.py
++++ b/vllm/v1/engine/core.py
+@@ -648,7 +648,13 @@ class EngineCore:
+ 
+         model_executed = False
+         deferred_scheduler_output = None
+-        if self.scheduler.has_requests():
++        # A failed speculative proposer may have several already-launched
++        # async batches behind the output that reported the fault. Stop
++        # admitting new work until those frames have drained; resetting the
++        # scheduler while they are still queued lets stale speculative output
++        # overwrite replayed target-only state.
++        spec_disable_pending = getattr(self, "_spec_disable_pending", False)
++        if self.scheduler.has_requests() and not spec_disable_pending:
+             scheduler_output = self.scheduler.schedule(self._should_throttle_prefills())
+             with self.log_error_detail(scheduler_output):
+                 exec_future = self.model_executor.execute_model(
+@@ -704,6 +710,19 @@ class EngineCore:
+                 exec_model_fut.result()
+                 raise RuntimeError("unexpected error")
+ 
++        if model_output.spec_decode_disabled and not getattr(
++            self, "_spec_disable_pending", False
++        ):
++            self._spec_disable_pending = True
++            stale_frames: dict[str, int] = {}
++            for _, stale_output, _ in batch_queue:
++                for req_id in stale_output.num_scheduled_tokens:
++                    stale_frames[req_id] = stale_frames.get(req_id, 0) + 1
++            if deferred_scheduler_output is not None:
++                for req_id in deferred_scheduler_output.num_scheduled_tokens:
++                    stale_frames[req_id] = stale_frames.get(req_id, 0) + 1
++            model_output.spec_decode_stale_frames = stale_frames
++
+         # Before processing the model output, process any aborts that happened
+         # during the model execution.
+         self._process_aborts_queue()
+@@ -712,6 +731,13 @@ class EngineCore:
+         )
+         self._attach_iteration_details(engine_core_outputs, iteration_details)
+ 
++        if (
++            getattr(self, "_spec_disable_pending", False)
++            and not batch_queue
++            and deferred_scheduler_output is None
++        ):
++            self._spec_disable_pending = False
++
+         # NOTE(nick): We can either handle the deferred tasks here or save
+         # in a field and do it immediately once step_with_batch_queue is
+         # re-called. The latter slightly favors TTFT over TPOT/throughput.
+diff --git a/vllm/v1/engine/utils.py b/vllm/v1/engine/utils.py
+index 7736062d99..39c96e742a 100644
+--- a/vllm/v1/engine/utils.py
++++ b/vllm/v1/engine/utils.py
+@@ -117,6 +117,23 @@ def _node_ip_from_resources(node_resources: dict) -> str | None:
+     return None
+ 
+ 
++def _resolve_core_engine_process_timeout(
++    request_timeout: float | None,
++) -> float | None:
++    """Give abort-mode EngineCore a separate best-effort cleanup window."""
++    if request_timeout != 0:
++        return request_timeout
++    cleanup_grace = envs.VLLM_ENGINE_PROCESS_SHUTDOWN_GRACE_SECONDS
++    if cleanup_grace < 0:
++        logger.warning(
++            "VLLM_ENGINE_PROCESS_SHUTDOWN_GRACE_SECONDS=%d is invalid; "
++            "using 5 seconds",
++            cleanup_grace,
++        )
++        cleanup_grace = 5
++    return float(cleanup_grace)
++
++
+ class CoreEngineProcManager:
+     """
+     Utility class to handle creation, readiness, and shutdown
+@@ -217,7 +234,14 @@ class CoreEngineProcManager:
+         """Shutdown engine core processes with configurable timeout."""
+         self.manager_stopped.set()
+         if self._finalizer.detach() is not None:
+-            shutdown(self.processes, timeout=timeout)
++            manager_timeout = _resolve_core_engine_process_timeout(timeout)
++            if timeout == 0:
++                logger.info(
++                    "[shutdown] Engine manager: request mode=abort; "
++                    "allowing process cleanup grace=%ss",
++                    manager_timeout,
++                )
++            shutdown(self.processes, timeout=manager_timeout)
+ 
+     def monitor_engine_liveness(self) -> None:
+         """Monitor engine core process liveness."""
+diff --git a/vllm/v1/metrics/loggers.py b/vllm/v1/metrics/loggers.py
+index 692106cf39..b55310448c 100644
+--- a/vllm/v1/metrics/loggers.py
++++ b/vllm/v1/metrics/loggers.py
+@@ -710,6 +710,33 @@ class PrometheusStatLogger(AggregateStatLoggerBase):
+             counter_generation_tokens, per_engine_labelvalues
+         )
+ 
++        counter_dspark_pp_pure_nonfinal_skipped_frames = self._counter_cls(
++            name="vllm:dspark_pp_pure_nonfinal_skipped_frames",
++            documentation=(
++                "Number of scheduler frames whose matched DSpark sampled-token "
++                "PP broadcasts were omitted because all rows remained prefill."
++            ),
++            labelnames=labelnames,
++        )
++        self.counter_dspark_pp_pure_nonfinal_skipped_frames = (
++            create_metric_per_engine(
++                counter_dspark_pp_pure_nonfinal_skipped_frames,
++                per_engine_labelvalues,
++            )
++        )
++
++        counter_dspark_pp_mixed_full_frames = self._counter_cls(
++            name="vllm:dspark_pp_mixed_full_frames",
++            documentation=(
++                "Number of scheduler frames mixing non-final prefill and full "
++                "rows while retaining the complete matched DSpark PP protocol."
++            ),
++            labelnames=labelnames,
++        )
++        self.counter_dspark_pp_mixed_full_frames = create_metric_per_engine(
++            counter_dspark_pp_mixed_full_frames, per_engine_labelvalues
++        )
++
+         self.counter_request_success: dict[FinishReason, dict[int, Counter]] = {}
+         counter_request_success_base = self._counter_cls(
+             name="vllm:request_success",
+@@ -1122,6 +1149,13 @@ class PrometheusStatLogger(AggregateStatLoggerBase):
+             )
+             self.gauge_kv_cache_usage[engine_idx].set(scheduler_stats.kv_cache_usage)
+ 
++            self.counter_dspark_pp_pure_nonfinal_skipped_frames[engine_idx].inc(
++                scheduler_stats.dspark_pp_pure_nonfinal_skipped_frames
++            )
++            self.counter_dspark_pp_mixed_full_frames[engine_idx].inc(
++                scheduler_stats.dspark_pp_mixed_full_frames
++            )
++
+             self.counter_prefix_cache_queries[engine_idx].inc(
+                 scheduler_stats.prefix_cache_stats.queries
+             )
+diff --git a/vllm/v1/metrics/stats.py b/vllm/v1/metrics/stats.py
+index 3956f7e441..4b6d3ba33c 100644
+--- a/vllm/v1/metrics/stats.py
++++ b/vllm/v1/metrics/stats.py
+@@ -213,6 +213,10 @@ class SchedulerStats:
+ 
+     perf_stats: PerfStats | None = None
+ 
++    # Exactly-once deltas attached when one SchedulerOutput is retired.
++    dspark_pp_pure_nonfinal_skipped_frames: int = 0
++    dspark_pp_mixed_full_frames: int = 0
++
+ 
+ @dataclass
+ class RequestStateStats:
+diff --git a/vllm/v1/outputs.py b/vllm/v1/outputs.py
+index 80b909afbc..b2b4c0c697 100644
+--- a/vllm/v1/outputs.py
++++ b/vllm/v1/outputs.py
+@@ -359,6 +359,16 @@ class ModelRunnerOutput:
+     # ``None`` when ``return_sampling_mask`` is off.
+     sampling_masks: SamplingMaskLists | None = None
+ 
++    # Set by an experimental in-process speculative proposer when it has
++    # failed permanently. The scheduler consumes this edge-triggered signal
++    # and stops reserving speculative positions for subsequent batches while
++    # allowing the target model to keep serving requests.
++    spec_decode_disabled: bool = False
++
++    # Exact number of post-fault async output frames already admitted for each
++    # request. Filled by EngineCore at the fault boundary (not by the worker).
++    spec_decode_stale_frames: dict[str, int] | None = None
++
+     @staticmethod
+     def with_kv_conn_output_only(
+         kv_connector_output: KVConnectorOutput | None,
+diff --git a/vllm/v1/worker/cpu_model_runner.py b/vllm/v1/worker/cpu_model_runner.py
+index 67cffa5845..b7c1e85fb0 100644
+--- a/vllm/v1/worker/cpu_model_runner.py
++++ b/vllm/v1/worker/cpu_model_runner.py
+@@ -172,14 +172,20 @@ class CPUModelRunner(GPUModelRunner):
+     def _sync_device(self) -> None:
+         pass
+ 
+-    def _zero_block_ids(self, block_ids: list[int]) -> None:
++    def _zero_block_ids(
++        self, grouped_block_ids: list[tuple[int, list[int]]]
++    ) -> None:
+         # Zero full-attention blocks to prevent stale data corruption on partial writes.
+         # Encoder-only (runner-only) layers are not FullAttentionSpec, so the
+         # spec filter below already excludes them; no runner-only skip needed.
+-        seen_ptrs: set[int] = set()
++        block_ids_by_group = dict(grouped_block_ids)
+         for group in self.kv_cache_config.kv_cache_groups:
++            block_ids = block_ids_by_group.get(group.kv_cache_group_id)
++            if not block_ids:
++                continue
+             if not isinstance(group.kv_cache_spec, FullAttentionSpec):
+                 continue
++            seen_ptrs: set[int] = set()
+             for layer_name in group.layer_names:
+                 ctx = self.compilation_config.static_forward_context.get(layer_name)
+                 if ctx is None:
+diff --git a/vllm/v1/worker/gpu/input_batch.py b/vllm/v1/worker/gpu/input_batch.py
+index 9a574a4faa..6c9d0dec5b 100644
+--- a/vllm/v1/worker/gpu/input_batch.py
++++ b/vllm/v1/worker/gpu/input_batch.py
+@@ -112,6 +112,10 @@ class InputBatch:
+     # stays valid for every replay the graph serves.
+     max_query_len: int | None = None
+ 
++    # Optional snapshot used by stateful speculators to reject a stale async
++    # frame after a RequestState slot is recycled.
++    speculator_request_generations_np: np.ndarray | None = None
++
+     @classmethod
+     def make_dummy(
+         cls,
+diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
+index d68666cf4a..b7e51e423b 100644
+--- a/vllm/v1/worker/gpu/model_runner.py
++++ b/vllm/v1/worker/gpu/model_runner.py
+@@ -19,6 +19,7 @@ instead of embedding feature-specific logic directly.
+ 
+ import functools
+ import gc
++import os
+ import time
+ from copy import deepcopy
+ from typing import Any, NamedTuple
+@@ -246,10 +247,19 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+                 # Drafting may require auxiliary hidden states from target model outputs
+                 self.use_aux_hidden_state_outputs = True
+                 if self.use_pp:
+-                    raise ValueError(
+-                        f"{self.speculative_config.method} with pipeline parallel "
+-                        "is not supported."
++                    dspark_pp_experimental = (
++                        self.speculative_config.method == "dspark"
++                        and os.getenv("VLLM_DSPARK_PP_EXPERIMENTAL") == "1"
+                     )
++                    if not dspark_pp_experimental:
++                        raise ValueError(
++                            f"{self.speculative_config.method} with pipeline parallel "
++                            "is not supported."
++                        )
++                    # The target layers consumed by DeepSeek-V4 DSpark live on
++                    # the final pipeline stage. Only that stage returns auxiliary
++                    # states and owns the in-process TP-sharded drafter.
++                    self.use_aux_hidden_state_outputs = self.is_last_pp_rank
+ 
+         # Draft tokens propagation - for spec-dec + struct outputs.
+         self.draft_tokens_handler = DraftTokensHandler(self.device)
+@@ -626,6 +636,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+             kernel_block_sizes=self.kernel_block_sizes,
+             cache_dtype=self.cache_config.cache_dtype,
+             static_forward_context=self.compilation_config.static_forward_context,
++            kv_cache_config=self.kv_cache_config,
+         )
+ 
+     @torch.inference_mode()
+@@ -913,10 +924,18 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+     def _remove_request(self, req_id: str) -> bool:
+         # Call model_state.remove_request *before* req_states.remove_request
+         # so the model_state can still look up the slot index.
++        req_idx_before_remove = self.req_states.req_id_to_index.get(req_id)
+         self.model_state.remove_request(req_id)
++        if (
++            req_idx_before_remove is not None
++            and self.speculator is not None
++            and hasattr(self.speculator, "on_request_removed")
++        ):
++            self.speculator.on_request_removed(req_id, req_idx_before_remove)
+         req_idx = self.req_states.remove_request(req_id)
+         if req_idx is None:
+             return False
++        assert req_idx_before_remove == req_idx
+         if self.pooling_runner is not None:
+             self.pooling_runner.remove_request(req_idx)
+         if self.pp_handler is not None:
+@@ -975,6 +994,12 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+             req_index = self.req_states.req_id_to_index[req_id]
+             if self.adaptive_verification is not None:
+                 self.adaptive_verification.add_request(req_index)
++            if self.speculator is not None and hasattr(
++                self.speculator, "on_request_added"
++            ):
++                self.speculator.on_request_added(
++                    req_id, req_index, new_req_data.num_computed_tokens
++                )
+ 
+             if self.pooling_runner is not None:
+                 assert new_req_data.pooling_params is not None
+@@ -1035,7 +1060,9 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+         # stale NaN/data from corrupting attention or SSM computation.
+         if scheduler_output.new_block_ids_to_zero:
+             assert self.kv_block_zeroer is not None
+-            self.kv_block_zeroer.zero_block_ids(scheduler_output.new_block_ids_to_zero)
++            self.kv_block_zeroer.zero_block_ids_by_group(
++                scheduler_output.new_block_ids_to_zero
++            )
+ 
+         # Apply copy-on-write block copies for partial prefix-cache hits, after
+         # zeroing new blocks and before the forward pass reads them.
+@@ -1099,6 +1126,18 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+             num_reqs, num_toks, max_query_len, batch_state.has_prefill
+         )
+ 
++    def _snapshot_speculator_request_generations(
++        self, req_ids: list[str], idx_mapping_np: np.ndarray
++    ) -> np.ndarray | None:
++        if self.speculator is None or not hasattr(
++            self.speculator, "snapshot_request_generations"
++        ):
++            return None
++        generations = self.speculator.snapshot_request_generations(
++            req_ids, idx_mapping_np
++        )
++        return None if generations is None else np.asarray(generations).copy()
++
+     def prepare_inputs(
+         self,
+         scheduler_output: SchedulerOutput,
+@@ -1260,6 +1299,12 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+             # prompt_lens is only used in R-SWA case.
+             prompt_lens = self.req_states.prompt_len.gpu[idx_mapping]
+ 
++        speculator_request_generations_np = (
++            self._snapshot_speculator_request_generations(
++                req_ids, idx_mapping_np
++            )
++        )
++
+         input_batch = InputBatch(
+             req_ids=req_ids,
+             num_reqs=num_reqs,
+@@ -1297,6 +1342,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+                 if adaptive_verification is not None
+                 else None
+             ),
++            speculator_request_generations_np=speculator_request_generations_np,
+         )
+         return pcp.maybe_partition_pcp_batch(self.pcp_manager, input_batch)
+ 
+@@ -1355,11 +1401,23 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+             # Rejection sampling for spec decoding.
+             assert self.rejection_sampler is not None
+             assert self.speculator is not None
++            if getattr(self, "_dspark_fallback_active", False):
++                # Force rejection at the first speculative position. This
++                # emits exactly the target's first sampled token and prevents
++                # conservative placeholder proposals from ever affecting the
++                # output stream while preserving the fixed PP batch shape.
++                self.rejection_sampler.synthetic_conditional_rates = torch.zeros(
++                    self.num_speculative_steps,
++                    dtype=torch.float32,
++                    device=self.device,
++                )
+             sampler_output = self.rejection_sampler(
+                 logits,
+                 input_batch,
+                 # Draft logits are needed for probabilistic rejection sampling.
+-                self.speculator.draft_logits,
++                None
++                if getattr(self, "_dspark_fallback_active", False)
++                else self.speculator.draft_logits,
+             )
+ 
+         return sampler_output, sampler_output.num_sampled, sampler_output.num_rejected
+@@ -1371,6 +1429,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+         num_sampled: torch.Tensor,
+         num_rejected: torch.Tensor,
+         query_start_loc: torch.Tensor | None = None,
++        draft_tokens: torch.Tensor | None = None,
+     ) -> None:
+         # Update the number of computed tokens.
+         if self.is_last_pp_rank:
+@@ -1394,6 +1453,11 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+         self.model_state.postprocess_state(
+             idx_mapping, num_sampled, self.req_states.num_computed_tokens.gpu
+         )
++        if draft_tokens is not None:
++            valid = idx_mapping >= 0
++            self.req_states.draft_tokens[idx_mapping[valid].to(dtype=torch.long)] = (
++                draft_tokens[valid]
++            )
+ 
+     def _merge_ec_connector_no_forward(
+         self, scheduler_output: SchedulerOutput, output: ModelRunnerOutput
+@@ -1415,6 +1479,16 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+         context_len: int = 0,
+     ) -> ModelRunnerOutput | IntermediateTensors | None:
+         if not dummy_run:
++            if (
++                scheduler_output.spec_decode_epoch
++                > getattr(self, "_spec_decode_scheduler_epoch", 0)
++            ):
++                self._spec_decode_scheduler_epoch = scheduler_output.spec_decode_epoch
++                self._dspark_fallback_active = True
++                if self.pp_handler is not None:
++                    self.pp_handler.set_spec_decode_epoch(
++                        scheduler_output.spec_decode_epoch
++                    )
+             # Update the request states.
+             self.update_pp_decode_requests()
+             self.finish_requests(scheduler_output)
+@@ -1599,6 +1673,24 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+             # values above.
+             **self.model_state.prepare_inputs(input_batch, self.req_states),
+         }
++        pp_debug = (
++            os.getenv("VLLM_DSPARK_PP_DIAGNOSTICS") == "1"
++            and input_batch.num_draft_tokens > 0
++        )
++        if pp_debug:
++            pp_debug_calls = getattr(self, "_dspark_pp_input_debug_calls", 0)
++            if pp_debug_calls < 4:
++                logger.warning(
++                    "DSpark PP input diagnostic call=%d pp_rank=%d ids=%s "
++                    "positions=%s query_start=%s seq_lens=%s",
++                    pp_debug_calls,
++                    get_pp_group().rank_in_group,
++                    input_batch.input_ids[: input_batch.num_tokens].tolist(),
++                    input_batch.positions[: input_batch.num_tokens].tolist(),
++                    input_batch.query_start_loc.tolist(),
++                    input_batch.seq_lens.tolist(),
++                )
++                self._dspark_pp_input_debug_calls = pp_debug_calls + 1
+         if not self.is_first_pp_rank:
+             # Update for non-first PP ranks.
+             model_inputs["input_ids"] = None
+@@ -1665,6 +1757,26 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+                     # Eager (NONE): call the raw model directly.
+                     model_output = self.model(**model_inputs)
+ 
++        if pp_debug and pp_debug_calls < 4:
++            if isinstance(model_output, torch.Tensor):
++                diagnostic_tensor = model_output
++            elif isinstance(model_output, tuple):
++                diagnostic_tensor = model_output[0]
++            else:
++                diagnostic_tensor = next(iter(model_output.tensors.values()))
++            logger.warning(
++                "DSpark PP output diagnostic call=%d pp_rank=%d shape=%s "
++                "row_abs_mean=%s",
++                pp_debug_calls,
++                get_pp_group().rank_in_group,
++                tuple(diagnostic_tensor.shape),
++                diagnostic_tensor[: input_batch.num_tokens]
++                .float()
++                .abs()
++                .mean(dim=-1)
++                .tolist(),
++            )
++
+         if self.is_last_pp_rank:
+             if self.use_aux_hidden_state_outputs:
+                 assert isinstance(model_output, tuple)
+@@ -1695,6 +1807,9 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+             finished_req_ids=finished_req_ids,
+             ec_connector_output=ec_connector_output,
+             routed_experts=routed_experts,
++            skip_pp_sample_broadcast=(
++                scheduler_output.dspark_pp_skip_sample_broadcast
++            ),
+         )
+ 
+         if not self.is_last_pp_rank:
+@@ -1719,6 +1834,9 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+         finished_req_ids = self.execute_model_state.finished_req_ids
+         ec_connector_output = self.execute_model_state.ec_connector_output
+         routed_experts = self.execute_model_state.routed_experts
++        skip_pp_sample_broadcast = (
++            self.execute_model_state.skip_pp_sample_broadcast
++        )
+         self.execute_model_state = None
+ 
+         if not self.is_last_pp_rank:
+@@ -1726,7 +1844,10 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+             # IntermediateTensors instead of final hidden states. Receive the
+             # sampled tokens broadcast from the last rank and update local state.
+             assert self.pp_handler is not None
+-            all_decode_next = self.pp_handler.receive(input_batch)
++            all_decode_next = self.pp_handler.receive(
++                input_batch,
++                skip_sample_broadcast=skip_pp_sample_broadcast,
++            )
+             # Optimistically update num_computed_tokens for entire batch here.
+             # Will be adjusted for rejections if necessary in update_requests.
+             self.postprocess_num_computed_tokens(input_batch)
+@@ -1750,15 +1871,6 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+             hidden_states, input_batch, grammar_output
+         )
+ 
+-        if self.pp_handler is not None:
+-            # Broadcast to non-last PP ranks (handles spec decode multi-token).
+-            self.pp_handler.broadcast(
+-                sampler_output.sampled_token_ids,
+-                num_sampled,
+-                num_rejected,
+-                input_batch,
+-            )
+-
+         assert self.prompt_logprobs_worker is not None
+         prompt_logprobs_dict = self.prompt_logprobs_worker.compute_prompt_logprobs(
+             self.model.compute_logits,
+@@ -1814,6 +1926,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+             input_batch.query_start_loc,
+         )
+ 
++        draft_tokens = None
++        pp_draft_tokens = None
+         if self.speculator is not None:
+             assert self.sampler is not None
+             # Let the target override the hidden state fed to the drafter
+@@ -1825,32 +1939,115 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+                 pre_hc_hidden_states = self.model.get_mtp_target_hidden_states()
+                 spec_hidden_states = pre_hc_hidden_states[: hidden_states.shape[0]]  # type: ignore[union-attr]
+             with use_workspace_lane(self._draft_workspace_lane):
+-                draft_tokens = self.speculator.propose(
+-                    input_batch,
+-                    attn_metadata,
+-                    slot_mappings_by_layer,
+-                    spec_hidden_states,
+-                    aux_hidden_states,
+-                    num_sampled,
+-                    num_rejected,
+-                    self.req_states.last_sampled_tokens,
+-                    self.req_states.next_prefill_tokens,
+-                    self.sampler.sampling_states.temperature.gpu,
+-                    self.sampler.sampling_states.seeds.gpu,
+-                    mm_inputs=mm_inputs,
+-                )
+-            self.req_states.draft_tokens[input_batch.idx_mapping] = draft_tokens
+-            if self.adaptive_verification is not None:
++                fallback_active = getattr(self, "_dspark_fallback_active", False)
++                try:
++                    fail_after = int(os.getenv("VLLM_DSPARK_FAIL_AFTER", "-1"))
++                    propose_calls = getattr(self, "_dspark_propose_calls", 0)
++                    # Kernel warmup uses synthetic request IDs and must not consume
++                    # the live fault-injection counter or trip the runtime circuit
++                    # breaker. Otherwise FAIL_AFTER=0 disables the proposer before
++                    # the endpoint accepts its first request, which does not test an
++                    # in-flight transactional transition.
++                    is_warmup_batch = all(
++                        req_id.startswith("_") and "warmup" in req_id
++                        for req_id in input_batch.req_ids
++                    )
++                    if (
++                        not fallback_active
++                        and not is_warmup_batch
++                        and 0 <= fail_after <= propose_calls
++                    ):
++                        raise RuntimeError(
++                            "injected DSpark proposer failure for fallback validation"
++                        )
++                    if fallback_active:
++                        raise RuntimeError(
++                            "DSpark proposer disabled after prior failure"
++                        )
++                    context_only_prefill = (
++                        os.getenv("VLLM_DSPARK_PREFILL_CACHE_ONLY", "0") == "1"
++                        and getattr(
++                            self.speculator,
++                            "supports_context_only_prefill",
++                            False,
++                        )
++                        and self.speculator.use_context_only_prefill(input_batch)
++                    )
++                    propose_kwargs = (
++                        {"context_only": True} if context_only_prefill else {}
++                    )
++                    draft_tokens = self.speculator.propose(
++                        input_batch,
++                        attn_metadata,
++                        slot_mappings_by_layer,
++                        spec_hidden_states,
++                        aux_hidden_states,
++                        num_sampled,
++                        num_rejected,
++                        self.req_states.last_sampled_tokens,
++                        self.req_states.next_prefill_tokens,
++                        self.sampler.sampling_states.temperature.gpu,
++                        self.sampler.sampling_states.seeds.gpu,
++                        mm_inputs=mm_inputs,
++                        **propose_kwargs,
++                    )
++                    if not is_warmup_batch:
++                        self._dspark_propose_calls = propose_calls + 1
++                except Exception:
++                    if not fallback_active:
++                        logger.exception(
++                            "DSpark proposer failed; disabling speculative proposals "
++                            "and continuing with target-only decoding"
++                        )
++                    self._dspark_fallback_active = True
++                    if not fallback_active and hasattr(
++                        self.speculator, "on_speculator_fallback"
++                    ):
++                        self.speculator.on_speculator_fallback()
++                    model_runner_output.spec_decode_disabled = True
++                    # Preserve the fixed shape for younger async frames while
++                    # EngineCore quarantines them at the fault boundary.
++                    draft_tokens = self.req_states.last_sampled_tokens[
++                        input_batch.idx_mapping
++                    ].expand(-1, self.num_speculative_steps).clone()
++            if draft_tokens.shape[1] == self.num_speculative_steps:
++                self.req_states.draft_tokens[input_batch.idx_mapping] = draft_tokens
++            if (
++                self.adaptive_verification is not None
++                and not self._dspark_fallback_active
++            ):
+                 self.adaptive_verification.record_confidences(
+                     self.speculator.draft_token_confidence_probs, input_batch
+                 )
++            pp_draft_tokens = draft_tokens
++
++        if self.pp_handler is not None:
++            # Keep every PP stage's accepted-token state and the next real
++            # proposal block aligned. Scheduler-side draft IDs may be async
++            # placeholders, so only the final stage's proposer is authoritative.
++            self.pp_handler.broadcast(
++                sampler_output.sampled_token_ids,
++                num_sampled,
++                num_rejected,
++                input_batch,
++                draft_tokens=pp_draft_tokens,
++                skip_sample_broadcast=skip_pp_sample_broadcast,
++            )
+ 
+         if self.num_speculative_steps > 0:
+             # Spec-decode and diffusion LLMs both use draft tokens but the latter does
+             # not have a speculator (i.e. self.speculator is None)
++            published_draft_tokens = (
++                draft_tokens
++                if draft_tokens is not None
++                else self.req_states.draft_tokens[input_batch.idx_mapping]
++            )
++            max_verify_tokens = getattr(
++                self.speculator, "max_verify_tokens", self.num_speculative_steps
++            )
++            published_draft_tokens = published_draft_tokens[:, :max_verify_tokens]
+             self.draft_tokens_handler.set_draft_tokens(
+-                input_batch,
+-                self.req_states.draft_tokens[input_batch.idx_mapping],
++                input_batch, published_draft_tokens
+             )
+ 
+         # Post-step KV connector related operations.
+@@ -1986,6 +2183,7 @@ class ExecuteModelState(NamedTuple):
+     finished_req_ids: set[str]
+     ec_connector_output: ECConnectorOutput | None
+     routed_experts: RoutedExpertsTensors | None
++    skip_pp_sample_broadcast: bool
+ 
+ 
+ class BatchReqState(NamedTuple):
+diff --git a/vllm/v1/worker/gpu/pp_utils.py b/vllm/v1/worker/gpu/pp_utils.py
+index 9b1786cbe4..3b352859bc 100644
+--- a/vllm/v1/worker/gpu/pp_utils.py
++++ b/vllm/v1/worker/gpu/pp_utils.py
+@@ -2,6 +2,7 @@
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+ """Pipeline Parallelism utils for V2 Model Runner."""
+ 
++import os
+ from collections import deque
+ from dataclasses import dataclass
+ 
+@@ -23,6 +24,7 @@ class PendingRecv:
+     sampled_tokens: torch.Tensor  # [num_reqs, max_sample_len]
+     num_sampled: torch.Tensor  # [num_reqs]
+     num_rejected: torch.Tensor  # [num_reqs]
++    draft_tokens: torch.Tensor | None  # [num_reqs, num_speculative_steps]
+     idx_mapping: torch.Tensor  # [num_reqs]
+     idx_mapping_np: np.ndarray  # [num_reqs]
+     # Records which rows need a deferred postprocess (bool).
+@@ -30,6 +32,7 @@ class PendingRecv:
+     # Snapshot of slot generation counters at receive time, used to
+     # detect requests aborted since then.
+     gen_at_receive_np: np.ndarray  # [num_reqs]
++    spec_decode_epoch: int
+ 
+ 
+ def compute_need_sampled_mask(input_batch: InputBatch) -> np.ndarray | None:
+@@ -49,6 +52,23 @@ def compute_need_sampled_mask(input_batch: InputBatch) -> np.ndarray | None:
+     return need_sampled_mask if need_sampled_mask.any() else None
+ 
+ 
++def _normalize_sampled_tokens_for_broadcast(
++    sampled_token_ids: torch.Tensor, max_sample_len: int
++) -> torch.Tensor:
++    """Keep the PP collective shape stable when runtime K changes."""
++    assert sampled_token_ids.ndim == 2
++    sample_len = sampled_token_ids.shape[1]
++    assert sample_len <= max_sample_len
++    if sample_len == max_sample_len:
++        return sampled_token_ids.contiguous()
++
++    sampled_tokens = sampled_token_ids.new_zeros(
++        sampled_token_ids.shape[0], max_sample_len
++    )
++    sampled_tokens[:, :sample_len].copy_(sampled_token_ids)
++    return sampled_tokens
++
++
+ class PPHandler:
+     """Runs the PP sampled-token broadcast/recv on a side stream so the
+     default stream isn't gated by the matching peer call. Step T's recv is
+@@ -65,6 +85,7 @@ class PPHandler:
+         self.is_last_rank = get_pp_group().is_last_rank
+         self.last_rank = get_pp_group().last_rank
+         self.max_sample_len = num_speculative_steps + 1
++        self.num_speculative_steps = num_speculative_steps
+         self.device = device
+         self.main_stream = torch.cuda.current_stream(device)
+         self.broadcast_stream = torch.cuda.Stream(device)
+@@ -86,10 +107,28 @@ class PPHandler:
+         self.broadcast_group = get_pp_group().make_sibling_device_group(
+             group_desc="pp_broadcast"
+         )
++        # Speculative PP stages can observe request-state updates at different
++        # pipeline times. Never use that local state to decide whether a
++        # collective exists: every sample_tokens call must issue a matching
++        # broadcast/receive on every stage.
++        self.force_matched_broadcast = (
++            num_speculative_steps > 0
++            and os.getenv("VLLM_DSPARK_PP_EXPERIMENTAL") == "1"
++        )
++        # The normal PP path deliberately overlaps sampled-token broadcasts on
++        # a side stream. During experimental DSpark warmup every PP rank must
++        # enqueue exactly the same collective sequence, and cross-stream waits
++        # can otherwise form a cycle with the model P2P stream. Keep this path
++        # ordered on the runner's main stream until the protocol is proven.
++        self.use_ordered_broadcast = self.force_matched_broadcast
++        self.spec_decode_epoch = 0
+ 
+     def on_req_idx_freed(self, req_idx: int) -> None:
+         self.req_idx_gen_np[req_idx] += 1
+ 
++    def set_spec_decode_epoch(self, epoch: int) -> None:
++        self.spec_decode_epoch = epoch
++
+     def get_prev_sampled_outputs(self) -> dict[str, torch.Tensor] | None:
+         """Consume the entry from pp_size steps ago and wait for its recv event,
+         then filter out entries whose request was freed since `receive`.
+@@ -102,6 +141,12 @@ class PPHandler:
+         if slot is None:
+             return None
+ 
++        # The collective must complete before its tensors can be released,
++        # even when the frame belongs to the pre-fault protocol epoch.
++        self.main_stream.wait_event(slot.event)
++        if slot.spec_decode_epoch != self.spec_decode_epoch:
++            return None
++
+         # Skip requests which did not need sampled output and/or those already
+         # finished. The post_update kernel skips the -1 entries.
+         freed = self.req_idx_gen_np[slot.idx_mapping_np] != slot.gen_at_receive_np
+@@ -115,20 +160,30 @@ class PPHandler:
+             idx_mapping_np = np.where(exclude_mask, -1, slot.idx_mapping_np)
+             idx_mapping = async_copy_to_gpu(idx_mapping_np, device=self.device)
+ 
+-        self.main_stream.wait_event(slot.event)
+         return dict(
+             sampled_tokens=slot.sampled_tokens,
+             num_sampled=slot.num_sampled,
+             num_rejected=slot.num_rejected,
++            draft_tokens=slot.draft_tokens,
+             idx_mapping=idx_mapping,
+         )
+ 
+-    def receive(self, input_batch: InputBatch) -> bool:
++    def receive(
++        self,
++        input_batch: InputBatch,
++        *,
++        skip_sample_broadcast: bool = False,
++    ) -> bool:
+         """Returns True iff sampled tokens need to be gathered from *all*
+         requests in the batch."""
+         assert not self.is_last_rank
++        if skip_sample_broadcast:
++            # The scheduler, rather than rank-local request state, owns this
++            # decision. get_prev_sampled_outputs() already reserved a None FIFO
++            # slot for the frame, so queue cadence remains unchanged.
++            return False
+         need_sampled_mask = compute_need_sampled_mask(input_batch)
+-        if need_sampled_mask is None:
++        if need_sampled_mask is None and not self.force_matched_broadcast:
+             # Leave this step's reserved slot as None.
+             return False
+ 
+@@ -137,8 +192,10 @@ class PPHandler:
+         gen_at_receive_np = self.req_idx_gen_np[input_batch.idx_mapping_np]
+ 
+         num_reqs = input_batch.num_reqs
+-        with torch.cuda.stream(self.broadcast_stream):
+-            self.broadcast_stream.wait_stream(self.main_stream)
++        stream = self.main_stream if self.use_ordered_broadcast else self.broadcast_stream
++        with torch.cuda.stream(stream):
++            if not self.use_ordered_broadcast:
++                self.broadcast_stream.wait_stream(self.main_stream)
+             sampled_tokens = torch.empty(
+                 num_reqs, self.max_sample_len, dtype=torch.int64, device=self.device
+             )
+@@ -149,23 +206,40 @@ class PPHandler:
+             torch.distributed.broadcast(
+                 combined, src=self.last_rank, group=self.broadcast_group
+             )
+-            event = self.broadcast_stream.record_event()
++            received_draft_tokens = None
++            if self.force_matched_broadcast:
++                received_draft_tokens = torch.empty(
++                    num_reqs,
++                    self.num_speculative_steps,
++                    dtype=torch.int64,
++                    device=self.device,
++                )
++                torch.distributed.broadcast(
++                    received_draft_tokens,
++                    src=self.last_rank,
++                    group=self.broadcast_group,
++                )
++            event = stream.record_event()
+             num_sampled, num_rejected = combined.unbind(dim=0)
+             # Must record_stream since these were allocated on broadcast stream but
+             # later used on the main stream.
+             sampled_tokens.record_stream(self.main_stream)
+             combined.record_stream(self.main_stream)
+-        self.queue[-1] = PendingRecv(
+-            event,
+-            sampled_tokens,
+-            num_sampled,
+-            num_rejected,
+-            input_batch.idx_mapping,
+-            input_batch.idx_mapping_np,
+-            need_sampled_mask,
+-            gen_at_receive_np,
+-        )
+-        return bool(need_sampled_mask.all())
++        if need_sampled_mask is not None:
++            self.queue[-1] = PendingRecv(
++                event,
++                sampled_tokens,
++                num_sampled,
++                num_rejected,
++                received_draft_tokens,
++                input_batch.idx_mapping,
++                input_batch.idx_mapping_np,
++                need_sampled_mask,
++                gen_at_receive_np,
++                self.spec_decode_epoch,
++            )
++            return bool(need_sampled_mask.all())
++        return False
+ 
+     def broadcast(
+         self,
+@@ -173,9 +247,17 @@ class PPHandler:
+         num_sampled: torch.Tensor,
+         num_rejected: torch.Tensor,
+         input_batch: InputBatch,
++        draft_tokens: torch.Tensor | None = None,
++        *,
++        skip_sample_broadcast: bool = False,
+     ) -> None:
+         assert self.is_last_rank
+-        if compute_need_sampled_mask(input_batch) is None:
++        if skip_sample_broadcast:
++            return
++        if (
++            compute_need_sampled_mask(input_batch) is None
++            and not self.force_matched_broadcast
++        ):
+             # No request needs sampled outputs for a subsequent decode step.
+             return
+ 
+@@ -184,10 +266,20 @@ class PPHandler:
+         if current_platform.is_xpu():
+             self.main_stream.synchronize()
+ 
+-        with torch.cuda.stream(self.broadcast_stream):
+-            self.broadcast_stream.wait_stream(self.main_stream)
++        stream = self.main_stream if self.use_ordered_broadcast else self.broadcast_stream
++        with torch.cuda.stream(stream):
++            if not self.use_ordered_broadcast:
++                self.broadcast_stream.wait_stream(self.main_stream)
++            # Receivers always allocate the configured maximum width. Runtime
++            # speculative fallback can reduce the sender from [N, K + 1] to
++            # [N, 1]; broadcasting that smaller tensor into [N, K + 1]
++            # corrupts row boundaries as soon as N > 1. Keep the collective's
++            # shape invariant across the K>0 -> K=0 epoch transition.
++            sampled_tokens = _normalize_sampled_tokens_for_broadcast(
++                sampled_token_ids, self.max_sample_len
++            )
+             torch.distributed.broadcast(
+-                sampled_token_ids.contiguous(),
++                sampled_tokens,
+                 src=self.last_rank,
+                 group=self.broadcast_group,
+             )
+@@ -195,5 +287,13 @@ class PPHandler:
+             torch.distributed.broadcast(
+                 combined, src=self.last_rank, group=self.broadcast_group
+             )
+-            for tensor in (sampled_token_ids, num_sampled, num_rejected):
+-                tensor.record_stream(self.broadcast_stream)
++            if self.force_matched_broadcast:
++                assert draft_tokens is not None
++                torch.distributed.broadcast(
++                    draft_tokens.contiguous(),
++                    src=self.last_rank,
++                    group=self.broadcast_group,
++                )
++            if not self.use_ordered_broadcast:
++                for tensor in (sampled_tokens, num_sampled, num_rejected):
++                    tensor.record_stream(self.broadcast_stream)
+diff --git a/vllm/v1/worker/gpu/spec_decode/dflash/speculator.py b/vllm/v1/worker/gpu/spec_decode/dflash/speculator.py
+index eb5dc470b2..18c41a07af 100644
+--- a/vllm/v1/worker/gpu/spec_decode/dflash/speculator.py
++++ b/vllm/v1/worker/gpu/spec_decode/dflash/speculator.py
+@@ -1,6 +1,7 @@
+ # SPDX-License-Identifier: Apache-2.0
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+ from collections.abc import Mapping
++import os
+ from typing import Any
+ 
+ import numpy as np
+@@ -29,8 +30,20 @@ from vllm.v1.worker.utils import AttentionGroup
+ logger = init_logger(__name__)
+ 
+ 
++def is_pure_non_final_prefill(input_batch: InputBatch) -> bool:
++    """Return True only when every row remains in prefill after this chunk."""
++    return bool(
++        (
++            input_batch.num_computed_prefill_tokens_np
++            + input_batch.num_scheduled_tokens
++            < input_batch.prefill_len_np
++        ).all()
++    )
++
++
+ class DFlashSpeculator(DraftModelSpeculator):
+     _speculator_name = "DFlash"  # For logging, so we can share methods with subclasses
++    supports_context_only_prefill = False
+ 
+     def __init__(self, vllm_config: VllmConfig, device: torch.device):
+         super().__init__(vllm_config, device)
+@@ -136,6 +149,9 @@ class DFlashSpeculator(DraftModelSpeculator):
+             decode_query_len=self.num_query_per_req,
+         )
+ 
++    def use_context_only_prefill(self, input_batch: InputBatch) -> bool:
++        return is_pure_non_final_prefill(input_batch)
++
+     def capture(self) -> None:
+         logger.info("Capturing model for %s speculator...", self._speculator_name)
+         # Padded sample rows must not scatter into a live request during capture.
+@@ -300,6 +316,35 @@ class DFlashSpeculator(DraftModelSpeculator):
+             query_start_loc_np=query_start_loc_np,
+         )
+ 
++    def _precompute_context_kv(
++        self,
++        input_batch: InputBatch,
++        last_hidden_states: torch.Tensor,
++        aux_hidden_states: list[torch.Tensor] | None,
++        context_positions: torch.Tensor,
++        context_slot_mappings: torch.Tensor | list[torch.Tensor | None] | None,
++        *,
++        context_only: bool,
++        dummy_run: bool,
++    ) -> None:
++        """Project target states and insert the drafter's context KV."""
++        del context_only, dummy_run
++        num_target_tokens = input_batch.num_tokens
++        if aux_hidden_states:
++            hidden_states = self.model.combine_hidden_states(
++                torch.cat(aux_hidden_states, dim=-1)
++            )
++        else:
++            hidden_states = last_hidden_states
++        self.hidden_states[:num_target_tokens].copy_(
++            hidden_states[:num_target_tokens]
++        )
++        self.model.precompute_and_store_context_kv(
++            self.hidden_states[:num_target_tokens],
++            context_positions[:num_target_tokens],
++            context_slot_mappings,
++        )
++
+     @torch.inference_mode()
+     def propose(
+         self,
+@@ -327,7 +372,13 @@ class DFlashSpeculator(DraftModelSpeculator):
+         skip_attn_for_dummy_run: bool = False,
+         mm_inputs: tuple[list[torch.Tensor], torch.Tensor] | None = None,
+         is_profile: bool = False,
++        context_only: bool = False,
+     ) -> torch.Tensor:
++        if context_only:
++            assert self.supports_context_only_prefill
++            assert not dummy_run
++            assert is_pure_non_final_prefill(input_batch)
++
+         num_reqs = input_batch.num_reqs
+         num_target_tokens = input_batch.num_tokens
+         num_query_tokens = num_reqs * self.num_query_per_req
+@@ -340,21 +391,33 @@ class DFlashSpeculator(DraftModelSpeculator):
+         # number of rejected tokens, we maintain the size of input_ids and
+         # hidden_states the same as the target model's. This means, we pad each
+         # request's query length to include any rejected positions.
+-        if aux_hidden_states:
+-            hidden_states = self.model.combine_hidden_states(
+-                torch.cat(aux_hidden_states, dim=-1)
++        skip_redundant_hidden_copy = (
++            os.getenv("VLLM_DSPARK_SKIP_REDUNDANT_HIDDEN_COPY") == "1"
++            and not getattr(self, "_late_prefill_enabled", False)
++        )
++        if not skip_redundant_hidden_copy:
++            if aux_hidden_states:
++                hidden_states = self.model.combine_hidden_states(
++                    torch.cat(aux_hidden_states, dim=-1)
++                )
++            else:
++                hidden_states = last_hidden_states
++            self.hidden_states[:num_target_tokens].copy_(
++                hidden_states[:num_target_tokens]
+             )
+-        else:
+-            hidden_states = last_hidden_states
+-        self.hidden_states[:num_target_tokens].copy_(hidden_states[:num_target_tokens])
+ 
+         if dummy_run and skip_attn_for_dummy_run:
+             # Memory profiling path: block_tables / kv_cache_config are not initialized.
+             # Since DFlash needs to build its own attention metadata, we must skip the
+             # preparation in this path and run a minimal forward pass.
+-            self.model.precompute_and_store_context_kv(
+-                self.hidden_states[:num_target_tokens],
++            self._precompute_context_kv(
++                input_batch,
++                last_hidden_states,
++                aux_hidden_states,
+                 self.context_positions[:num_target_tokens],
++                None,
++                context_only=False,
++                dummy_run=True,
+             )
+             # DFlash processes all speculative tokens in one forward pass,
+             # so the real token count is num_query_tokens.
+@@ -415,12 +478,25 @@ class DFlashSpeculator(DraftModelSpeculator):
+             ]
+         else:
+             context_slots = self._context_slot_mappings[0][:num_target_tokens]
+-        self.model.precompute_and_store_context_kv(
+-            self.hidden_states[:num_target_tokens],
++        self._precompute_context_kv(
++            input_batch,
++            last_hidden_states,
++            aux_hidden_states,
+             self.context_positions[:num_target_tokens],
+             context_slots,
++            context_only=context_only,
++            dummy_run=dummy_run,
+         )
+ 
++        if context_only:
++            logger.info_once(
++                "%s cache-only prefill is active; skipping unused draft "
++                "forward and sampling for pure non-final prefill batches.",
++                self._speculator_name,
++            )
++            self.draft_tokens[:num_reqs].zero_()
++            return self.draft_tokens[:num_reqs]
++
+         # Every DFlash step has exactly num_query_per_req tokens, so we can use FULL CGs
+         batch_desc, num_tokens_across_dp = dispatch_cg_and_sync_dp(
+             self.query_cudagraph_manager,
+diff --git a/vllm/v1/worker/gpu/spec_decode/dspark/prefill.py b/vllm/v1/worker/gpu/spec_decode/dspark/prefill.py
+new file mode 100644
+index 0000000000..914098ed64
+--- /dev/null
++++ b/vllm/v1/worker/gpu/spec_decode/dspark/prefill.py
+@@ -0,0 +1,316 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""Transactional suffix storage for DSpark late prefill materialization."""
++
++from collections.abc import Sequence
++from dataclasses import dataclass
++from enum import IntEnum
++
++import numpy as np
++import torch
++
++
++class DSparkSuffixState(IntEnum):
++    EMPTY = 0
++    BUFFERING = 1
++    MATERIALIZED = 2
++    INVALID = 3
++
++
++@dataclass(frozen=True)
++class DSparkRequestOwner:
++    req_idx: int
++    generation: int
++    req_id: str
++
++
++class DSparkAuxSuffixRing:
++    """Keep the last ``window`` raw auxiliary states for each live request.
++
++    GPU data is keyed by a CPU owner tuple. Slot generations make a batch
++    snapshot reject stale async work even when both the request id and slot are
++    reused. Absolute-position tags make ring wrap and missing-prefix errors
++    fail closed before any draft KV is written.
++    """
++
++    def __init__(
++        self,
++        max_num_reqs: int,
++        num_aux_layers: int,
++        window: int,
++        hidden_size: int,
++        dtype: torch.dtype,
++        device: torch.device,
++    ) -> None:
++        if min(max_num_reqs, num_aux_layers, window, hidden_size) <= 0:
++            raise ValueError("DSpark suffix-ring dimensions must be positive")
++        self.max_num_reqs = max_num_reqs
++        self.num_aux_layers = num_aux_layers
++        self.window = window
++        self.hidden_size = hidden_size
++        self.dtype = dtype
++        self.device = device
++
++        self.data = torch.empty(
++            max_num_reqs,
++            num_aux_layers,
++            window,
++            hidden_size,
++            dtype=dtype,
++            device=device,
++        )
++        self.tags = np.full((max_num_reqs, window), -1, dtype=np.int64)
++        self.generations = np.zeros(max_num_reqs, dtype=np.int64)
++        self.next_positions = np.full(max_num_reqs, -1, dtype=np.int64)
++        self.states = np.full(
++            max_num_reqs, DSparkSuffixState.EMPTY, dtype=np.uint8
++        )
++        self.owners: list[DSparkRequestOwner | None] = [None] * max_num_reqs
++
++        self.tokens_seen = 0
++        self.tokens_retained = 0
++        self.materializations = 0
++        self.cache_resumes = 0
++        self.resets = 0
++        self.wraps = 0
++
++    def _check_req_idx(self, req_idx: int) -> None:
++        if not 0 <= req_idx < self.max_num_reqs:
++            raise RuntimeError(f"DSpark request slot out of range: {req_idx}")
++
++    def bind(
++        self, req_id: str, req_idx: int, num_computed_tokens: int
++    ) -> DSparkRequestOwner:
++        self._check_req_idx(req_idx)
++        if self.owners[req_idx] is not None:
++            raise RuntimeError(
++                f"DSpark request slot {req_idx} was rebound without release"
++            )
++        self.generations[req_idx] += 1
++        owner = DSparkRequestOwner(
++            req_idx=req_idx,
++            generation=int(self.generations[req_idx]),
++            req_id=req_id,
++        )
++        self.owners[req_idx] = owner
++        self.tags[req_idx].fill(-1)
++        self.next_positions[req_idx] = num_computed_tokens
++        if num_computed_tokens < 0:
++            raise RuntimeError("DSpark computed-token count cannot be negative")
++        # The scheduler's local prefix hit is the common hit across every KV
++        # group, including the DSpark draft groups. Their sliding-window suffix
++        # is therefore already materialized and can accept the uncached tail.
++        # External KV remains rejected by the late-prefill configuration.
++        self.states[req_idx] = (
++            DSparkSuffixState.MATERIALIZED
++            if num_computed_tokens > 0
++            else DSparkSuffixState.EMPTY
++        )
++        if num_computed_tokens > 0:
++            self.cache_resumes += 1
++        return owner
++
++    def release(self, req_id: str, req_idx: int) -> None:
++        self._check_req_idx(req_idx)
++        owner = self.owners[req_idx]
++        if owner is None:
++            return
++        if owner.req_id != req_id:
++            raise RuntimeError(
++                "DSpark request-slot owner mismatch during release: "
++                f"slot={req_idx} expected={owner.req_id!r} got={req_id!r}"
++            )
++        self.owners[req_idx] = None
++        self.tags[req_idx].fill(-1)
++        self.next_positions[req_idx] = -1
++        self.states[req_idx] = DSparkSuffixState.EMPTY
++        self.resets += 1
++
++    def reset_all(self) -> None:
++        self.owners[:] = [None] * self.max_num_reqs
++        self.tags.fill(-1)
++        self.next_positions.fill(-1)
++        self.states.fill(DSparkSuffixState.EMPTY)
++        self.resets += 1
++
++    def snapshot_generations(
++        self, req_ids: Sequence[str], idx_mapping_np: np.ndarray
++    ) -> np.ndarray:
++        if len(req_ids) != len(idx_mapping_np):
++            raise RuntimeError("DSpark request snapshot has inconsistent lengths")
++        result = np.empty(len(req_ids), dtype=np.int64)
++        for row, (req_id, raw_idx) in enumerate(zip(req_ids, idx_mapping_np)):
++            req_idx = int(raw_idx)
++            owner = self._require_current(req_id, req_idx)
++            result[row] = owner.generation
++        return result
++
++    def owner_from_snapshot(
++        self, req_id: str, req_idx: int, generation: int
++    ) -> DSparkRequestOwner:
++        owner = DSparkRequestOwner(req_idx, generation, req_id)
++        self._validate_owner(owner)
++        return owner
++
++    def _require_current(self, req_id: str, req_idx: int) -> DSparkRequestOwner:
++        self._check_req_idx(req_idx)
++        owner = self.owners[req_idx]
++        if owner is None or owner.req_id != req_id:
++            raise RuntimeError(
++                "DSpark request-slot owner is missing or stale: "
++                f"slot={req_idx} req_id={req_id!r} current={owner!r}"
++            )
++        return owner
++
++    def _validate_owner(self, owner: DSparkRequestOwner) -> None:
++        self._check_req_idx(owner.req_idx)
++        if self.owners[owner.req_idx] != owner:
++            raise RuntimeError(
++                "DSpark stale request generation: "
++                f"snapshot={owner!r} current={self.owners[owner.req_idx]!r}"
++            )
++
++    def state(self, owner: DSparkRequestOwner) -> DSparkSuffixState:
++        self._validate_owner(owner)
++        return DSparkSuffixState(int(self.states[owner.req_idx]))
++
++    def append(
++        self,
++        owner: DSparkRequestOwner,
++        start_position: int,
++        aux_hidden_states: Sequence[torch.Tensor],
++    ) -> int:
++        """Append one contiguous prefill segment, retaining only its suffix."""
++        self._validate_owner(owner)
++        state = self.state(owner)
++        if state == DSparkSuffixState.INVALID:
++            raise RuntimeError(
++                "DSpark late materialization cannot resume without raw aux states"
++            )
++        if state == DSparkSuffixState.MATERIALIZED:
++            raise RuntimeError("DSpark materialized request cannot append to ring")
++        if len(aux_hidden_states) != self.num_aux_layers:
++            raise RuntimeError(
++                "DSpark aux-layer count mismatch: "
++                f"expected={self.num_aux_layers} got={len(aux_hidden_states)}"
++            )
++        num_tokens = int(aux_hidden_states[0].shape[0])
++        if num_tokens <= 0:
++            raise RuntimeError("DSpark suffix append cannot be empty")
++        if int(self.next_positions[owner.req_idx]) != start_position:
++            raise RuntimeError(
++                "DSpark raw-aux coverage gap or replay: "
++                f"expected={int(self.next_positions[owner.req_idx])} "
++                f"got={start_position}"
++            )
++        for layer_idx, hidden in enumerate(aux_hidden_states):
++            if (
++                hidden.ndim != 2
++                or hidden.shape[0] != num_tokens
++                or hidden.shape[1] != self.hidden_size
++                or hidden.dtype != self.dtype
++                or hidden.device != self.data.device
++            ):
++                raise RuntimeError(
++                    "DSpark raw aux contract mismatch at layer "
++                    f"{layer_idx}: shape={tuple(hidden.shape)} "
++                    f"dtype={hidden.dtype} device={hidden.device}"
++                )
++
++        keep = min(num_tokens, self.window)
++        source_start = num_tokens - keep
++        retained_start = start_position + source_start
++        retained_positions = np.arange(
++            retained_start, start_position + num_tokens, dtype=np.int64
++        )
++        ring_indices_np = retained_positions % self.window
++        # ``keep <= window`` makes every destination unique. Never scatter a
++        # larger chunk modulo the ring: duplicate GPU writers are nondeterministic.
++        if np.unique(ring_indices_np).size != keep:
++            raise RuntimeError("DSpark suffix ring produced duplicate destinations")
++        ring_indices = torch.as_tensor(
++            ring_indices_np, dtype=torch.int64, device=self.device
++        )
++        for layer_idx, hidden in enumerate(aux_hidden_states):
++            self.data[owner.req_idx, layer_idx].index_copy_(
++                0, ring_indices, hidden[source_start:]
++            )
++        self.tags[owner.req_idx, ring_indices_np] = retained_positions
++        self.next_positions[owner.req_idx] = start_position + num_tokens
++        self.states[owner.req_idx] = DSparkSuffixState.BUFFERING
++        self.tokens_seen += num_tokens
++        self.tokens_retained += keep
++        if retained_start // self.window != (retained_start + keep - 1) // self.window:
++            self.wraps += 1
++        return keep
++
++    def advance_materialized(
++        self,
++        owner: DSparkRequestOwner,
++        start_position: int,
++        num_tokens: int,
++        *,
++        strict: bool = True,
++    ) -> None:
++        self._validate_owner(owner)
++        if self.state(owner) != DSparkSuffixState.MATERIALIZED:
++            raise RuntimeError("DSpark request is not materialized")
++        expected = int(self.next_positions[owner.req_idx])
++        invalid_position = (
++            start_position != expected if strict else start_position > expected
++        )
++        if num_tokens <= 0 or invalid_position:
++            raise RuntimeError(
++                "DSpark materialized context has a coverage gap or replay: "
++                f"expected={expected} "
++                f"got={start_position} count={num_tokens}"
++            )
++        self.next_positions[owner.req_idx] = start_position + num_tokens
++        self.tokens_seen += num_tokens
++
++    def copy_suffix_into(
++        self,
++        owner: DSparkRequestOwner,
++        expected_end: int,
++        output: torch.Tensor,
++        output_offset: int,
++    ) -> int:
++        """Copy the chronological suffix into ``[T, layers * hidden]`` output."""
++        self._validate_owner(owner)
++        if self.state(owner) != DSparkSuffixState.BUFFERING:
++            raise RuntimeError("DSpark request has no buffered suffix to materialize")
++        if int(self.next_positions[owner.req_idx]) != expected_end:
++            raise RuntimeError(
++                "DSpark suffix end mismatch: "
++                f"expected={expected_end} "
++                f"seen={int(self.next_positions[owner.req_idx])}"
++            )
++        count = min(expected_end, self.window)
++        if count <= 0 or output_offset + count > output.shape[0]:
++            raise RuntimeError("DSpark suffix output capacity is invalid")
++        positions = np.arange(expected_end - count, expected_end, dtype=np.int64)
++        ring_indices_np = positions % self.window
++        actual_tags = self.tags[owner.req_idx, ring_indices_np]
++        if not np.array_equal(actual_tags, positions):
++            raise RuntimeError(
++                "DSpark raw-aux suffix coverage is incomplete: "
++                f"expected={positions.tolist()} actual={actual_tags.tolist()}"
++            )
++        ring_indices = torch.as_tensor(
++            ring_indices_np, dtype=torch.int64, device=self.device
++        )
++        destination = output[output_offset : output_offset + count]
++        for layer_idx in range(self.num_aux_layers):
++            col_start = layer_idx * self.hidden_size
++            col_end = col_start + self.hidden_size
++            destination[:, col_start:col_end].copy_(
++                self.data[owner.req_idx, layer_idx].index_select(0, ring_indices)
++            )
++        return count
++
++    def mark_materialized(self, owner: DSparkRequestOwner) -> None:
++        self._validate_owner(owner)
++        if self.state(owner) != DSparkSuffixState.BUFFERING:
++            raise RuntimeError("DSpark suffix cannot be committed from current state")
++        self.states[owner.req_idx] = DSparkSuffixState.MATERIALIZED
++        self.materializations += 1
+diff --git a/vllm/v1/worker/gpu/spec_decode/dspark/speculator.py b/vllm/v1/worker/gpu/spec_decode/dspark/speculator.py
+index 19fc452018..dd5ee4675b 100644
+--- a/vllm/v1/worker/gpu/spec_decode/dspark/speculator.py
++++ b/vllm/v1/worker/gpu/spec_decode/dspark/speculator.py
+@@ -23,15 +23,24 @@ CUDA graphs (FULL, mirroring DFlash) cover the whole draft step: the parallel
+ backbone forward AND the sequential Markov sampling.
+ """
+ 
++import os
+ from typing import Any
+ 
++import numpy as np
+ import torch
+ 
+ from vllm.config import VllmConfig
+ from vllm.config.compilation import CUDAGraphMode
+ from vllm.logger import init_logger
++from vllm.v1.attention.backends.utils import PAD_SLOT_ID
++from vllm.v1.worker.gpu.input_batch import InputBatch
+ from vllm.v1.worker.gpu.sample.gumbel import gumbel_sample
+ from vllm.v1.worker.gpu.spec_decode.dflash.speculator import DFlashSpeculator
++from vllm.v1.worker.gpu.spec_decode.dspark.prefill import (
++    DSparkAuxSuffixRing,
++    DSparkRequestOwner,
++    DSparkSuffixState,
++)
+ from vllm.v1.worker.gpu.spec_decode.dspark.utils import load_dspark_model
+ 
+ logger = init_logger(__name__)
+@@ -39,10 +48,103 @@ logger = init_logger(__name__)
+ 
+ class DSparkSpeculator(DFlashSpeculator):
+     _speculator_name = "DSpark"
++    supports_context_only_prefill = True
+ 
+     def __init__(self, vllm_config: VllmConfig, device: torch.device):
+         super().__init__(vllm_config, device)
+ 
++        configured_verify_tokens = int(
++            os.getenv("VLLM_DSPARK_MAX_VERIFY_TOKENS", "0")
++        )
++        self.max_verify_tokens = (
++            configured_verify_tokens
++            if configured_verify_tokens > 0
++            else self.num_speculative_steps
++        )
++        if not 1 <= self.max_verify_tokens <= self.num_speculative_steps:
++            raise ValueError(
++                "VLLM_DSPARK_MAX_VERIFY_TOKENS must be between 1 and "
++                f"num_speculative_tokens ({self.num_speculative_steps}); got "
++                f"{configured_verify_tokens}"
++            )
++        if self.max_verify_tokens < self.num_speculative_steps:
++            logger.info(
++                "DSpark uses an internal draft block of %d tokens and returns "
++                "%d tokens for target verification.",
++                self.num_speculative_steps,
++                self.max_verify_tokens,
++            )
++
++        self._late_prefill_enabled = (
++            os.getenv("VLLM_DSPARK_PREFILL_LATE_MATERIALIZE", "0") == "1"
++        )
++        self._late_ring: DSparkAuxSuffixRing | None = None
++        self._late_raw_packed: torch.Tensor | None = None
++        self._late_positions: torch.Tensor | None = None
++        self._late_all_positions: torch.Tensor | None = None
++        self._late_idx_mapping: torch.Tensor | None = None
++        self._late_query_start_loc: torch.Tensor | None = None
++        self._late_slot_mappings: torch.Tensor | None = None
++        self._late_materialization_logs = 0
++        self._late_runtime_disabled = False
++
++        if self._late_prefill_enabled:
++            self._validate_late_prefill_config(vllm_config)
++            hf_config = self.draft_model_config.hf_config
++            target_layer_ids = tuple(hf_config.dspark_target_layer_ids)
++            window = int(hf_config.sliding_window)
++            draft_hidden = self.draft_model_config.get_hidden_size()
++            self._late_num_aux_layers = len(target_layer_ids)
++            self._late_hidden_size = draft_hidden
++            self._late_window = window
++            self._late_capacity = self.max_num_tokens + self.max_num_reqs * window
++            element_size = torch.empty((), dtype=self.dtype).element_size()
++            packed_bytes = (
++                self._late_capacity
++                * self._late_num_aux_layers
++                * draft_hidden
++                * element_size
++            )
++            if packed_bytes > 256 * 1024 * 1024:
++                raise ValueError(
++                    "DSpark late-prefill packed scratch exceeds 256 MiB: "
++                    f"{packed_bytes} bytes"
++                )
++            self._late_ring = DSparkAuxSuffixRing(
++                max_num_reqs=self.max_num_reqs,
++                num_aux_layers=self._late_num_aux_layers,
++                window=window,
++                hidden_size=draft_hidden,
++                dtype=self.dtype,
++                device=device,
++            )
++            self._late_raw_packed = torch.empty(
++                self._late_capacity,
++                self._late_num_aux_layers * draft_hidden,
++                dtype=self.dtype,
++                device=device,
++            )
++            self._late_positions = torch.empty(
++                self._late_capacity, dtype=torch.int64, device=device
++            )
++            self._late_all_positions = torch.arange(
++                self.max_model_len, dtype=torch.int64, device=device
++            )
++            self._late_idx_mapping = torch.empty(
++                self.max_num_reqs, dtype=torch.int32, device=device
++            )
++            self._late_query_start_loc = torch.empty(
++                self.max_num_reqs + 1, dtype=torch.int32, device=device
++            )
++            logger.info(
++                "DSpark late prefill configured: window=%d capacity=%d "
++                "ring_bytes=%d packed_bytes=%d",
++                window,
++                self._late_capacity,
++                self._late_ring.data.numel() * self._late_ring.data.element_size(),
++                packed_bytes,
++            )
++
+         # Whether to sample from the anchor position. When True, uses anchor-as-first
+         # (N slots, each position predicts the next token). When False, uses 1+N
+         # fill-in block (anchor is a bonus token).
+@@ -85,6 +187,349 @@ class DSparkSpeculator(DFlashSpeculator):
+         self.enable_adaptive_verification = (
+             self.speculative_config.enable_adaptive_verification
+         )
++        self._pp_debug_calls = 0
++
++    @staticmethod
++    def _validate_late_prefill_config(vllm_config: VllmConfig) -> None:
++        if os.getenv("VLLM_DSPARK_PREFILL_CACHE_ONLY", "0") != "1":
++            raise ValueError(
++                "DSpark late prefill materialization requires "
++                "VLLM_DSPARK_PREFILL_CACHE_ONLY=1"
++            )
++        kv_transfer = vllm_config.kv_transfer_config
++        if kv_transfer is not None and kv_transfer.is_kv_transfer_instance:
++            raise ValueError(
++                "DSpark late prefill materialization does not support external KV"
++            )
++        parallel = vllm_config.parallel_config
++        if (
++            parallel.prefill_context_parallel_size != 1
++            or parallel.decode_context_parallel_size != 1
++        ):
++            raise ValueError(
++                "DSpark late prefill materialization requires PCP=DCP=1"
++            )
++        speculative_config = vllm_config.speculative_config
++        assert speculative_config is not None
++        hf_config = speculative_config.draft_model_config.hf_config
++        if not getattr(hf_config, "dspark_target_layer_ids", None):
++            raise ValueError("DSpark late prefill requires target aux layer ids")
++        if int(getattr(hf_config, "sliding_window", 0) or 0) <= 0:
++            raise ValueError("DSpark late prefill requires a positive sliding window")
++
++    def set_attn(self, *args: Any, **kwargs: Any) -> None:
++        super().set_attn(*args, **kwargs)
++        if self._late_prefill_enabled:
++            self._late_slot_mappings = torch.empty(
++                self.block_tables.num_kv_cache_groups,
++                self._late_capacity,
++                dtype=torch.int64,
++                device=self.device,
++            )
++
++    def on_request_added(
++        self, req_id: str, req_idx: int, num_computed_tokens: int
++    ) -> None:
++        if self._late_ring is not None and not self._late_runtime_disabled:
++            try:
++                self._late_ring.bind(req_id, req_idx, num_computed_tokens)
++            except Exception:
++                logger.exception(
++                    "DSpark late-prefill request bind failed; deferring to "
++                    "target-only fallback"
++                )
++                self.on_speculator_fallback()
++
++    def on_request_removed(self, req_id: str, req_idx: int) -> None:
++        if self._late_ring is not None and not self._late_runtime_disabled:
++            try:
++                self._late_ring.release(req_id, req_idx)
++            except Exception:
++                logger.exception(
++                    "DSpark late-prefill request release failed; deferring to "
++                    "target-only fallback"
++                )
++                self.on_speculator_fallback()
++
++    def on_speculator_fallback(self) -> None:
++        if self._late_ring is not None and not self._late_runtime_disabled:
++            self._late_ring.reset_all()
++        self._late_runtime_disabled = True
++
++    def snapshot_request_generations(
++        self, req_ids: list[str], idx_mapping_np: np.ndarray
++    ) -> np.ndarray | None:
++        if self._late_ring is None or self._late_runtime_disabled:
++            return None
++        try:
++            return self._late_ring.snapshot_generations(req_ids, idx_mapping_np)
++        except Exception:
++            logger.exception(
++                "DSpark late-prefill generation snapshot failed; deferring to "
++                "target-only fallback"
++            )
++            self.on_speculator_fallback()
++            return None
++
++    def _batch_owners(self, input_batch: InputBatch) -> list[DSparkRequestOwner]:
++        assert self._late_ring is not None
++        generations = input_batch.speculator_request_generations_np
++        if generations is None or len(generations) != input_batch.num_reqs:
++            raise RuntimeError("DSpark batch is missing request-generation snapshot")
++        return [
++            self._late_ring.owner_from_snapshot(
++                input_batch.req_ids[row],
++                int(input_batch.idx_mapping_np[row]),
++                int(generations[row]),
++            )
++            for row in range(input_batch.num_reqs)
++        ]
++
++    def _copy_current_raw_aux(
++        self,
++        aux_hidden_states: list[torch.Tensor],
++        token_start: int,
++        token_end: int,
++        output_offset: int,
++    ) -> int:
++        assert self._late_raw_packed is not None
++        count = token_end - token_start
++        if count <= 0 or output_offset + count > self._late_capacity:
++            raise RuntimeError("DSpark late-prefill packing capacity exceeded")
++        destination = self._late_raw_packed[output_offset : output_offset + count]
++        for layer_idx, hidden in enumerate(aux_hidden_states):
++            col_start = layer_idx * self._late_hidden_size
++            col_end = col_start + self._late_hidden_size
++            destination[:, col_start:col_end].copy_(hidden[token_start:token_end])
++        return count
++
++    def _precompute_context_kv(
++        self,
++        input_batch: InputBatch,
++        last_hidden_states: torch.Tensor,
++        aux_hidden_states: list[torch.Tensor] | None,
++        context_positions: torch.Tensor,
++        context_slot_mappings: torch.Tensor | list[torch.Tensor | None] | None,
++        *,
++        context_only: bool,
++        dummy_run: bool,
++    ) -> None:
++        if not self._late_prefill_enabled or dummy_run:
++            return super()._precompute_context_kv(
++                input_batch,
++                last_hidden_states,
++                aux_hidden_states,
++                context_positions,
++                context_slot_mappings,
++                context_only=context_only,
++                dummy_run=dummy_run,
++            )
++
++        if (
++            aux_hidden_states is None
++            or len(aux_hidden_states) != self._late_num_aux_layers
++        ):
++            raise RuntimeError(
++                "DSpark late prefill requires the complete target aux-state tuple"
++            )
++        assert self._late_raw_packed is not None
++        for layer_idx, hidden in enumerate(aux_hidden_states):
++            if (
++                hidden.ndim != 2
++                or hidden.shape[0] < input_batch.num_tokens
++                or hidden.shape[1] != self._late_hidden_size
++                or hidden.dtype != self.dtype
++                or hidden.device != self._late_raw_packed.device
++            ):
++                raise RuntimeError(
++                    "DSpark late-prefill aux contract mismatch at layer "
++                    f"{layer_idx}: shape={tuple(hidden.shape)} "
++                    f"dtype={hidden.dtype} device={hidden.device}"
++                )
++
++        assert self._late_ring is not None
++        assert self._late_positions is not None
++        assert self._late_all_positions is not None
++        assert self._late_idx_mapping is not None
++        assert self._late_query_start_loc is not None
++        assert self._late_slot_mappings is not None
++        owners = self._batch_owners(input_batch)
++        query_starts = input_batch.query_start_loc_np
++
++        # Once every request has its draft context, preserve the exact Stage 1
++        # current-token path (especially decode): no repacking, allocations, or
++        # second slot-mapping pass.
++        if all(
++            self._late_ring.state(owner) == DSparkSuffixState.MATERIALIZED
++            for owner in owners
++        ):
++            for row, owner in enumerate(owners):
++                token_start = int(query_starts[row])
++                token_end = int(query_starts[row + 1])
++                self._late_ring.advance_materialized(
++                    owner,
++                    int(input_batch.num_computed_tokens_np[row]),
++                    token_end - token_start,
++                    strict=bool(input_batch.is_prefilling_np[row]),
++                )
++            return super()._precompute_context_kv(
++                input_batch,
++                last_hidden_states,
++                aux_hidden_states,
++                context_positions,
++                context_slot_mappings,
++                context_only=context_only,
++                dummy_run=dummy_run,
++            )
++
++        # First ingest every prefill row, including rows in mixed batches.
++        for row, owner in enumerate(owners):
++            token_start = int(query_starts[row])
++            token_end = int(query_starts[row + 1])
++            num_tokens = token_end - token_start
++            start_position = int(input_batch.num_computed_tokens_np[row])
++            is_prefill = bool(input_batch.is_prefilling_np[row])
++            state = self._late_ring.state(owner)
++            if is_prefill:
++                if start_position != int(
++                    input_batch.num_computed_prefill_tokens_np[row]
++                ):
++                    raise RuntimeError(
++                        "DSpark prefill position snapshot is inconsistent"
++                    )
++                if state in (DSparkSuffixState.EMPTY, DSparkSuffixState.BUFFERING):
++                    self._late_ring.append(
++                        owner,
++                        start_position,
++                        [hidden[token_start:token_end] for hidden in aux_hidden_states],
++                    )
++                elif state == DSparkSuffixState.MATERIALIZED:
++                    self._late_ring.advance_materialized(
++                        owner, start_position, num_tokens
++                    )
++                else:
++                    raise RuntimeError(
++                        "DSpark prefill resumed without raw suffix coverage"
++                    )
++            else:
++                if state != DSparkSuffixState.MATERIALIZED:
++                    raise RuntimeError(
++                        "DSpark decode started before draft context materialization"
++                    )
++                # Rejection can replay positions; draft KV is overwritten by the
++                # normal slot mapping, so decode tracking is intentionally non-strict.
++                self._late_ring.advance_materialized(
++                    owner, start_position, num_tokens, strict=False
++                )
++
++        packed_count = 0
++        segment_rows: list[int] = []
++        segment_ends = [0]
++        flushed_buffered: list[DSparkRequestOwner] = []
++        pending_materialization: list[DSparkRequestOwner] = []
++
++        for row, owner in enumerate(owners):
++            token_start = int(query_starts[row])
++            token_end = int(query_starts[row + 1])
++            num_tokens = token_end - token_start
++            is_prefill = bool(input_batch.is_prefilling_np[row])
++            state = self._late_ring.state(owner)
++
++            if is_prefill and state == DSparkSuffixState.BUFFERING:
++                if context_only:
++                    continue
++                expected_end = int(input_batch.num_computed_tokens_np[row]) + num_tokens
++                count = self._late_ring.copy_suffix_into(
++                    owner,
++                    expected_end,
++                    self._late_raw_packed,
++                    packed_count,
++                )
++                self._late_positions[packed_count : packed_count + count].copy_(
++                    self._late_all_positions[expected_end - count : expected_end]
++                )
++                flushed_buffered.append(owner)
++                if expected_end >= int(input_batch.prefill_len_np[row]):
++                    pending_materialization.append(owner)
++            else:
++                # MATERIALIZED prefill must keep its cache current. Decode always
++                # retains the legacy per-step context insertion semantics.
++                count = self._copy_current_raw_aux(
++                    aux_hidden_states, token_start, token_end, packed_count
++                )
++                self._late_positions[packed_count : packed_count + count].copy_(
++                    input_batch.positions[token_start:token_end]
++                )
++
++            packed_count += count
++            segment_rows.append(row)
++            segment_ends.append(packed_count)
++
++        if packed_count == 0:
++            logger.info_once(
++                "DSpark late prefill materialization is active; raw aux is "
++                "buffered without main_proj or draft context-KV insertion."
++            )
++            return
++        if packed_count > self._late_capacity:
++            raise RuntimeError("DSpark late-prefill packed context overflow")
++
++        row_index = torch.as_tensor(
++            segment_rows, dtype=torch.int64, device=self.device
++        )
++        torch.index_select(
++            input_batch.idx_mapping,
++            0,
++            row_index,
++            out=self._late_idx_mapping[: len(segment_rows)],
++        )
++        self._late_query_start_loc[: len(segment_ends)].copy_(
++            torch.as_tensor(segment_ends, dtype=torch.int32, device=self.device)
++        )
++        full_slot_mappings = self.block_tables.compute_slot_mappings(
++            self._late_idx_mapping[: len(segment_rows)],
++            self._late_query_start_loc[: len(segment_ends)],
++            self._late_positions[:packed_count],
++            num_tokens_padded=packed_count,
++            out=self._late_slot_mappings[:, :packed_count],
++        )
++        if self._layer_group_idx is None:
++            raise RuntimeError("DSpark late prefill requires per-layer KV groups")
++        layer_slot_mappings = [
++            full_slot_mappings[self.draft_kv_cache_group_ids[group_idx]]
++            for group_idx in self._layer_group_idx
++        ]
++        if flushed_buffered:
++            draft_gids = sorted(set(self.draft_kv_cache_group_ids))
++            if bool(
++                (full_slot_mappings[draft_gids, :packed_count] == PAD_SLOT_ID)
++                .any()
++                .item()
++            ):
++                raise RuntimeError(
++                    "DSpark suffix materialization resolved an invalid KV slot"
++                )
++
++        main_x = self.model.combine_hidden_states(
++            self._late_raw_packed[:packed_count]
++        )
++        self.model.precompute_and_store_context_kv(
++            main_x,
++            self._late_positions[:packed_count],
++            layer_slot_mappings,
++        )
++        for owner in pending_materialization:
++            self._late_ring.mark_materialized(owner)
++        if flushed_buffered and self._late_materialization_logs < 8:
++            logger.info(
++                "DSpark late prefill flushed suffix: requests=%d committed=%d "
++                "tokens=%d window=%d",
++                len(flushed_buffered),
++                len(pending_materialization),
++                packed_count,
++                self._late_window,
++            )
++            self._late_materialization_logs += 1
+ 
+     def load_draft_model(
+         self,
+@@ -243,6 +688,16 @@ class DSparkSpeculator(DFlashSpeculator):
+                 num_reqs, n_spec
+             )
+ 
++        if self._pp_debug_calls < 2:
++            logger.warning(
++                "DSpark PP diagnostic call=%d anchor=%s base_argmax=%s draft=%s",
++                self._pp_debug_calls,
++                self.input_buffers.input_ids[self._anchor_idx[:num_reqs]].tolist(),
++                base_logits.argmax(dim=-1).tolist(),
++                self.draft_tokens[:num_reqs, :n_spec].tolist(),
++            )
++            self._pp_debug_calls += 1
++
+     def _generate_draft(
+         self,
+         num_reqs: int,
+diff --git a/vllm/v1/worker/gpu/spec_decode/dspark/utils.py b/vllm/v1/worker/gpu/spec_decode/dspark/utils.py
+index 78ae392132..2d9f1a9193 100644
+--- a/vllm/v1/worker/gpu/spec_decode/dspark/utils.py
++++ b/vllm/v1/worker/gpu/spec_decode/dspark/utils.py
+@@ -1,6 +1,8 @@
+ # SPDX-License-Identifier: Apache-2.0
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+ 
++import os
++
+ import torch.nn as nn
+ 
+ from vllm.config import VllmConfig, replace
+@@ -27,6 +29,10 @@ def load_dspark_model(target_model: nn.Module, vllm_config: VllmConfig) -> nn.Mo
+         speculative_config.attention_backend or vllm_config.attention_config.backend
+     )
+ 
++    pp_size = get_pp_group().world_size
++    dspark_pp_experimental = (
++        pp_size > 1 and os.getenv("VLLM_DSPARK_PP_EXPERIMENTAL") == "1"
++    )
+     draft_vllm_config = replace(
+         vllm_config,
+         attention_config=replace(
+@@ -42,6 +48,13 @@ def load_dspark_model(target_model: nn.Module, vllm_config: VllmConfig) -> nn.Mo
+             if speculative_config.kv_cache_dtype is not None
+             else vllm_config.cache_config
+         ),
++        # The complete drafter is colocated with the final target PP stage and
++        # remains sharded only over that stage's TP group.
++        parallel_config=(
++            replace(vllm_config.parallel_config, pipeline_parallel_size=1)
++            if dspark_pp_experimental
++            else vllm_config.parallel_config
++        ),
+     )
+     # VllmConfig post-init restores the target's quant config because the target
+     # config is retained for DSpark's target-layer metadata, so we must override it.
+@@ -52,7 +65,7 @@ def load_dspark_model(target_model: nn.Module, vllm_config: VllmConfig) -> nn.Mo
+             vllm_config=draft_vllm_config, model_config=draft_model_config
+         )
+ 
+-    if get_pp_group().world_size != 1:
++    if pp_size != 1 and not dspark_pp_experimental:
+         raise NotImplementedError("DSpark does not support pipeline parallelism.")
+ 
+     target_language_model = (
+@@ -65,7 +78,10 @@ def load_dspark_model(target_model: nn.Module, vllm_config: VllmConfig) -> nn.Mo
+ 
+     target_embed = getattr(target_inner, "embed_tokens", None)
+     draft_embed = getattr(draft_inner, "embed_tokens", None)
+-    if target_embed is not None and _should_share(
++    # Under PP the final target stage has PPMissingLayer in place of the
++    # embedding. The DSpark loader therefore keeps and loads its local TP-shard
++    # from the target checkpoint instead of aliasing this placeholder.
++    if pp_size == 1 and target_embed is not None and _should_share(
+         draft_model, "has_own_embed_tokens", draft_embed, target_embed
+     ):
+         if draft_embed is not None:
+diff --git a/vllm/v1/worker/gpu/spec_decode/rejection_sampler.py b/vllm/v1/worker/gpu/spec_decode/rejection_sampler.py
+index 8410b6ce87..fcbe7cb242 100644
+--- a/vllm/v1/worker/gpu/spec_decode/rejection_sampler.py
++++ b/vllm/v1/worker/gpu/spec_decode/rejection_sampler.py
+@@ -280,7 +280,6 @@ class RejectionSampler:
+             input_batch.idx_mapping,
+             self.sampler.req_states.prefill_len.gpu,
+         )
+-
+         return SamplerOutput(
+             sampled_token_ids=sampled,
+             logprobs_tensors=logprobs_tensors,
+diff --git a/vllm/v1/worker/gpu/warmup.py b/vllm/v1/worker/gpu/warmup.py
+index 9d00852337..73471940c9 100644
+--- a/vllm/v1/worker/gpu/warmup.py
++++ b/vllm/v1/worker/gpu/warmup.py
+@@ -1,6 +1,7 @@
+ # SPDX-License-Identifier: Apache-2.0
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+ 
++import os
+ from collections.abc import Callable
+ from contextlib import AbstractContextManager, nullcontext
+ from typing import Any
+@@ -10,6 +11,7 @@ import torch
+ 
+ from vllm import PoolingParams, SamplingParams
+ from vllm.logger import init_logger
++from vllm.distributed.parallel_state import get_pp_group
+ from vllm.multimodal.inputs import MultiModalFeatureSpec, PlaceholderRange
+ from vllm.utils.math_utils import cdiv
+ from vllm.v1.core.sched.output import (
+@@ -73,6 +75,14 @@ def _warmup_block_counter(
+     return block_count
+ 
+ 
++def _log_dspark_pp_warmup(step: str) -> None:
++    if os.getenv("VLLM_DSPARK_PP_DIAGNOSTICS") == "1":
++        logger.info(
++            "DSpark PP warmup: pp_rank=%d step=%s",
++            get_pp_group().rank_in_group,
++            step,
++        )
++
+ def run_mixed_prefill_decode_warmup(
+     model_runner: GPUModelRunner,
+     worker_execute_model: Callable[[SchedulerOutput], Any],
+@@ -316,7 +326,9 @@ def warmup_kernels(
+ 
+     # Disable KV connector for warmup run.
+     model_runner.kv_connector.set_disabled(True)
++    _log_dspark_pp_warmup("prefill_execute_begin")
+     worker_execute_model(prefill_output)
++    _log_dspark_pp_warmup("prefill_execute_end")
+ 
+     if not model_runner.is_pooling_model:
+         # Warm up sampler and perform a decode step for non-pooling models.
+diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
+index 9087f87854..c9ae9009ec 100644
+--- a/vllm/v1/worker/gpu_model_runner.py
++++ b/vllm/v1/worker/gpu_model_runner.py
+@@ -1198,12 +1198,15 @@ class GPUModelRunner(
+             cache_dtype=self.cache_config.cache_dtype,
+             runner_only_attn_layers=self.runner_only_attn_layers,
+             static_forward_context=self.compilation_config.static_forward_context,
++            kv_cache_config=self.kv_cache_config,
+         )
+ 
+-    def _zero_block_ids(self, block_ids: list[int]) -> None:
+-        """Zero the KV cache memory for the given block IDs."""
++    def _zero_block_ids(
++        self, grouped_block_ids: list[tuple[int, list[int]]]
++    ) -> None:
++        """Zero the KV cache memory allocated by each cache group."""
+         if hasattr(self, "_kv_block_zeroer"):
+-            self._kv_block_zeroer.zero_block_ids(block_ids)
++            self._kv_block_zeroer.zero_block_ids_by_group(grouped_block_ids)
+ 
+     # Note: used for model runner override.
+     def _init_device_properties(self) -> None:
+diff --git a/vllm/v1/worker/utils.py b/vllm/v1/worker/utils.py
+index d8f36b1d15..a15888556f 100644
+--- a/vllm/v1/worker/utils.py
++++ b/vllm/v1/worker/utils.py
+@@ -113,6 +113,7 @@ class KVBlockZeroer:
+         cache_dtype: str,
+         static_forward_context: dict[str, Any],
+         runner_only_attn_layers: set[str] | None = None,
++        kv_cache_config: KVCacheConfig | None = None,
+     ) -> None:
+         """Precompute the absolute-address table for the Triton zeroing kernel.
+ 
+@@ -133,10 +134,11 @@ class KVBlockZeroer:
+ 
+         if runner_only_attn_layers is None:
+             runner_only_attn_layers = set()
+-        seen_ptrs: set[int] = set()
++        seen_ptrs_by_group: dict[int, set[int]] = defaultdict(set)
+         seg_addrs: list[int] = []
+         seg_block_strides: list[int] = []
+         seg_page_sizes: list[int] = []
++        segments_by_group: dict[int, list[tuple[int, int, int]]] = defaultdict(list)
+ 
+         for group in attn_groups_iter:
+             spec = group.kv_cache_spec
+@@ -161,6 +163,7 @@ class KVBlockZeroer:
+                 if not isinstance(kv, torch.Tensor):
+                     continue
+                 dp = kv.data_ptr()
++                seen_ptrs = seen_ptrs_by_group[group.kv_cache_group_id]
+                 if dp in seen_ptrs:
+                     continue
+                 seen_ptrs.add(dp)
+@@ -187,30 +190,50 @@ class KVBlockZeroer:
+                     off_bytes = sum(i * s for i, s in zip(outer, outer_strides))
+                     assert (dp + off_bytes) % 4 == 0
+                     for virtual_index in range(ratio):
+-                        seg_addrs.append(
+-                            dp + off_bytes + virtual_index * block_stride_bytes
++                        address = dp + off_bytes + virtual_index * block_stride_bytes
++                        block_stride = logical_block_stride_bytes // 4
++                        page_size = kernel_page_bytes // 4
++                        seg_addrs.append(address)
++                        seg_block_strides.append(block_stride)
++                        seg_page_sizes.append(page_size)
++                        segments_by_group[group.kv_cache_group_id].append(
++                            (address, block_stride, page_size)
+                         )
+-                        seg_block_strides.append(logical_block_stride_bytes // 4)
+-                        seg_page_sizes.append(kernel_page_bytes // 4)
+ 
+         if not seg_addrs:
+             self._meta = None
++            self._meta_by_group = {}
+             return
+ 
+-        max_page_size_el = max(seg_page_sizes)
+-        blk_size = min(1 << (max_page_size_el - 1).bit_length(), 1024)
+-        self._meta = (
+-            torch.tensor(seg_addrs, dtype=torch.uint64, device=self.device),
+-            torch.tensor(seg_block_strides, dtype=torch.int64, device=self.device),
+-            torch.tensor(seg_page_sizes, dtype=torch.int64, device=self.device),
+-            (max_page_size_el + blk_size - 1) // blk_size,
+-            blk_size,
+-            len(seg_addrs),
++        def make_meta(
++            segments: list[tuple[int, int, int]],
++        ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int, int, int]:
++            addresses, block_strides, page_sizes = zip(*segments)
++            max_page_size_el = max(page_sizes)
++            blk_size = min(1 << (max_page_size_el - 1).bit_length(), 1024)
++            return (
++                torch.tensor(addresses, dtype=torch.uint64, device=self.device),
++                torch.tensor(block_strides, dtype=torch.int64, device=self.device),
++                torch.tensor(page_sizes, dtype=torch.int64, device=self.device),
++                (max_page_size_el + blk_size - 1) // blk_size,
++                blk_size,
++                len(addresses),
++            )
++
++        self._meta = make_meta(
++            list(zip(seg_addrs, seg_block_strides, seg_page_sizes))
+         )
++        self._meta_by_group = {
++            group_id: make_meta(segments)
++            for group_id, segments in segments_by_group.items()
++        }
+ 
+-    def zero_block_ids(self, block_ids: list[int]) -> None:
+-        """Zero the KV cache memory for the given block IDs."""
+-        if not block_ids or self._meta is None:
++    def _zero_with_meta(
++        self,
++        meta: tuple[torch.Tensor, torch.Tensor, torch.Tensor, int, int, int],
++        block_ids: list[int],
++    ) -> None:
++        if not block_ids:
+             return
+         (
+             seg_addrs,
+@@ -219,7 +242,7 @@ class KVBlockZeroer:
+             max_chunks,
+             blk_size,
+             n_segs,
+-        ) = self._meta
++        ) = meta
+         n_blocks = len(block_ids)
+         idx = async_tensor_h2d(block_ids, device=self.device, dtype=torch.int64)
+         grid = (n_blocks, n_segs, max_chunks)
+@@ -231,10 +254,26 @@ class KVBlockZeroer:
+             BLOCK_SIZE=blk_size,
+         )
+ 
++    def zero_block_ids(self, block_ids: list[int]) -> None:
++        """Zero the KV cache memory for the given block IDs."""
++        if not block_ids or self._meta is None:
++            return
++        self._zero_with_meta(self._meta, block_ids)
++
++    def zero_block_ids_by_group(
++        self, grouped_block_ids: list[tuple[int, list[int]]]
++    ) -> None:
++        """Zero only the cache segments owned by each allocating group."""
++        for group_id, block_ids in grouped_block_ids:
++            meta = self._meta_by_group.get(group_id)
++            if meta is not None:
++                self._zero_with_meta(meta, block_ids)
++
+     def warmup(self, num_kv_blocks: int) -> None:
+         """JIT-compile the zeroing kernel before the first real request."""
+         if num_kv_blocks > 0:
+-            self.zero_block_ids([0])
++            for meta in self._meta_by_group.values():
++                self._zero_with_meta(meta, [0])
+ 
+ 
+ @dataclass

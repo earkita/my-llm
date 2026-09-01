@@ -1,0 +1,176 @@
+{
+  "schema_version": 1,
+  "name": "qwen38-flash",
+  "status": "production-ready",
+  "description": "Verified Qwen3.8 Flash-Next FP8 profile with MTP2 on eight R9700 GPUs",
+  "model": {
+    "schema_version": 1,
+    "name": "qwen38-flash-next-fp8",
+    "family": "qwen4_exp",
+    "repository": "Qwen/Qwen3.8-Flash-Next-FP8",
+    "revision": "bcd9f01ddc9cff2316eb84281bebcd5b058bddce",
+    "default_directory": "/mnt/ai/models/qwen/Qwen3.8-Flash-Next-FP8",
+    "served_name": "qwen3.8-flash-next-fp8",
+    "expected_shards": 131,
+    "index_file": "model.safetensors.index.json",
+    "checkpoint_weight_bytes": 185502232570,
+    "required_files": [
+      "config.json",
+      "generation_config.json",
+      "model.safetensors.index.json",
+      "tokenizer.json",
+      "tokenizer_config.json",
+      "chat_template.jinja",
+      "merges.txt",
+      "vocab.json",
+      "LICENSE"
+    ],
+    "allow_patterns": [
+      "*.json",
+      "*.safetensors",
+      "*.jinja",
+      "tokenizer*",
+      "vocab.json",
+      "merges.txt",
+      "LICENSE",
+      "README.md"
+    ],
+    "supports_dspark": false,
+    "supports_mtp": true,
+    "supports_qsa": true,
+    "vllm": {
+      "tokenizer_mode": "auto",
+      "tool_call_parser": "qwen3_coder",
+      "reasoning_parser": "qwen3",
+      "enable_auto_tool_choice": true,
+      "trust_remote_code": false,
+      "language_model_only": true
+    }
+  },
+  "runtime": {
+    "schema_version": 1,
+    "name": "qwen38-flash-next-fp8-8x-cache-safe-mtp2",
+    "status": "production-ready",
+    "recipe": "vllm-qwen38-flash-next-v0280-pr53896",
+    "description": "Production-ready Qwen3.8 Flash-Next FP8 vLLM 0.28 TP8/EP8 profile on eight R9700 GPUs with prefix caching, gfx1201-safe Triton dispatch, and native MTP K2",
+    "required_model_family": "qwen4_exp",
+    "required_patches": [],
+    "gpu_order": [
+      0,
+      1,
+      2,
+      6,
+      3,
+      4,
+      5,
+      7
+    ],
+    "gpu_bdfs": [
+      "0000:03:00.0",
+      "0000:23:00.0",
+      "0000:c3:00.0",
+      "0000:e3:00.0",
+      "0000:c6:00.0",
+      "0000:c9:00.0",
+      "0000:cc:00.0",
+      "0000:e6:00.0"
+    ],
+    "parallel": {
+      "tensor": 8,
+      "pipeline": 1,
+      "data": 1,
+      "enable_expert_parallel": true,
+      "disable_custom_all_reduce": true
+    },
+    "limits": {
+      "max_model_len": 262144,
+      "max_num_seqs": 1,
+      "max_num_batched_tokens": 2048,
+      "gpu_memory_utilization": 0.95
+    },
+    "cache": {
+      "dtype": "auto",
+      "block_size": 16,
+      "prefix_cache": true,
+      "cpu_offload_gb": 0,
+      "prefix_cache_retention_interval": 400
+    },
+    "scheduler": {
+      "async": false,
+      "enforce_eager": true
+    },
+    "multimodal": {
+      "language_model_only": true
+    },
+    "loading": {
+      "format": "safetensors",
+      "max_parallel_workers": 1
+    },
+    "transport": {
+      "p2p_disable": 0,
+      "shm_disable": 1,
+      "socket_ifname": "lo",
+      "runtime_connect": 1,
+      "hsa_legacy_ipc": 0
+    },
+    "shutdown": {
+      "request_timeout_seconds": 0,
+      "worker_timeout_seconds": 60,
+      "process_grace_seconds": 120
+    },
+    "moe_backend": "triton",
+    "linear_backend": "triton",
+    "speculative_config": {
+      "method": "mtp",
+      "num_speculative_tokens": 2
+    },
+    "environment": {
+      "VLLM_USE_V2_MODEL_RUNNER": "1",
+      "VLLM_ROCM_USE_AITER": "0",
+      "VLLM_DSPARK_PP_EXPERIMENTAL": "0",
+      "VLLM_DSPARK_PREFILL_CACHE_ONLY": "0",
+      "VLLM_DSPARK_PREFILL_LATE_MATERIALIZE": "0",
+      "VLLM_DSPARK_PREFILL_SKIP_PP_BROADCAST": "0",
+      "VLLM_DISABLE_PYNCCL": "1",
+      "VLLM_ROCM_USE_AITER_MOE": "0",
+      "VLLM_KV_CACHE_LAYOUT": "BLHNC",
+      "SAFETENSORS_FAST_GPU": "1",
+      "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+      "ROCBLAS_USE_HIPBLASLT": "0"
+    },
+    "hardware_topology": {
+      "captured_on": "2026-08-28",
+      "motherboard": "ASUS Pro WS WRX90E-SAGE SE",
+      "note": "TP8 exposes only the eight R9700 devices; the mixed-host source guard excludes the RTX 3080"
+    }
+  },
+  "stack": {
+    "description": "Production Qwen3.8 Flash-Next MTP2 coding stack",
+    "litellm_aliases": [
+      "qwen3.8-flash-next-fp8",
+      "qwen3.8-flash-next",
+      "qwen3.8-flash-next-thinking",
+      "qwen3.8-flash-next-fast"
+    ],
+    "claude_settings": {
+      "apiKeyHelper": "bash -c 'exec \"${MY_LLM_REPO_ROOT:-$HOME/ai/my-llm}/scripts/claude-litellm-key.sh\"'",
+      "permissions": {
+        "defaultMode": "acceptEdits"
+      },
+      "env": {
+        "ANTHROPIC_BASE_URL": "http://127.0.0.1:4000",
+        "ANTHROPIC_MODEL": "qwen3.8-flash-next-thinking",
+        "ANTHROPIC_SMALL_FAST_MODEL": "qwen3.8-flash-next-fast",
+        "DISABLE_PROMPT_CACHING": "0",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+        "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
+        "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "262144"
+      }
+    }
+  },
+  "verification": {
+    "scope": "production",
+    "verified_context": 262144,
+    "notes": "Cache-safe TP8/EP8 MTP2 runtime retained from the verified source repository."
+  }
+}

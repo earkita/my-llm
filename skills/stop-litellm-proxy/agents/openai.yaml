@@ -1,0 +1,4 @@
+interface:
+  display_name: "Stop LiteLLM Proxy"
+  short_description: "Gracefully stop the local LiteLLM proxy"
+  default_prompt: "Use $stop-litellm-proxy to stop the managed LiteLLM proxy."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Start R9700 Runtime"
+  short_description: "Launch baseline or a selected runtime profile"
+  default_prompt: "Use $start-r9700-runtime to start the baseline runtime and wait until it is ready."

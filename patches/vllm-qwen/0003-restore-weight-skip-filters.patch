@@ -1,0 +1,65 @@
+diff --git a/tests/models/test_utils.py b/tests/models/test_utils.py
+index 0290350..bd54028 100644
+--- a/tests/models/test_utils.py
++++ b/tests/models/test_utils.py
+@@ -169,6 +169,26 @@ def test_module_load_shared_params_that_are_not_tied_embeddings():
+     assert torch.all(mod.gate.weight == torch.Tensor([[1, 2], [3, 4]]))
+ 
+ 
++@pytest.mark.cpu_test
++def test_module_skips_configured_prefixes_and_substrings():
++    mod = torch.nn.Module()
++    mod.kept = torch.nn.Parameter(torch.zeros(2))
++
++    weights = [
++        ("visual.weight", torch.ones(2)),
++        ("model.mtp.weight", torch.ones(2)),
++        ("kept", torch.ones(2)),
++    ]
++    loaded = AutoWeightsLoader(
++        mod,
++        skip_prefixes=["visual."],
++        skip_substrs=["mtp."],
++    ).load_weights(iter(weights))
++
++    assert loaded == {"kept"}
++    assert torch.all(mod.kept == 1.0)
++
++
+ class raise_if_cuda_sync:
+     def __enter__(self):
+         self.previous_debug_mode = torch.cuda.get_sync_debug_mode()
+diff --git a/vllm/model_executor/models/utils.py b/vllm/model_executor/models/utils.py
+index 9c6c7f6..fac8ff3 100644
+--- a/vllm/model_executor/models/utils.py
++++ b/vllm/model_executor/models/utils.py
+@@ -227,12 +227,16 @@ class AutoWeightsLoader:
+         self,
+         module: nn.Module,
+         *,
++        skip_prefixes: list[str] | None = None,
++        skip_substrs: list[str] | None = None,
+         ignore_unexpected_prefixes: list[str] | None = None,
+         ignore_unexpected_suffixes: list[str] | None = None,
+     ) -> None:
+         super().__init__()
+ 
+         self.module = module
++        self.skip_prefixes = skip_prefixes or []
++        self.skip_substrs = skip_substrs or []
+         self.ignore_unexpected_prefixes = ignore_unexpected_prefixes or []
+         self.ignore_unexpected_suffixes = ignore_unexpected_suffixes or []
+ 
+@@ -449,6 +453,12 @@ class AutoWeightsLoader:
+         self, weights: Iterable[tuple[str, torch.Tensor]]
+     ) -> Iterable[tuple[str, torch.Tensor]]:
+         for name, weight in weights:
++            if any(name.startswith(prefix) for prefix in self.skip_prefixes) or any(
++                substr in name for substr in self.skip_substrs
++            ):
++                logger.debug("Skipping configured weight %s", name)
++                continue
++
+             if (canonical := self.aliased_params.get(name)) is not None:
+                 self._skipped_aliases[name] = canonical
+             if self._can_skip(name):

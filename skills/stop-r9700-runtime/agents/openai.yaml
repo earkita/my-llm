@@ -1,0 +1,4 @@
+interface:
+  display_name: "Stop R9700 Runtime"
+  short_description: "Gracefully stop the persistent R9700 service"
+  default_prompt: "Use $stop-r9700-runtime to gracefully stop the managed R9700 model service."

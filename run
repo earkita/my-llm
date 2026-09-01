@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+python="$repo_root/.venv/bin/python"
+[[ -x $python ]] || {
+  printf 'control environment is missing: %s\n' "$python" >&2
+  printf '%s\n' 'Create it with: uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -e .' >&2
+  exit 1
+}
+exec "$python" -m r9700.cli "$@"

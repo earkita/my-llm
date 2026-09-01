@@ -1,0 +1,107 @@
+model_list:
+  - model_name: deepseek-v4-flash-0731
+    litellm_params:
+      model: hosted_vllm/deepseek-v4-flash-0731
+      api_base: os.environ/HOSTED_INFERENCE_API_BASE
+    model_info:
+      max_input_tokens: 1048576
+
+  - model_name: deepseek-v4-flash
+    litellm_params:
+      model: hosted_vllm/deepseek-v4-flash-0731
+      api_base: os.environ/HOSTED_INFERENCE_API_BASE
+    model_info:
+      max_input_tokens: 1048576
+
+  - model_name: deepseek-v4-flash-thinking
+    litellm_params:
+      model: hosted_vllm/deepseek-v4-flash-0731
+      api_base: os.environ/HOSTED_INFERENCE_API_BASE
+      reasoning_effort: high
+      extra_body:
+        chat_template_kwargs:
+          thinking: true
+          enable_thinking: true
+    model_info:
+      max_input_tokens: 1048576
+
+  - model_name: deepseek-v4-flash-fast
+    litellm_params:
+      model: hosted_vllm/deepseek-v4-flash-0731
+      api_base: os.environ/HOSTED_INFERENCE_API_BASE
+      reasoning_effort: none
+      extra_body:
+        chat_template_kwargs:
+          thinking: false
+          enable_thinking: false
+    model_info:
+      max_input_tokens: 1048576
+
+  - model_name: glm-5.3-flash-low
+    litellm_params:
+      model: hosted_vllm/glm-5.3-flash-ud-q4-k-xl
+      api_base: os.environ/HOSTED_INFERENCE_API_BASE
+      reasoning_effort: low
+    model_info:
+      max_input_tokens: 1048576
+
+  - model_name: glm-5.3-flash-high
+    litellm_params:
+      model: hosted_vllm/glm-5.3-flash-ud-q4-k-xl
+      api_base: os.environ/HOSTED_INFERENCE_API_BASE
+      reasoning_effort: high
+    model_info:
+      max_input_tokens: 1048576
+
+  - model_name: glm-5.3-flash-max
+    litellm_params:
+      model: hosted_vllm/glm-5.3-flash-ud-q4-k-xl
+      api_base: os.environ/HOSTED_INFERENCE_API_BASE
+      reasoning_effort: max
+    model_info:
+      max_input_tokens: 1048576
+
+  - model_name: qwen3.8-flash-next-fp8
+    litellm_params:
+      model: hosted_vllm/qwen3.8-flash-next-fp8
+      api_base: os.environ/HOSTED_INFERENCE_API_BASE
+    model_info:
+      max_input_tokens: 262144
+
+  - model_name: qwen3.8-flash-next
+    litellm_params:
+      model: hosted_vllm/qwen3.8-flash-next-fp8
+      api_base: os.environ/HOSTED_INFERENCE_API_BASE
+      reasoning_effort: medium
+      extra_body:
+        chat_template_kwargs:
+          enable_thinking: true
+          preserve_thinking: true
+    model_info:
+      max_input_tokens: 262144
+
+  - model_name: qwen3.8-flash-next-thinking
+    litellm_params:
+      model: hosted_vllm/qwen3.8-flash-next-fp8
+      api_base: os.environ/HOSTED_INFERENCE_API_BASE
+      extra_body:
+        reasoning_effort: xhigh
+        chat_template_kwargs:
+          enable_thinking: true
+          preserve_thinking: true
+    model_info:
+      max_input_tokens: 262144
+
+  - model_name: qwen3.8-flash-next-fast
+    litellm_params:
+      model: hosted_vllm/qwen3.8-flash-next-fp8
+      api_base: os.environ/HOSTED_INFERENCE_API_BASE
+      extra_body:
+        chat_template_kwargs:
+          enable_thinking: false
+          preserve_thinking: false
+    model_info:
+      max_input_tokens: 262144
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY

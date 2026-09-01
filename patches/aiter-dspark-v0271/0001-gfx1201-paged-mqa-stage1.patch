@@ -1,0 +1,268 @@
+diff --git a/aiter/ops/triton/_triton_kernels/attention/pa_mqa_logits.py b/aiter/ops/triton/_triton_kernels/attention/pa_mqa_logits.py
+index a97aab6..e9c340d 100644
+--- a/aiter/ops/triton/_triton_kernels/attention/pa_mqa_logits.py
++++ b/aiter/ops/triton/_triton_kernels/attention/pa_mqa_logits.py
+@@ -311,6 +311,143 @@ def _deepgemm_fp8_paged_mqa_logits_stage1(
+         )
+ 
+ 
++@triton.jit
++def _deepgemm_fp8_paged_mqa_logits_stage1_preshuffle(
++    batch_size,
++    next_n,
++    heads_num,
++    Q_buffer,
++    stride_q_batch: tl.int64,
++    stride_q_next_n: tl.int64,
++    stride_q_heads: tl.int64,
++    KV_buffer,
++    stride_k_block: tl.int64,
++    scale_buffer,
++    stride_scale_block: tl.int64,
++    context_len_ptr,
++    stride_context_batch: tl.int64,
++    stride_context_next: tl.int64,
++    kv_indices,
++    stride_kv_indices: tl.int64,
++    weights,
++    stride_w_batch: tl.int64,
++    Out_buffer,
++    stride_out_heads: tl.int64,
++    stride_out_batch: tl.int64,
++    max_model_len,
++    max_blk_len,
++    num_blocks,
++    ChunkQ: tl.constexpr,
++    ChunkK: tl.constexpr,
++    HiddenDim: tl.constexpr,
++    KVBlockSize: tl.constexpr,
++    BlockTileSize: tl.constexpr,
++    HeadTileSize: tl.constexpr,
++    ContextLens2D: tl.constexpr,
++    SplitKV: tl.constexpr = 1,
++):
++    pid = tl.program_id(0)
++    num_block_q_head = tl.cdiv(heads_num, ChunkQ)
++
++    pid_q_head, remain_pid = pid % num_block_q_head, pid // num_block_q_head
++    pid_next_n, remain_pid = remain_pid % next_n, remain_pid // next_n
++    pid_batch, pid_split_kv = remain_pid % batch_size, remain_pid // batch_size
++
++    if ContextLens2D:
++        context_length = tl.load(
++            context_len_ptr
++            + pid_batch * stride_context_batch
++            + pid_next_n * stride_context_next
++        )
++    else:
++        final_context_length = tl.load(
++            context_len_ptr + pid_batch * stride_context_batch
++        )
++        context_length = final_context_length - next_n + pid_next_n + 1
++    context_length = tl.maximum(context_length, 0)
++
++    context_chunk_num = tl.cdiv(context_length, ChunkK)
++    split_context_chunk_num = tl.cdiv(context_chunk_num, SplitKV)
++    split_context_start = (pid_split_kv * split_context_chunk_num) * ChunkK
++    split_context_length = min(
++        context_length - split_context_start, split_context_chunk_num * ChunkK
++    )
++
++    head_offsets = tl.arange(0, HiddenDim)
++    q = tl.load(
++        Q_buffer
++        + pid_batch * stride_q_batch
++        + pid_next_n * stride_q_next_n
++        + ((pid_q_head * ChunkQ + tl.arange(0, ChunkQ)) * stride_q_heads)[:, None]
++        + head_offsets[None, :],
++    )
++    scale_weight = tl.load(
++        weights
++        + (pid_batch * next_n + pid_next_n) * stride_w_batch
++        + pid_q_head * ChunkQ
++        + tl.arange(0, ChunkQ)
++    )
++    tiled_head_offsets = (
++        head_offsets // HeadTileSize * HeadTileSize * BlockTileSize
++        + head_offsets % HeadTileSize
++    )
++
++    for context_idx in range(
++        split_context_start, split_context_start + split_context_length, ChunkK
++    ):
++        token_offsets = context_idx + tl.arange(0, ChunkK)
++        valid_token = token_offsets < context_length
++        logical_block = token_offsets // KVBlockSize
++        valid_page = valid_token & (logical_block < max_blk_len)
++        physical_block = tl.load(
++            kv_indices + pid_batch * stride_kv_indices + logical_block,
++            mask=valid_page,
++            other=-1,
++        )
++        valid_block = valid_page & (physical_block >= 0) & (
++            physical_block < num_blocks
++        )
++        safe_block = tl.where(valid_block, physical_block, 0).to(tl.int64)
++        token_in_block = token_offsets % KVBlockSize
++        token_tile = token_in_block // BlockTileSize
++        token_in_tile = token_in_block % BlockTileSize
++        k_base = (
++            safe_block * stride_k_block
++            + token_tile * BlockTileSize * HiddenDim
++            + token_in_tile * HeadTileSize
++        )
++        k = tl.load(
++            KV_buffer + k_base[:, None] + tiled_head_offsets[None, :],
++            mask=valid_block[:, None],
++            other=0.0,
++        )
++        k_scale = tl.load(
++            scale_buffer
++            + safe_block * stride_scale_block
++            + token_in_block,
++            mask=valid_block,
++            other=0.0,
++        )
++
++        o = tl.dot(q, k.T)
++        o = o * k_scale[None, :]
++        o = tl.maximum(o, 0.0)
++        o = o * scale_weight[:, None]
++        o = tl.where(valid_block[None, :], o, float("-inf"))
++
++        output_offsets = (
++            (pid_batch * next_n + pid_next_n) * stride_out_batch
++            + (pid_q_head * ChunkQ + tl.arange(0, ChunkQ)[:, None, None])
++            * stride_out_heads
++            + token_offsets[None, None, :]
++        )
++        tl.store(
++            Out_buffer + output_offsets,
++            o[:, None, :],
++            mask=(token_offsets < max_model_len)[None, None, :],
++        )
++
++
+ @triton.jit
+ def _deepgemm_fp8_paged_mqa_logits_varctx_schedule(
+     batch_size,
+diff --git a/aiter/ops/triton/attention/pa_mqa_logits.py b/aiter/ops/triton/attention/pa_mqa_logits.py
+index c16ec79..aaa8116 100644
+--- a/aiter/ops/triton/attention/pa_mqa_logits.py
++++ b/aiter/ops/triton/attention/pa_mqa_logits.py
+@@ -47,6 +47,7 @@ if triton_version >= Version("3.5.0"):
+         _deepgemm_fp8_paged_mqa_logits,
+         _deepgemm_fp8_paged_mqa_logits_ragged_k,
+         _deepgemm_fp8_paged_mqa_logits_stage1,
++        _deepgemm_fp8_paged_mqa_logits_stage1_preshuffle,
+         _deepgemm_fp8_paged_mqa_logits_stage1_ragged_k,
+         _deepgemm_fp8_paged_mqa_logits_varctx_schedule,
+     )
+@@ -66,6 +67,7 @@ else:
+         _deepgemm_fp8_paged_mqa_logits,
+         _deepgemm_fp8_paged_mqa_logits_ragged_k,
+         _deepgemm_fp8_paged_mqa_logits_stage1,
++        _deepgemm_fp8_paged_mqa_logits_stage1_preshuffle,
+         _deepgemm_fp8_paged_mqa_logits_stage1_ragged_k,
+         _deepgemm_fp8_paged_mqa_logits_varctx_schedule,
+         _gluon_deepgemm_fp8_paged_mqa_logits,
+@@ -253,6 +255,99 @@ def deepgemm_fp8_paged_mqa_logits_stage1(
+     )
+ 
+ 
++def deepgemm_fp8_paged_mqa_logits_stage1_preshuffle(
++    q_fp8: torch.Tensor,
++    kv_cache_fp8: torch.Tensor,
++    weights: torch.Tensor,
++    out_qk: torch.Tensor,
++    context_lens: torch.Tensor,
++    kv_indices: torch.Tensor,
++    max_model_len: int,
++    ChunkQ: int = 64,
++    ChunkK: int = 256,
++    TotalCuCount: int | None = None,
++    WavePerEU: int = 2,
++):
++    if get_gfx() != "gfx1201":
++        raise RuntimeError("preshuffled stage1 is currently limited to gfx1201")
++    if TotalCuCount is None:
++        TotalCuCount = get_num_sms()
++
++    batch_size, next_n, heads, hidden_dim = q_fp8.size()
++    num_blocks, block_size, num_kv_heads, index_dim = kv_cache_fp8.size()
++    if block_size not in (64, 256) or hidden_dim != 128 or num_kv_heads != 1:
++        raise ValueError(
++            "gfx1201 preshuffled stage1 requires cache block_size in "
++            "{64, 256}, "
++            f"hidden_dim=128, num_kv_heads=1; got {kv_cache_fp8.shape}"
++        )
++    if index_dim != hidden_dim + 4:
++        raise ValueError(f"expected index_dim={hidden_dim + 4}, got {index_dim}")
++    if context_lens.dim() not in (1, 2):
++        raise ValueError(
++            f"context_lens must be 1D or 2D, got {context_lens.shape}"
++        )
++    if context_lens.dim() == 2 and context_lens.shape != (batch_size, next_n):
++        raise ValueError(
++            "2D context_lens must have shape "
++            f"{(batch_size, next_n)}, got {context_lens.shape}"
++        )
++    if kv_indices.dim() != 2 or kv_indices.shape[0] != batch_size:
++        raise ValueError(
++            f"kv_indices must have shape [B, pages], got {kv_indices.shape}"
++        )
++    if heads % ChunkQ != 0:
++        raise ValueError(f"heads={heads} must be divisible by ChunkQ={ChunkQ}")
++
++    tile_q_count = batch_size * next_n * (heads // ChunkQ)
++    split_kv = (max(1, TotalCuCount // tile_q_count) + 4) // 5 * 5 * WavePerEU
++    cache_flat = kv_cache_fp8.view(num_blocks, -1)
++    value_bytes = block_size * hidden_dim
++    kv_cache_value = cache_flat[:, :value_bytes].view(dtypes.fp8)
++    kv_cache_scale = cache_flat[:, value_bytes:].view(torch.float32)
++    max_blk_len = kv_indices.shape[1]
++
++    config = {
++        "ChunkQ": ChunkQ,
++        "ChunkK": ChunkK,
++        "HiddenDim": hidden_dim,
++        "KVBlockSize": block_size,
++        "BlockTileSize": 16,
++        "HeadTileSize": 16,
++        "ContextLens2D": context_lens.dim() == 2,
++        "SplitKV": split_kv,
++    }
++    grid = (batch_size * next_n * (heads // ChunkQ * split_kv),)
++    _deepgemm_fp8_paged_mqa_logits_stage1_preshuffle[grid](
++        batch_size,
++        next_n,
++        heads,
++        q_fp8,
++        q_fp8.stride(0),
++        q_fp8.stride(1),
++        q_fp8.stride(2),
++        kv_cache_value,
++        kv_cache_value.stride(0),
++        kv_cache_scale,
++        kv_cache_scale.stride(0),
++        context_lens,
++        context_lens.stride(0),
++        context_lens.stride(1) if context_lens.dim() == 2 else 0,
++        kv_indices,
++        kv_indices.stride(0),
++        weights,
++        weights.stride(0),
++        out_qk,
++        out_qk.stride(0),
++        out_qk.stride(1),
++        max_model_len,
++        max_blk_len,
++        num_blocks,
++        waves_per_eu=WavePerEU,
++        **config,
++    )
++
++
+ @cache
+ def _compile_deepgemm_fp8_paged_mqa_logits(
+     ChunkQ,

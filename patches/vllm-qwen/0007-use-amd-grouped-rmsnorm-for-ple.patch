@@ -1,0 +1,74 @@
+diff --git a/tests/models/qwen4_exp/test_qsa_amd.py b/tests/models/qwen4_exp/test_qsa_amd.py
+--- a/tests/models/qwen4_exp/test_qsa_amd.py
++++ b/tests/models/qwen4_exp/test_qsa_amd.py
+@@ -94,6 +94,45 @@ def test_ple_fp8_embedding_dequantizes_with_checkpoint_scale() -> None:
+     )
+ 
+ 
++def test_ple_norm_uses_amd_grouped_kernel(
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    layer = ple_layer_module.Qwen4ExpPLELayer.__new__(
++        ple_layer_module.Qwen4ExpPLELayer
++    )
++    torch.nn.Module.__init__(layer)
++    layer.hc_count = 4
++    norm = SimpleNamespace(weight=torch.empty(32), eps=1e-6)
++    hidden_states = torch.empty(3, 4, 8)
++    expected = torch.full_like(hidden_states.flatten(-2), 7)
++    calls: list[tuple[torch.Tensor, torch.Tensor, float, int]] = []
++
++    def fake_grouped_norm(
++        values: torch.Tensor,
++        weight: torch.Tensor,
++        eps: float,
++        groups: int,
++    ) -> torch.Tensor:
++        calls.append((values, weight, eps, groups))
++        return expected
++
++    monkeypatch.setattr(
++        ple_layer_module, "grouped_gemma_rmsnorm", fake_grouped_norm
++    )
++
++    output = layer._apply_norm(norm, hidden_states)
++
++    assert output.shape == hidden_states.shape
++    assert len(calls) == 1
++    values, weight, eps, groups = calls[0]
++    assert values.shape == (3, 32)
++    assert values.data_ptr() == hidden_states.data_ptr()
++    assert weight is norm.weight
++    assert eps == norm.eps
++    assert groups == 4
++    torch.testing.assert_close(output.flatten(-2), expected)
++
++
+ def _qsa_sparse_paged_attention_reference(
+     q: torch.Tensor,
+     k_cache: torch.Tensor,
+diff --git a/vllm/models/qwen4_exp/amd/ple_layer.py b/vllm/models/qwen4_exp/amd/ple_layer.py
+--- a/vllm/models/qwen4_exp/amd/ple_layer.py
++++ b/vllm/models/qwen4_exp/amd/ple_layer.py
+@@ -48,5 +48,6 @@ from vllm.v1.attention.backends.utils import NULL_BLOCK_ID
+ 
+ from ..common.ple import copy_ple_embedding_shard_
++from .ops.hc import grouped_gemma_rmsnorm
+ 
+ _MASK64 = (1 << 64) - 1
+ _SPLITMIX_GAMMA = 0x9E3779B97F4A7C15
+@@ -600,7 +601,13 @@ class Qwen4ExpPLELayer(nn.Module, MambaBase):
+         self, norm: Qwen4ExpPLEGroupedNorm, hidden_states: torch.Tensor
+     ) -> torch.Tensor:
+         shape = hidden_states.shape
+-        return norm(hidden_states.flatten(-2)).reshape(shape)
++        normalized = grouped_gemma_rmsnorm(
++            hidden_states.flatten(-2),
++            norm.weight,
++            norm.eps,
++            self.hc_count,
++        )
++        return normalized.reshape(shape)
+ 
+     def _short_conv_fallback(self, inputs: torch.Tensor) -> torch.Tensor:
+         # Profiling / CUDA graph capture only; conv state is not updated.

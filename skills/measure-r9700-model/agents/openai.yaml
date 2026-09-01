@@ -1,0 +1,4 @@
+interface:
+  display_name: "Measure R9700 Model"
+  short_description: "Test model API and measure prefill and decode"
+  default_prompt: "Use $measure-r9700-model to test the running baseline model and measure prefill and decode throughput."

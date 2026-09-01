@@ -1,0 +1,147 @@
+diff --git a/vllm/models/qwen4_exp/amd/low_latency_gemm.py b/vllm/models/qwen4_exp/amd/low_latency_gemm.py
+--- a/vllm/models/qwen4_exp/amd/low_latency_gemm.py
++++ b/vllm/models/qwen4_exp/amd/low_latency_gemm.py
+@@ -7,6 +7,7 @@
+ import torch
+ from torch import nn
+ 
++from vllm.logger import init_logger
+ from vllm.model_executor.layers.linear import LinearBase, UnquantizedLinearMethod
+ from vllm.model_executor.layers.vocab_parallel_embedding import (
+     ParallelLMHead,
+@@ -16,6 +17,9 @@
+ from vllm.utils.torch_utils import direct_register_custom_op
+ 
+ _RDNA4_TRITON_GEMM_ENV = "VLLM_QWEN4_EXP_RDNA4_TRITON_BF16_GEMM"
++_RDNA4_TRITON_MODULE_TYPES = frozenset({"Qwen4ExpForCausalLM", "Qwen4ExpMTP"})
++
++logger = init_logger(__name__)
+ 
+ 
+ def _triton_gemm_config(num_tokens: int, inner_size: int) -> dict[str, object]:
+@@ -119,18 +123,18 @@
+     pass
+ 
+ 
+-def _route_mtp_fused_gate_runners(module: nn.Module) -> tuple[int, int]:
+-    """Mark MTP-owned MoE runners whose gate weights are actually fused."""
++def _route_qwen_fused_gate_runners(module: nn.Module) -> tuple[int, int]:
++    """Mark Qwen4Exp MoE runners whose gate weights are actually fused."""
+ 
+     moe_runners = list(getattr(module, "moe_layers", ()))
+     if not moe_runners:
+-        raise RuntimeError("RDNA4 Qwen4Exp MTP has no registered MoE runners")
++        raise RuntimeError("RDNA4 Qwen4Exp has no registered MoE runners")
+ 
+     routed_fused_gates = 0
+     for runner in moe_runners:
+         if not hasattr(runner, "_fse_fuse_gate"):
+             raise RuntimeError(
+-                "RDNA4 Qwen4Exp MTP MoE runner has no fused-gate contract"
++                "RDNA4 Qwen4Exp MoE runner has no fused-gate contract"
+             )
+         if runner._fse_fuse_gate:
+             runner._qwen4_exp_rdna4_triton_bf16_gemm = True
+@@ -143,18 +147,19 @@
+     module: nn.Module,
+     dtype: torch.dtype,
+ ) -> None:
+-    """Route only the MTP predictor's BF16 GEMMs through AITER Triton.
++    """Route Qwen4Exp target and MTP BF16 GEMMs through AITER Triton.
+ 
+-    gfx1201 rocBLAS can select unsafe Tensile kernels for several MTP shapes.
+-    The target model remains on its regular FP8/hipBLASLt paths; limiting this
+-    hook to the draft model avoids changing its established prefill behavior.
++    gfx1201 hipBLASLt can select an illegal ISA1201 kernel for the target
++    model's HyperConnection projections during memory profiling. The MTP
++    predictor can hit the same BF16 fallback. Quantized FP8 methods are left
++    untouched; only exact unquantized BF16 linear/head methods are replaced.
+     """
+ 
+     if (
+         os.getenv(_RDNA4_TRITON_GEMM_ENV, "0") != "1"
+         or dtype != torch.bfloat16
+         or not on_rdna4()
+-        or type(module).__name__ != "Qwen4ExpMTP"
++        or type(module).__name__ not in _RDNA4_TRITON_MODULE_TYPES
+     ):
+         return
+ 
+@@ -175,15 +180,24 @@
+             child.quant_method = Qwen4ExpRDNA4TritonEmbeddingMethod()
+             routed_linears += 1
+ 
+-    # The model's EPLB interface keeps the exact MTP-owned MoE runners in a
++    # The model's EPLB interface keeps its exact owned MoE runners in a
+     # plain list. A runner only bypasses the LinearBase methods above when it
+     # has actually fused its routed and shared-expert gates. Zero fused gates
+     # is valid: in that layout both gate linears are already routed above.
+-    moe_runners, routed_fused_gates = _route_mtp_fused_gate_runners(module)
++    moe_runners, routed_fused_gates = _route_qwen_fused_gate_runners(module)
+ 
+     if routed_linears == 0:
+         raise RuntimeError(
+-            "RDNA4 Qwen4Exp MTP Triton routing was incomplete: "
++            "RDNA4 Qwen4Exp Triton routing was incomplete: "
+             f"linear/head={routed_linears}, moe_runners={moe_runners}, "
+             f"fused_gate={routed_fused_gates}"
+         )
++
++    logger.info(
++        "Routed Qwen4Exp BF16 GEMMs through AITER Triton: "
++        "module=%s linear/head=%d moe_runners=%d fused_gate=%d",
++        type(module).__name__,
++        routed_linears,
++        moe_runners,
++        routed_fused_gates,
++    )
+diff --git a/tests/models/qwen4_exp/test_amd_low_latency_gemm.py b/tests/models/qwen4_exp/test_amd_low_latency_gemm.py
+--- a/tests/models/qwen4_exp/test_amd_low_latency_gemm.py
++++ b/tests/models/qwen4_exp/test_amd_low_latency_gemm.py
+@@ -57,33 +57,40 @@
+         self._fse_fuse_gate = fuse_gate
+ 
+ 
+-def test_mtp_unfused_gate_layout_is_valid() -> None:
++def test_qwen_unfused_gate_layout_is_valid() -> None:
+     runner = _FakeMoERunner(fuse_gate=False)
+     module = nn.Module()
+     module.moe_layers = [runner]
+ 
+-    count, routed = low_latency_gemm._route_mtp_fused_gate_runners(module)
++    count, routed = low_latency_gemm._route_qwen_fused_gate_runners(module)
+ 
+     assert count == 1
+     assert routed == 0
+     assert not hasattr(runner, "_qwen4_exp_rdna4_triton_bf16_gemm")
+ 
+ 
+-def test_mtp_fused_gate_runner_is_marked() -> None:
++def test_qwen_fused_gate_runner_is_marked() -> None:
+     runner = _FakeMoERunner(fuse_gate=True)
+     module = nn.Module()
+     module.moe_layers = [runner]
+ 
+-    count, routed = low_latency_gemm._route_mtp_fused_gate_runners(module)
++    count, routed = low_latency_gemm._route_qwen_fused_gate_runners(module)
+ 
+     assert count == 1
+     assert routed == 1
+     assert runner._qwen4_exp_rdna4_triton_bf16_gemm is True
+ 
+ 
+-def test_mtp_missing_moe_runners_fails_closed() -> None:
++def test_qwen_missing_moe_runners_fails_closed() -> None:
+     with pytest.raises(RuntimeError, match="no registered MoE runners"):
+-        low_latency_gemm._route_mtp_fused_gate_runners(nn.Module())
++        low_latency_gemm._route_qwen_fused_gate_runners(nn.Module())
++
++
++def test_rdna4_triton_route_targets_only_qwen_target_and_mtp() -> None:
++    assert low_latency_gemm._RDNA4_TRITON_MODULE_TYPES == {
++        "Qwen4ExpForCausalLM",
++        "Qwen4ExpMTP",
++    }
+ 
+ 
+ @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires an AMD GPU")

@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=79"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "my-llm"
+version = "0.1.0"
+description = "Three verified, self-contained R9700 LLM deployment profiles"
+requires-python = ">=3.12,<3.13"
+
+[tool.setuptools]
+packages = ["r9700", "r9700.backends"]

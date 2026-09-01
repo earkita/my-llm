@@ -1,0 +1,49 @@
+diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
+--- a/tools/server/server-context.cpp
++++ b/tools/server/server-context.cpp
+@@ -434,6 +434,6 @@ struct server_slot {
+         generated_token_probs.push_back(token);
+     }
+ 
+-    int get_n_draft_max() const {
++    int get_n_draft_max(int n_draft_configured) const {
+         GGML_ASSERT(task);
+ 
+@@ -441,6 +441,13 @@ struct server_slot {
+         if (!can_speculate()) {
+             return 0;
+         }
++
++        // Every speculative branch needs one extra target-verification
++        // position. If the remaining output budget already fills all free
++        // context positions, use ordinary target decoding for the tail.
++        if (n_remaining() > 0 && n_ctx - prompt.n_tokens() - 1 <= n_remaining()) {
++            return 0;
++        }
+ 
+         // determine the max draft that fits the current slot state
+         // note: slot.prompt is not yet expanded with the `id` token sampled above
+@@ -450,6 +457,13 @@ struct server_slot {
+             n_draft_max = std::min(n_draft_max, n_remaining() - 1);
+         }
+ 
++        // A partial final speculative branch can consume the last context
++        // position before all requested tokens are emitted. Finish that tail
++        // with ordinary target decoding instead.
++        if (n_draft_max < n_draft_configured) {
++            n_draft_max = 0;
++        }
++
+         SLT_DBG(*this, "max possible draft: %d\n", n_draft_max);
+ 
+         return n_draft_max;
+@@ -2885,7 +2899,8 @@ private:
+                 const bool use_ckpt_tgt = ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
+                 const bool use_ckpt_dft = ctx_dft_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
+ 
+-                const int n_draft_max = slot.get_n_draft_max();
++                const int n_draft_max = slot.get_n_draft_max(
++                        common_speculative_n_max(&params_base.speculative));
+ 
+                 if (n_draft_max > 0) {
+                     GGML_ASSERT(slot.can_speculate());

@@ -1,0 +1,37 @@
+diff --git a/vllm/platforms/__init__.py b/vllm/platforms/__init__.py
+index 718e252..878a4e6 100644
+--- a/vllm/platforms/__init__.py
++++ b/vllm/platforms/__init__.py
+@@ -60,6 +60,19 @@ def cuda_platform_plugin() -> str | None:
+     is_cuda = False
+     logger.debug("Checking if CUDA platform is available.")
+     try:
++        from importlib.metadata import PackageNotFoundError, version
++
++        # A ROCm PyTorch build exposes the CUDA-compatible torch API. On a
++        # mixed AMD/NVIDIA host NVML can still see NVIDIA devices, but this
++        # process cannot load CUDA kernels for them.
++        try:
++            torch_version = version("torch")
++        except PackageNotFoundError:
++            torch_version = ""
++        if "+rocm" in torch_version.lower():
++            logger.debug("CUDA platform is disabled because PyTorch uses ROCm.")
++            return None
++
+         from vllm.utils.import_utils import import_pynvml
+ 
+         pynvml = import_pynvml()
+@@ -111,6 +124,12 @@ def rocm_platform_plugin() -> str | None:
+     is_rocm = False
+     logger.debug("Checking if ROCm platform is available.")
+     try:
++        import torch
++
++        if torch.version.hip is not None and torch.cuda.is_available():
++            logger.debug("Confirmed ROCm platform through the PyTorch HIP runtime.")
++            return "vllm.platforms.rocm.RocmPlatform"
++
+         import amdsmi
+ 
+         amdsmi.amdsmi_init()

@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "platform": {
+    "os": "Ubuntu 24.04",
+    "python": "3.12",
+    "gpu_arch": "gfx1201",
+    "reference_gpu_count": 8
+  },
+  "environment": {
+    "venv": ".runtime/recipes/vllm-dspark-v0280/venv",
+    "source_root": ".runtime/recipes/vllm-dspark-v0280/src",
+    "constraints": "constraints/rocm-7.14-py312.txt",
+    "constraints_sha256": "085028ed6ad33bb4fc90087bff357dee0fcc7d5024369cf3b14963229b87e3cf",
+    "constraint_overlays": [
+      {
+        "path": "constraints/vllm-qwen-v0271-py312.override.txt",
+        "sha256": "bc821a79fec3f6d489dbf2338b018b978b2701caa8819b59c88254394383a6d5"
+      }
+    ],
+    "rocm_version": "7.14.0",
+    "rocm_index_url": "https://repo.amd.com/rocm/whl-multi-arch/",
+    "torch_version": "2.13.0+rocm7.14.0",
+    "torchvision_version": "0.28.0+rocm7.14.0",
+    "amdsmi_version": "7.0.2",
+    "huggingface_hub_version": "1.27.0",
+    "pip_version": "26.2.1",
+    "setuptools_version": "79.0.1",
+    "wheel_version": "0.47.0"
+  },
+  "kernel_driver": {
+    "version": "7.14.0-7",
+    "filename": "rocm-installer-7.14.0-7.run",
+    "url": "https://repo.radeon.com/rocm/installer/rocm-runfile-installer/rocm-rel-7.14/rocm-installer-7.14.0-7.run",
+    "sha256": "763887c73b744c66b74c4a95b7c4e4ae578153cce07e09234d97e0fd0e660fe8"
+  },
+  "sources": {
+    "aiter": {
+      "repository": "https://github.com/ROCm/aiter.git",
+      "commit": "427cff7b3a7e508536c45e8fcab28ce389358512",
+      "version": "0.1.19+git.427cff7b3",
+      "expected_diff_sha256": "74c14d1e23b3054a7a4aeb13b53b04badf85cfced2a41b310996f0a63af3e6e1",
+      "patches": [
+        {
+          "path": "patches/aiter-dspark-v0271/0001-gfx1201-paged-mqa-stage1.patch",
+          "sha256": "74c14d1e23b3054a7a4aeb13b53b04badf85cfced2a41b310996f0a63af3e6e1"
+        }
+      ]
+    },
+    "vllm": {
+      "repository": "https://github.com/vllm-project/vllm.git",
+      "commit": "2cf0a6915ce544dc493a0990f2ea38d81601128a",
+      "version": "0.28.0",
+      "apply_intent_to_add": true,
+      "expected_diff_sha256": "0a1cdbe5bbf6c0298a92f4d827b3e9a99de7ba2714818d738eba6f0da22f6469",
+      "patches": [
+        {
+          "path": "patches/vllm-dspark-v0280/0001-r9700-production-stack.patch",
+          "sha256": "729e23c7c09be5e27fa48486e77d8190e360f8faff9c5c29c3be016242767e24"
+        }
+      ]
+    },
+    "triton-kernels": {
+      "repository": "https://github.com/ROCm/triton.git",
+      "commit": "0f380657dbf3ee86eb57558ff71df24f03b5d4e7",
+      "version": "vllm-0.28.0-rocm-kernels",
+      "expected_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "patches": []
+    }
+  }
+}

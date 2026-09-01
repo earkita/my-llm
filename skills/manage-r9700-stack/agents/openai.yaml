@@ -1,0 +1,4 @@
+interface:
+  display_name: "Manage R9700 Stack"
+  short_description: "Start or stop vLLM and LiteLLM together"
+  default_prompt: "Use $manage-r9700-stack to start the baseline model and LiteLLM proxy, or stop both cleanly."

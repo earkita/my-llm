@@ -1,0 +1,11 @@
+.env
+.runtime/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+logs/**
+!logs/.gitkeep
+!templates/.claude/
+!templates/.claude/settings.local.json

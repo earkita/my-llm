@@ -1,0 +1,203 @@
+{
+  "schema_version": 1,
+  "name": "glm53-flash",
+  "status": "production-ready",
+  "description": "Verified GLM-5.3-Flash UD-Q4_K_XL profile with DFlash2 on eight R9700 GPUs",
+  "model": {
+    "schema_version": 1,
+    "name": "glm53-flash-ud-q4-k-xl-gguf",
+    "family": "glm5next",
+    "format": "gguf",
+    "repository": "unsloth/GLM-5.3-Flash-GGUF",
+    "revision": "d425e572fb9686125831f476129e51cea34bc5b4",
+    "source_profile_sha256": "7cb63d77525b62070587762e72d04bf009d3d560d8e3ff6b28955776067f41cc",
+    "default_directory": "/mnt/ai/models/glm/GLM-5.3-Flash-UD-Q4_K_XL",
+    "served_name": "glm-5.3-flash-ud-q4-k-xl",
+    "expected_shards": 6,
+    "checkpoint_weight_bytes": 199707321347,
+    "weight_pattern": "UD-Q4_K_XL/*.gguf",
+    "required_files": [],
+    "allow_patterns": [
+      "UD-Q4_K_XL/*.gguf",
+      "README.md"
+    ],
+    "file_sha256": {
+      "UD-Q4_K_XL/GLM-5.3-Flash-UD-Q4_K_XL-00001-of-00006.gguf": "00dceaf3ed08781b1e44513a44ebb19e96248d01ba2a80b17f675a2b6fa9a1ee",
+      "UD-Q4_K_XL/GLM-5.3-Flash-UD-Q4_K_XL-00002-of-00006.gguf": "d3ecb6ff3957a99878f9a0352676a0913748a431a9a4a1b1ffa5ade9b8947a74",
+      "UD-Q4_K_XL/GLM-5.3-Flash-UD-Q4_K_XL-00003-of-00006.gguf": "328073c004e7c5395b208247feed26089db247b94dd8fa4ab0f2569d86c1d770",
+      "UD-Q4_K_XL/GLM-5.3-Flash-UD-Q4_K_XL-00004-of-00006.gguf": "6803ab7effa6da4a0b02c9c7865952fdd6c5b2e10e53903348da369e90bd13f9",
+      "UD-Q4_K_XL/GLM-5.3-Flash-UD-Q4_K_XL-00005-of-00006.gguf": "852f3df9dacde3d196796f9fe738468e80c8701555ff0a8c30bc010fb8974dd8",
+      "UD-Q4_K_XL/GLM-5.3-Flash-UD-Q4_K_XL-00006-of-00006.gguf": "c6ba510fafc1e12cc0addbc361a329c0c592ab96980098e7e25e107d8faa983e"
+    },
+    "supports_dspark": false,
+    "supports_mtp": true,
+    "auxiliary_artifacts": [
+      {
+        "name": "dflash2-drafter",
+        "repository": "vcruz305/GLM-5.3-Flash-DFlash2-GGUF",
+        "revision": "caf6ef0cedd0dc4ac1183c4110266c2e4f58e17c",
+        "filename": "GLM-5.3-Flash-DFlash2-BF16.gguf",
+        "path": "/mnt/ai/models/glm/GLM-5.3-Flash-DFlash2-GGUF/GLM-5.3-Flash-DFlash2-BF16.gguf",
+        "size_bytes": 2352022432,
+        "sha256": "4128e3d65d96d9bc1dad0ac5115cfef45cc8142813e2ed3eed5f31e4396a0640"
+      }
+    ],
+    "llama_cpp": {
+      "model_file": "UD-Q4_K_XL/GLM-5.3-Flash-UD-Q4_K_XL-00001-of-00006.gguf",
+      "reasoning_format": "deepseek",
+      "reasoning": "auto"
+    }
+  },
+  "runtime": {
+    "schema_version": 1,
+    "name": "glm53-flash-fastest-verified-q8-1m-dflash2",
+    "backend": "llama-cpp",
+    "recipe": "llama-cpp-glm53-pr27754",
+    "status": "production-ready",
+    "description": "User-approved production GLM-5.3-Flash llama.cpp profile: fastest verified configuration with model-native 1M target context, symmetric Q8_0 KV, FA on, rebalanced 8-GPU layer split, ubatch 64, and DFlash2 K7 with rolling 8K draft cache; prompt depth verified at 4K, 16K, and 32K",
+    "required_model_family": "glm5next",
+    "required_patches": [
+      "0001",
+      "0003",
+      "0004",
+      "0005"
+    ],
+    "gpu_order": [
+      0,
+      1,
+      2,
+      3,
+      7,
+      4,
+      5,
+      6
+    ],
+    "gpu_bdfs": [
+      "0000:e3:00.0",
+      "0000:c3:00.0",
+      "0000:c6:00.0",
+      "0000:03:00.0",
+      "0000:23:00.0",
+      "0000:06:00.0",
+      "0000:09:00.0",
+      "0000:0c:00.0"
+    ],
+    "parallel": {
+      "tensor": 8,
+      "pipeline": 1,
+      "data": 1
+    },
+    "limits": {
+      "max_model_len": 1048576,
+      "max_num_seqs": 1,
+      "max_num_batched_tokens": 4096,
+      "gpu_memory_utilization": 0.95
+    },
+    "cache": {
+      "dtype": "q8_0",
+      "block_size": 16,
+      "prefix_cache": false,
+      "cpu_offload_gb": 0
+    },
+    "scheduler": {
+      "async": null,
+      "enforce_eager": false
+    },
+    "transport": {
+      "p2p_disable": 1,
+      "shm_disable": 1,
+      "socket_ifname": "lo",
+      "runtime_connect": 1,
+      "hsa_legacy_ipc": 1
+    },
+    "shutdown": {
+      "request_timeout_seconds": 0,
+      "worker_timeout_seconds": 30,
+      "process_grace_seconds": 60
+    },
+    "llama_cpp": {
+      "n_gpu_layers": "all",
+      "split_mode": "layer",
+      "tensor_split": [
+        7,
+        5,
+        6,
+        5,
+        6,
+        5,
+        5,
+        7
+      ],
+      "batch_size": 4096,
+      "ubatch_size": 64,
+      "cache_type_k": "q8_0",
+      "cache_type_v": "q8_0",
+      "flash_attention": "on",
+      "fit": false,
+      "fit_target_mib": 2048,
+      "load_mode": "mmap",
+      "cache_prompt": false,
+      "cache_reuse": 0,
+      "cache_ram_mib": 0,
+      "speculative_type": "draft-dflash",
+      "draft_model": "/mnt/ai/models/glm/GLM-5.3-Flash-DFlash2-GGUF/GLM-5.3-Flash-DFlash2-BF16.gguf",
+      "draft_n_max": 7,
+      "draft_n_min": 0,
+      "draft_p_min": 0.3,
+      "draft_ubatch_size": 16,
+      "draft_context_size": 8192,
+      "draft_cache_type_k": "q8_0",
+      "draft_cache_type_v": "q8_0",
+      "draft_n_gpu_layers": "all",
+      "continuous_batching": true
+    },
+    "dflash2_artifact": {
+      "repository": "vcruz305/GLM-5.3-Flash-DFlash2-GGUF",
+      "revision": "caf6ef0cedd0dc4ac1183c4110266c2e4f58e17c",
+      "filename": "GLM-5.3-Flash-DFlash2-BF16.gguf",
+      "size_bytes": 2352022432,
+      "sha256": "4128e3d65d96d9bc1dad0ac5115cfef45cc8142813e2ed3eed5f31e4396a0640"
+    },
+    "hardware_topology": {
+      "captured_on": "2026-08-29",
+      "motherboard": "ASUS Pro WS WRX90E-SAGE SE",
+      "note": "GPU-facing segments are PCIe 5 x16; HIP 4,5,6 traverse Gen3 x4 upstream root-port segments. Peer copies among HIP 0,1,2,3,7 reach about 30-55 GB/s, while paths involving HIP 4,5,6 reach about 3.3-3.4 GB/s"
+    }
+  },
+  "stack": {
+    "description": "Production GLM-5.3 Flash DFlash2 coding stack",
+    "litellm_aliases": [
+      "glm-5.3-flash-low",
+      "glm-5.3-flash-high",
+      "glm-5.3-flash-max"
+    ],
+    "claude_settings": {
+      "apiKeyHelper": "bash -c 'exec \"${MY_LLM_REPO_ROOT:-$HOME/ai/my-llm}/scripts/claude-litellm-key.sh\"'",
+      "permissions": {
+        "defaultMode": "acceptEdits",
+        "allow": [
+          "Read",
+          "Bash"
+        ]
+      },
+      "env": {
+        "ANTHROPIC_BASE_URL": "http://127.0.0.1:4000",
+        "ANTHROPIC_MODEL": "glm-5.3-flash-high",
+        "ANTHROPIC_SMALL_FAST_MODEL": "glm-5.3-flash-low",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-5.3-flash-low",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.3-flash-high",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.3-flash-max",
+        "DISABLE_PROMPT_CACHING": "1",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+        "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
+        "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "1048576"
+      }
+    }
+  },
+  "verification": {
+    "scope": "production",
+    "verified_prompt_depth": 131072,
+    "model_max_context": 1048576,
+    "notes": "DFlash2 was measured at 4K, 64K and 131K; full 1M generation was not claimed."
+  }
+}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Start LiteLLM Proxy"
+  short_description: "Start the persistent local LiteLLM proxy"
+  default_prompt: "Use $start-litellm-proxy to start LiteLLM and wait until it is ready."

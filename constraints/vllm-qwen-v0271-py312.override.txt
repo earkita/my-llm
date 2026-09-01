@@ -1,0 +1,2 @@
+# Overrides relative to rocm-7.14-py312.txt for the upstream Qwen recipe.
+flydsl==0.3.0

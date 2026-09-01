@@ -1,0 +1,323 @@
+diff --git a/vllm/model_executor/layers/fused_moe/runner/moe_runner.py b/vllm/model_executor/layers/fused_moe/runner/moe_runner.py
+index 66ad630..b352f77 100644
+--- a/vllm/model_executor/layers/fused_moe/runner/moe_runner.py
++++ b/vllm/model_executor/layers/fused_moe/runner/moe_runner.py
+@@ -887,7 +887,16 @@ class MoERunner(MoERunnerInterface):
+         if self.gate is not None:
+             if self._fse_fuse_gate:
+                 self._maybe_fuse_gate_weights()
+-                router_logits = F.linear(hidden_states, self._combined_gate_weight)
++                if getattr(
++                    self, "_qwen4_exp_rdna4_triton_bf16_gemm", False
++                ):
++                    router_logits = torch.ops.vllm.qwen4_exp_rdna4_bf16_gemm(
++                        hidden_states, self._combined_gate_weight, None
++                    )
++                else:
++                    router_logits = F.linear(
++                        hidden_states, self._combined_gate_weight
++                    )
+             else:
+                 router_logits, _ = self.gate(hidden_states)
+ 
+diff --git a/vllm/models/qwen4_exp/amd/low_latency_gemm.py b/vllm/models/qwen4_exp/amd/low_latency_gemm.py
+index e8c5c2f..7776fd5 100644
+--- a/vllm/models/qwen4_exp/amd/low_latency_gemm.py
++++ b/vllm/models/qwen4_exp/amd/low_latency_gemm.py
+@@ -1,15 +1,189 @@
+ # SPDX-License-Identifier: Apache-2.0
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+-"""Qwen4Exp low-latency GEMM hook for AMD ROCm."""
++"""Qwen4Exp BF16 GEMM routing for AMD RDNA4."""
++
++import os
+ 
+ import torch
+ from torch import nn
+ 
++from vllm.model_executor.layers.linear import LinearBase, UnquantizedLinearMethod
++from vllm.model_executor.layers.vocab_parallel_embedding import (
++    ParallelLMHead,
++    UnquantizedEmbeddingMethod,
++)
++from vllm.platforms.rocm import on_rdna4
++from vllm.utils.torch_utils import direct_register_custom_op
++
++_RDNA4_TRITON_GEMM_ENV = "VLLM_QWEN4_EXP_RDNA4_TRITON_BF16_GEMM"
++
++
++def _triton_gemm_config(num_tokens: int, inner_size: int) -> dict[str, object]:
++    """Return a conservative, gfx1201-validated A16W16 configuration."""
++
++    if num_tokens <= 16:
++        block_m = 16
++        group_m = 1
++    else:
++        block_m = 64
++        group_m = 4
++    return {
++        "BLOCK_SIZE_M": block_m,
++        "BLOCK_SIZE_N": 64,
++        "BLOCK_SIZE_K": 32,
++        "GROUP_SIZE_M": group_m,
++        "NUM_KSPLIT": 1,
++        "SPLITK_BLOCK_SIZE": inner_size,
++        "cache_modifier": None,
++        "num_warps": 4,
++        "num_stages": 2,
++        "waves_per_eu": 2,
++        "matrix_instr_nonkdim": 16,
++        "kpack": 1,
++    }
++
++
++def _qwen4_exp_rdna4_bf16_gemm(
++    x: torch.Tensor,
++    weight: torch.Tensor,
++    bias: torch.Tensor | None = None,
++) -> torch.Tensor:
++    """Run Qwen4Exp's unquantized BF16 GEMMs without rocBLAS/Tensile."""
++
++    if (
++        x.dtype != torch.bfloat16
++        or weight.dtype != torch.bfloat16
++        or weight.dim() != 2
++        or x.shape[-1] != weight.shape[1]
++        or not weight.is_contiguous()
++        or not x.is_cuda
++        or not weight.is_cuda
++        or x.device != weight.device
++        or (bias is not None and (bias.dtype != x.dtype or not bias.is_contiguous()))
++    ):
++        raise RuntimeError(
++            "RDNA4 Qwen4Exp Triton GEMM received unsupported operands; "
++            "refusing to fall back to rocBLAS/Tensile"
++        )
++
++    from aiter.ops.triton.gemm.basic.gemm_a16w16 import gemm_a16w16
++
++    output_shape = (*x.shape[:-1], weight.shape[0])
++    x_2d = x.reshape(-1, x.shape[-1]).contiguous()
++    output = gemm_a16w16(
++        x_2d,
++        weight,
++        bias,
++        dtype=x.dtype,
++        config=_triton_gemm_config(x_2d.shape[0], x_2d.shape[1]),
++        backend="triton",
++    )
++    return output.reshape(output_shape)
++
++
++def _qwen4_exp_rdna4_bf16_gemm_fake(
++    x: torch.Tensor,
++    weight: torch.Tensor,
++    bias: torch.Tensor | None = None,
++) -> torch.Tensor:
++    del bias
++    return x.new_empty((*x.shape[:-1], weight.shape[0]))
++
++
++direct_register_custom_op(
++    op_name="qwen4_exp_rdna4_bf16_gemm",
++    op_func=_qwen4_exp_rdna4_bf16_gemm,
++    fake_impl=_qwen4_exp_rdna4_bf16_gemm_fake,
++)
++
++
++class _Qwen4ExpRDNA4TritonApply:
++    def apply(
++        self,
++        layer: nn.Module,
++        x: torch.Tensor,
++        bias: torch.Tensor | None = None,
++    ) -> torch.Tensor:
++        return torch.ops.vllm.qwen4_exp_rdna4_bf16_gemm(x, layer.weight, bias)
++
++
++class Qwen4ExpRDNA4TritonLinearMethod(
++    _Qwen4ExpRDNA4TritonApply, UnquantizedLinearMethod
++):
++    pass
++
++
++class Qwen4ExpRDNA4TritonEmbeddingMethod(
++    _Qwen4ExpRDNA4TritonApply, UnquantizedEmbeddingMethod
++):
++    pass
++
++
++def _route_mtp_fused_gate_runners(module: nn.Module) -> tuple[int, int]:
++    """Mark MTP-owned MoE runners whose gate weights are actually fused."""
++
++    moe_runners = list(getattr(module, "moe_layers", ()))
++    if not moe_runners:
++        raise RuntimeError("RDNA4 Qwen4Exp MTP has no registered MoE runners")
++
++    routed_fused_gates = 0
++    for runner in moe_runners:
++        if not hasattr(runner, "_fse_fuse_gate"):
++            raise RuntimeError(
++                "RDNA4 Qwen4Exp MTP MoE runner has no fused-gate contract"
++            )
++        if runner._fse_fuse_gate:
++            runner._qwen4_exp_rdna4_triton_bf16_gemm = True
++            routed_fused_gates += 1
++
++    return len(moe_runners), routed_fused_gates
++
+
+ def enable_qwen4_exp_low_latency_gemm(
+     module: nn.Module,
+     dtype: torch.dtype,
+ ) -> None:
+-    """Keep the standard vLLM linear methods on AMD ROCm."""
++    """Route only the MTP predictor's BF16 GEMMs through AITER Triton.
++
++    gfx1201 rocBLAS can select unsafe Tensile kernels for several MTP shapes.
++    The target model remains on its regular FP8/hipBLASLt paths; limiting this
++    hook to the draft model avoids changing its established prefill behavior.
++    """
++
++    if (
++        os.getenv(_RDNA4_TRITON_GEMM_ENV, "0") != "1"
++        or dtype != torch.bfloat16
++        or not on_rdna4()
++        or type(module).__name__ != "Qwen4ExpMTP"
++    ):
++        return
+ 
+-    del module, dtype
++    routed_linears = 0
++    for child in module.modules():
++        is_linear = (
++            isinstance(child, LinearBase)
++            and type(child.quant_method) is UnquantizedLinearMethod
++        )
++        is_head = (
++            isinstance(child, ParallelLMHead)
++            and type(child.quant_method) is UnquantizedEmbeddingMethod
++        )
++        if is_linear:
++            child.quant_method = Qwen4ExpRDNA4TritonLinearMethod()
++            routed_linears += 1
++        elif is_head:
++            child.quant_method = Qwen4ExpRDNA4TritonEmbeddingMethod()
++            routed_linears += 1
++
++    # The model's EPLB interface keeps the exact MTP-owned MoE runners in a
++    # plain list. A runner only bypasses the LinearBase methods above when it
++    # has actually fused its routed and shared-expert gates. Zero fused gates
++    # is valid: in that layout both gate linears are already routed above.
++    moe_runners, routed_fused_gates = _route_mtp_fused_gate_runners(module)
++
++    if routed_linears == 0:
++        raise RuntimeError(
++            "RDNA4 Qwen4Exp MTP Triton routing was incomplete: "
++            f"linear/head={routed_linears}, moe_runners={moe_runners}, "
++            f"fused_gate={routed_fused_gates}"
++        )
+diff --git a/tests/models/qwen4_exp/test_amd_low_latency_gemm.py b/tests/models/qwen4_exp/test_amd_low_latency_gemm.py
+new file mode 100644
+index 0000000..3c85feb
+--- /dev/null
++++ b/tests/models/qwen4_exp/test_amd_low_latency_gemm.py
+@@ -0,0 +1,98 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++
++import pytest
++import torch
++from torch import nn
++
++from vllm.models.qwen4_exp.amd import low_latency_gemm
++from vllm.platforms import current_platform
++
++pytestmark = pytest.mark.skipif(
++    not current_platform.is_rocm(),
++    reason="AMD Qwen4Exp GEMM requires ROCm",
++)
++
++
++@pytest.mark.parametrize(
++    ("num_tokens", "block_m", "group_m"),
++    [(1, 16, 1), (16, 16, 1), (17, 64, 4), (2048, 64, 4)],
++)
++def test_rdna4_triton_config_is_complete(
++    num_tokens: int,
++    block_m: int,
++    group_m: int,
++) -> None:
++    config = low_latency_gemm._triton_gemm_config(num_tokens, 2560)
++
++    assert config["BLOCK_SIZE_M"] == block_m
++    assert config["GROUP_SIZE_M"] == group_m
++    assert config["BLOCK_SIZE_N"] == 64
++    assert config["BLOCK_SIZE_K"] == 32
++    assert config["NUM_KSPLIT"] == 1
++    assert config["SPLITK_BLOCK_SIZE"] == 2560
++
++
++def test_rdna4_triton_gemm_fake_preserves_batch_shape() -> None:
++    x = torch.empty(2, 3, 64)
++    weight = torch.empty(32, 64)
++
++    output = low_latency_gemm._qwen4_exp_rdna4_bf16_gemm_fake(x, weight)
++
++    assert output.shape == (2, 3, 32)
++    assert output.dtype == x.dtype
++
++
++def test_rdna4_triton_gemm_fails_closed_on_cpu() -> None:
++    x = torch.empty(3, 64, dtype=torch.bfloat16)
++    weight = torch.empty(32, 64, dtype=torch.bfloat16)
++
++    with pytest.raises(RuntimeError, match="refusing to fall back"):
++        low_latency_gemm._qwen4_exp_rdna4_bf16_gemm(x, weight)
++
++
++class _FakeMoERunner(nn.Module):
++    def __init__(self, fuse_gate: bool) -> None:
++        super().__init__()
++        self._fse_fuse_gate = fuse_gate
++
++
++def test_mtp_unfused_gate_layout_is_valid() -> None:
++    runner = _FakeMoERunner(fuse_gate=False)
++    module = nn.Module()
++    module.moe_layers = [runner]
++
++    count, routed = low_latency_gemm._route_mtp_fused_gate_runners(module)
++
++    assert count == 1
++    assert routed == 0
++    assert not hasattr(runner, "_qwen4_exp_rdna4_triton_bf16_gemm")
++
++
++def test_mtp_fused_gate_runner_is_marked() -> None:
++    runner = _FakeMoERunner(fuse_gate=True)
++    module = nn.Module()
++    module.moe_layers = [runner]
++
++    count, routed = low_latency_gemm._route_mtp_fused_gate_runners(module)
++
++    assert count == 1
++    assert routed == 1
++    assert runner._qwen4_exp_rdna4_triton_bf16_gemm is True
++
++
++def test_mtp_missing_moe_runners_fails_closed() -> None:
++    with pytest.raises(RuntimeError, match="no registered MoE runners"):
++        low_latency_gemm._route_mtp_fused_gate_runners(nn.Module())
++
++
++@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires an AMD GPU")
++def test_rdna4_triton_gemm_matches_torch_reference() -> None:
++    torch.manual_seed(1)
++    x = torch.randn(3, 2560, device="cuda", dtype=torch.bfloat16) * 0.05
++    weight = torch.randn(320, 2560, device="cuda", dtype=torch.bfloat16) * 0.05
++    expected = (x.float().cpu() @ weight.float().cpu().T).to(torch.bfloat16)
++
++    output = low_latency_gemm._qwen4_exp_rdna4_bf16_gemm(x, weight)
++
++    torch.testing.assert_close(output.cpu(), expected, rtol=0, atol=1.0e-3)

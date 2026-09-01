@@ -1,0 +1,27 @@
+diff --git a/vllm/v1/attention/backends/fa_utils.py b/vllm/v1/attention/backends/fa_utils.py
+index 0de6b85..484735f 100644
+--- a/vllm/v1/attention/backends/fa_utils.py
++++ b/vllm/v1/attention/backends/fa_utils.py
+@@ -40,11 +40,11 @@ elif current_platform.is_rocm():
+     # package is not installed/available. (Same source as aiter_triton_mla.py.)
+     # The FA4 compile-from-specs API is CUDA-only, so it is unavailable on ROCm
+     # regardless of whether AITER is present.
+-    from vllm.platforms.rocm import on_gfx1250
++    from vllm.platforms.rocm import on_gfx1250, on_rdna4
+ 
+     compile_flash_attn_varlen_func_from_specs = None  # type: ignore[assignment]
+     try:
+-        if on_gfx1250():
++        if on_gfx1250() or on_rdna4():
+             from aiter.ops.triton.mha import (  # type: ignore[no-redef]
+                 flash_attn_varlen_func,
+             )
+@@ -55,7 +55,7 @@ elif current_platform.is_rocm():
+     except ImportError:
+ 
+         def flash_attn_varlen_func(*args: Any, **kwargs: Any) -> Any:  # type: ignore[no-redef,misc]
+-            package = "aiter" if on_gfx1250() else "flash-attn"
++            package = "aiter" if on_gfx1250() or on_rdna4() else "flash-attn"
+             raise ImportError(
+                 f"ROCm platform requires upstream {package} "
+                 f"to be installed. Please install {package} first."
