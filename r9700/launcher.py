@@ -5,9 +5,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from . import proxy
 from .backends import runtime_backend
 from .config import ConfigurationError, ROOT, list_runtime_profiles, load_profile
 from .service import managed_state, status as service_status
+from .service import wait as service_wait
 
 
 START_SCRIPT = (
@@ -16,12 +18,23 @@ START_SCRIPT = (
 STOP_SCRIPT = (
     ROOT / "skills" / "stop-r9700-runtime" / "scripts" / "stop-runtime.sh"
 )
-UNIT = "r9700-runtime.service"
+STACK_SCRIPT = (
+    ROOT / "skills" / "manage-r9700-stack" / "scripts" / "manage-stack.sh"
+)
+RUNTIME_UNIT = "r9700-runtime.service"
+PROXY_UNIT = "r9700-litellm-proxy.service"
 
 
 def _running_state() -> dict[str, Any] | None:
     try:
         return managed_state()
+    except ConfigurationError:
+        return None
+
+
+def _proxy_running_state() -> dict[str, Any] | None:
+    try:
+        return proxy.managed_state()
     except ConfigurationError:
         return None
 
@@ -62,21 +75,93 @@ def _start_command(
     return command
 
 
+def _stack_start_command(
+    profile_name: str,
+    *,
+    ready_timeout: int = 900,
+    proxy_ready_timeout: int = 120,
+    dry_run: bool = False,
+) -> list[str]:
+    if ready_timeout < 1 or proxy_ready_timeout < 1:
+        raise ConfigurationError("ready timeouts must be positive integers")
+    command = [
+        str(STACK_SCRIPT),
+        "start",
+        "--preset",
+        profile_name,
+        "--runtime-ready-timeout",
+        str(ready_timeout),
+        "--proxy-ready-timeout",
+        str(proxy_ready_timeout),
+    ]
+    if dry_run:
+        command.append("--dry-run")
+    return command
+
+
+def _stack_stop_command(
+    *,
+    runtime_timeout: int | None = None,
+    proxy_timeout: int | None = None,
+    dry_run: bool = False,
+) -> list[str]:
+    if runtime_timeout is not None and runtime_timeout < 1:
+        raise ConfigurationError("runtime stop timeout must be a positive integer")
+    if proxy_timeout is not None and proxy_timeout < 1:
+        raise ConfigurationError("proxy stop timeout must be a positive integer")
+    command = [str(STACK_SCRIPT), "stop"]
+    if runtime_timeout is not None:
+        command.extend(("--runtime-timeout", str(runtime_timeout)))
+    if proxy_timeout is not None:
+        command.extend(("--proxy-timeout", str(proxy_timeout)))
+    if dry_run:
+        command.append("--dry-run")
+    return command
+
+
 def start(
     profile_name: str,
     *,
     host: str | None = None,
     port: int | None = None,
     ready_timeout: int = 900,
+    proxy_ready_timeout: int = 120,
+    with_litellm: bool = False,
     dry_run: bool = False,
 ) -> None:
     name, _ = _target(profile_name)
     state = _running_state()
-    if state and not dry_run:
+    proxy_state = _proxy_running_state()
+    if state and state.get("profile") != name and not dry_run:
         raise ConfigurationError(
             f"{state['profile']} is already running at {state['url']}; "
             f"use './run launcher switch {name}' to replace it explicitly"
         )
+    if state and not with_litellm and not dry_run:
+        raise ConfigurationError(
+            f"{name} is already running at {state['url']}"
+        )
+    if proxy_state and not with_litellm and not dry_run:
+        raise ConfigurationError(
+            "LiteLLM is already running; use --with-litellm or stop the full stack"
+        )
+    if with_litellm:
+        if host or port is not None:
+            raise ConfigurationError(
+                "--host and --port are unavailable with --with-litellm; "
+                "configure TARGET_* and LITELLM_* in .env"
+            )
+        if state and not dry_run:
+            service_wait(timeout=ready_timeout)
+        _run(
+            _stack_start_command(
+                name,
+                ready_timeout=ready_timeout,
+                proxy_ready_timeout=proxy_ready_timeout,
+                dry_run=dry_run,
+            )
+        )
+        return
     _run(
         _start_command(
             name,
@@ -88,7 +173,27 @@ def start(
     )
 
 
-def stop(*, timeout: int | None = None, dry_run: bool = False) -> None:
+def stop(
+    *,
+    timeout: int | None = None,
+    proxy_timeout: int | None = None,
+    with_litellm: bool = False,
+    dry_run: bool = False,
+) -> None:
+    if with_litellm:
+        _run(
+            _stack_stop_command(
+                runtime_timeout=timeout,
+                proxy_timeout=proxy_timeout,
+                dry_run=dry_run,
+            )
+        )
+        return
+    if not dry_run and _proxy_running_state():
+        raise ConfigurationError(
+            "LiteLLM is running; use './run launcher stop --with-litellm' "
+            "to stop the proxy before the model"
+        )
     if timeout is not None and timeout < 1:
         raise ConfigurationError("stop timeout must be a positive integer")
     command = [str(STOP_SCRIPT)]
@@ -105,11 +210,50 @@ def switch(
     host: str | None = None,
     port: int | None = None,
     ready_timeout: int = 900,
+    proxy_ready_timeout: int = 120,
     stop_timeout: int | None = None,
+    proxy_stop_timeout: int | None = None,
+    with_litellm: bool = False,
     dry_run: bool = False,
 ) -> None:
     name, _ = _target(profile_name)
+    if with_litellm:
+        if host or port is not None:
+            raise ConfigurationError(
+                "--host and --port are unavailable with --with-litellm; "
+                "configure TARGET_* and LITELLM_* in .env"
+            )
+        _stack_start_command(
+            name,
+            ready_timeout=ready_timeout,
+            proxy_ready_timeout=proxy_ready_timeout,
+            dry_run=dry_run,
+        )
+        _stack_stop_command(
+            runtime_timeout=stop_timeout,
+            proxy_timeout=proxy_stop_timeout,
+            dry_run=dry_run,
+        )
+    else:
+        _start_command(
+            name,
+            host=host,
+            port=port,
+            ready_timeout=ready_timeout,
+            dry_run=dry_run,
+        )
+        if stop_timeout is not None and stop_timeout < 1:
+            raise ConfigurationError("stop timeout must be a positive integer")
     state = _running_state()
+    if state and state.get("profile") == name and with_litellm:
+        start(
+            name,
+            ready_timeout=ready_timeout,
+            proxy_ready_timeout=proxy_ready_timeout,
+            with_litellm=True,
+            dry_run=dry_run,
+        )
+        return
     if state and state.get("profile") == name and not dry_run:
         print(
             f"already running profile={name} PID={state['pid']} URL={state['url']}"
@@ -118,22 +262,52 @@ def switch(
 
     if state:
         print(f"switching {state['profile']} -> {name}", flush=True)
-        stop(timeout=stop_timeout, dry_run=dry_run)
+        stop(
+            timeout=stop_timeout,
+            proxy_timeout=proxy_stop_timeout,
+            with_litellm=with_litellm,
+            dry_run=dry_run,
+        )
     elif dry_run:
         print(
             f"no managed runtime is active; switch will start {name}",
             flush=True,
         )
 
-    _run(
-        _start_command(
-            name,
-            host=host,
-            port=port,
-            ready_timeout=ready_timeout,
-            dry_run=dry_run,
-        )
+    start(
+        name,
+        host=host,
+        port=port,
+        ready_timeout=ready_timeout,
+        proxy_ready_timeout=proxy_ready_timeout,
+        with_litellm=with_litellm,
+        dry_run=dry_run,
     )
+
+
+def _unit_state(unit: str) -> str:
+    result = subprocess.run(
+        ["systemctl", "--user", "is-active", unit],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip() or "unavailable"
+
+
+def _print_component_status(
+    label: str,
+    status_function: Any,
+    unit: str,
+) -> None:
+    print(f"{label}:")
+    status_rc = status_function()
+    print(f"unit={unit} state={_unit_state(unit)}")
+    if status_rc not in (0, 2, 3):
+        raise ConfigurationError(
+            f"unexpected {label.lower()} status code: {status_rc}"
+        )
 
 
 def _layout(profile: dict[str, Any]) -> tuple[str, int, str]:
@@ -191,23 +365,26 @@ def list_profiles() -> None:
 
 
 def status() -> None:
-    service_rc = service_status()
-    result = subprocess.run(
-        ["systemctl", "--user", "is-active", UNIT],
-        cwd=ROOT,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    unit_state = result.stdout.strip() or "unavailable"
-    print(f"unit={UNIT} state={unit_state}")
-    if service_rc not in (0, 2, 3):
-        raise ConfigurationError(f"unexpected service status code: {service_rc}")
+    _print_component_status("Inference runtime", service_status, RUNTIME_UNIT)
+    _print_component_status("LiteLLM proxy", proxy.status, PROXY_UNIT)
 
 
-def logs(*, follow: bool = False, lines: int = 100) -> None:
+def logs(
+    *,
+    component: str = "runtime",
+    follow: bool = False,
+    lines: int = 100,
+) -> None:
     if lines < 1:
         raise ConfigurationError("log line count must be a positive integer")
+    if component == "litellm":
+        command = [str(ROOT / "run"), "proxy", "logs", "--lines", str(lines)]
+        if follow:
+            command.append("--follow")
+        _run(command)
+        return
+    if component != "runtime":
+        raise ConfigurationError(f"unknown log component: {component}")
     state = _running_state()
     if not state:
         raise ConfigurationError("no managed runtime is active")
@@ -221,6 +398,18 @@ def logs(*, follow: bool = False, lines: int = 100) -> None:
 def _confirm_switch(current: str, target: str) -> bool:
     answer = input(f"Stop {current} and start {target}? [y/N] ").strip().lower()
     return answer in {"y", "yes"}
+
+
+def _select_litellm_mode() -> bool:
+    while True:
+        answer = input(
+            "Mode: [d]irect API or [l]iteLLM stack? [d] "
+        ).strip().lower()
+        if answer in {"", "d", "direct"}:
+            return False
+        if answer in {"l", "litellm", "stack"}:
+            return True
+        print("Choose 'd' or 'l'.", file=sys.stderr)
 
 
 def interactive() -> None:
@@ -244,7 +433,8 @@ def interactive() -> None:
         print()
         for index, record in enumerate(profiles, start=1):
             print(f"  {index}) {record['name']:<22} {record['description']}")
-        print("  s) status    l) logs    x) stop    q) quit")
+        print("  s) status    l) runtime logs    p) proxy logs")
+        print("  x) stop full stack               q) quit")
 
         try:
             choice = input("\nSelect: ").strip().lower()
@@ -256,27 +446,28 @@ def interactive() -> None:
             if choice in {"l", "logs"}:
                 logs(lines=60)
                 continue
+            if choice in {"p", "proxy"}:
+                logs(component="litellm", lines=60)
+                continue
             if choice in {"x", "stop"}:
-                if state:
-                    stop()
-                else:
-                    print("already stopped")
+                stop(with_litellm=True)
                 continue
             if not choice.isdigit() or not 1 <= int(choice) <= len(profiles):
                 print("Unknown selection.", file=sys.stderr)
                 continue
 
             selected = str(profiles[int(choice) - 1]["name"])
-            if state and state.get("profile") == selected:
+            with_litellm = _select_litellm_mode()
+            if state and state.get("profile") == selected and not with_litellm:
                 print(f"{selected} is already running.")
                 continue
             if state and not _confirm_switch(str(state["profile"]), selected):
                 print("Switch cancelled.")
                 continue
             if state:
-                switch(selected)
+                switch(selected, with_litellm=with_litellm)
             else:
-                start(selected)
+                start(selected, with_litellm=with_litellm)
         except ConfigurationError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
         except (EOFError, KeyboardInterrupt):

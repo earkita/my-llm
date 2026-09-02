@@ -78,6 +78,13 @@ def _identity_alive(state: dict[str, Any]) -> bool:
         return False
 
 
+def managed_state() -> dict[str, Any]:
+    state = _state()
+    if not state or not _identity_alive(state):
+        raise ConfigurationError("LiteLLM proxy is not running")
+    return state
+
+
 def _get(url: str, *, key: str | None = None, timeout: float = 2) -> Any:
     headers = {"Authorization": f"Bearer {key}"} if key else {}
     request = urllib.request.Request(url, headers=headers)

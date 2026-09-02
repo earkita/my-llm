@@ -247,6 +247,21 @@ class ProductionProfileTests(unittest.TestCase):
             ):
                 launcher.start("qwen38-flash")
 
+    def test_launcher_direct_stop_refuses_to_orphan_litellm(self) -> None:
+        with (
+            patch(
+                "r9700.launcher.proxy.managed_state",
+                return_value={"pid": 1234},
+            ),
+            patch("r9700.launcher.subprocess.run") as run,
+        ):
+            with self.assertRaisesRegex(
+                ConfigurationError, "stop --with-litellm"
+            ):
+                launcher.stop()
+
+        run.assert_not_called()
+
     def test_launcher_dry_run_uses_persistent_lifecycle_script(self) -> None:
         with (
             patch("r9700.launcher.managed_state", return_value=None),
@@ -261,10 +276,17 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertIn("--dry-run", command)
 
     def test_launcher_switch_stops_before_starting_another_profile(self) -> None:
-        state = {"profile": "glm53-flash"}
+        state = {
+            "profile": "glm53-flash",
+            "url": "http://127.0.0.1:8000",
+        }
         with (
-            patch("r9700.launcher.managed_state", return_value=state),
+            patch(
+                "r9700.launcher.managed_state",
+                side_effect=[state, ConfigurationError("stopped")],
+            ),
             patch("r9700.launcher.subprocess.run") as run,
+            patch("builtins.print"),
         ):
             run.return_value.returncode = 0
             launcher.switch("qwen38-flash")
@@ -273,6 +295,77 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(Path(commands[0][0]), launcher.STOP_SCRIPT)
         self.assertEqual(Path(commands[1][0]), launcher.START_SCRIPT)
         self.assertEqual(commands[1][1:3], ["--profile", "qwen38-flash"])
+
+    def test_launcher_litellm_mode_uses_transactional_stack_manager(self) -> None:
+        with (
+            patch("r9700.launcher.managed_state", return_value=None),
+            patch("r9700.launcher.subprocess.run") as run,
+        ):
+            run.return_value.returncode = 0
+            launcher.start(
+                "qwen38-flash", with_litellm=True, dry_run=True
+            )
+
+        command = run.call_args.args[0]
+        self.assertEqual(Path(command[0]), launcher.STACK_SCRIPT)
+        self.assertEqual(command[1:4], ["start", "--preset", "qwen38-flash"])
+        self.assertIn("--proxy-ready-timeout", command)
+        self.assertIn("--dry-run", command)
+
+    def test_launcher_waits_before_adding_litellm_to_active_model(self) -> None:
+        state = {
+            "profile": "qwen38-flash",
+            "url": "http://127.0.0.1:8000",
+        }
+        with (
+            patch("r9700.launcher.managed_state", return_value=state),
+            patch("r9700.launcher.service_wait") as wait,
+            patch("r9700.launcher.subprocess.run") as run,
+        ):
+            run.return_value.returncode = 0
+            launcher.start("qwen38-flash", with_litellm=True)
+
+        wait.assert_called_once_with(timeout=900)
+        self.assertEqual(Path(run.call_args.args[0][0]), launcher.STACK_SCRIPT)
+
+    def test_launcher_stack_switch_stops_both_components_first(self) -> None:
+        state = {
+            "profile": "glm53-flash",
+            "url": "http://127.0.0.1:8000",
+        }
+        with (
+            patch(
+                "r9700.launcher.managed_state",
+                side_effect=[state, ConfigurationError("stopped")],
+            ),
+            patch("r9700.launcher.subprocess.run") as run,
+            patch("builtins.print"),
+        ):
+            run.return_value.returncode = 0
+            launcher.switch("qwen38-flash", with_litellm=True)
+
+        commands = [call.args[0] for call in run.call_args_list]
+        self.assertEqual(Path(commands[0][0]), launcher.STACK_SCRIPT)
+        self.assertEqual(commands[0][1], "stop")
+        self.assertEqual(Path(commands[1][0]), launcher.STACK_SCRIPT)
+        self.assertEqual(commands[1][1:4], ["start", "--preset", "qwen38-flash"])
+
+    def test_launcher_validates_stack_switch_before_stopping(self) -> None:
+        state = {"profile": "glm53-flash"}
+        with (
+            patch("r9700.launcher.managed_state", return_value=state),
+            patch("r9700.launcher.subprocess.run") as run,
+        ):
+            with self.assertRaisesRegex(
+                ConfigurationError, "unavailable with --with-litellm"
+            ):
+                launcher.switch(
+                    "qwen38-flash",
+                    host="127.0.0.1",
+                    with_litellm=True,
+                )
+
+        run.assert_not_called()
 
     def test_shared_recipe_root_preserves_recipe_boundaries(self) -> None:
         shared = Path("/tmp/r9700-shared-recipes")

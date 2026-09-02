@@ -41,10 +41,13 @@ commity, obrazy patchy i artefakty nadal są weryfikowane przed startem.
 ./run launcher
 ./run launcher list
 ./run launcher start glm53-flash
+./run launcher start qwen38-flash --with-litellm
 ./run launcher switch qwen38-flash
+./run launcher switch deepseek-v4-flash --with-litellm
 ./run launcher status
 ./run launcher logs --follow
-./run launcher stop
+./run launcher logs --component litellm --follow
+./run launcher stop --with-litellm
 
 ./run profiles list
 ./run profiles show glm53-flash
@@ -62,6 +65,12 @@ dostępne jako podkomendy do skryptów i automatyzacji. `start` nigdy nie
 zastępuje działającego modelu; zmiana wymaga jawnego `switch` albo wcześniejszego
 `stop`. Start korzysta z trwałej jednostki użytkownika, sprawdza host i limit
 mocy GPU, a następnie czeka na gotowość API.
+
+Tryb bez flagi udostępnia bezpośrednie API modelu na porcie `8000`. Flaga
+`--with-litellm` uruchamia transakcyjnie cały stack: model, LiteLLM na porcie
+`4000`, test proxy oraz ustawienia Claude Code. Błąd proxy po świeżym starcie
+powoduje bezpieczne wycofanie uruchomionego runtime. Wymaga wcześniejszego
+`./run proxy install` oraz ustawienia `LITELLM_MASTER_KEY` w `.env`.
 
 Pełny stack z LiteLLM i ustawieniami Claude Code:
 

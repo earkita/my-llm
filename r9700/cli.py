@@ -50,6 +50,12 @@ def _launcher_start_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--host")
     parser.add_argument("--port", type=int)
     parser.add_argument("--ready-timeout", type=int, default=900)
+    parser.add_argument("--proxy-ready-timeout", type=int, default=120)
+    parser.add_argument(
+        "--with-litellm",
+        action="store_true",
+        help="start and verify the LiteLLM proxy after the model",
+    )
     parser.add_argument("--dry-run", action="store_true")
 
 
@@ -232,12 +238,22 @@ def parser() -> argparse.ArgumentParser:
     )
     _launcher_start_options(launcher_switch)
     launcher_switch.add_argument("--stop-timeout", type=int)
+    launcher_switch.add_argument("--proxy-stop-timeout", type=int)
     launcher_stop = launcher_commands.add_parser(
         "stop", help="gracefully stop the current model"
     )
     launcher_stop.add_argument("--timeout", type=int)
+    launcher_stop.add_argument("--proxy-timeout", type=int)
+    launcher_stop.add_argument(
+        "--with-litellm",
+        action="store_true",
+        help="stop LiteLLM before stopping the model",
+    )
     launcher_stop.add_argument("--dry-run", action="store_true")
     launcher_logs = launcher_commands.add_parser("logs", help="show runtime logs")
+    launcher_logs.add_argument(
+        "--component", choices=("runtime", "litellm"), default="runtime"
+    )
     launcher_logs.add_argument("--follow", action="store_true")
     launcher_logs.add_argument("--lines", type=int, default=100)
 
@@ -376,6 +392,8 @@ def main(argv: list[str] | None = None) -> int:
                     host=args.host,
                     port=args.port,
                     ready_timeout=args.ready_timeout,
+                    proxy_ready_timeout=args.proxy_ready_timeout,
+                    with_litellm=args.with_litellm,
                     dry_run=args.dry_run,
                 )
             elif args.launcher_command == "switch":
@@ -384,13 +402,25 @@ def main(argv: list[str] | None = None) -> int:
                     host=args.host,
                     port=args.port,
                     ready_timeout=args.ready_timeout,
+                    proxy_ready_timeout=args.proxy_ready_timeout,
                     stop_timeout=args.stop_timeout,
+                    proxy_stop_timeout=args.proxy_stop_timeout,
+                    with_litellm=args.with_litellm,
                     dry_run=args.dry_run,
                 )
             elif args.launcher_command == "stop":
-                launcher.stop(timeout=args.timeout, dry_run=args.dry_run)
+                launcher.stop(
+                    timeout=args.timeout,
+                    proxy_timeout=args.proxy_timeout,
+                    with_litellm=args.with_litellm,
+                    dry_run=args.dry_run,
+                )
             else:
-                launcher.logs(follow=args.follow, lines=args.lines)
+                launcher.logs(
+                    component=args.component,
+                    follow=args.follow,
+                    lines=args.lines,
+                )
         elif args.command == "model":
             if args.model_command == "download":
                 download_model(args.name, directory=args.directory, dry_run=args.dry_run)

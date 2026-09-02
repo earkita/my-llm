@@ -44,15 +44,24 @@ Najprościej użyć launchera:
 ./run launcher                         # interaktywne menu
 ./run launcher list
 ./run launcher start qwen38-flash
-./run launcher switch deepseek-v4-flash
+./run launcher start qwen38-flash --with-litellm
+./run launcher switch deepseek-v4-flash --with-litellm
 ./run launcher status
 ./run launcher logs --follow
-./run launcher stop
+./run launcher logs --component litellm --follow
+./run launcher stop --with-litellm
 ```
 
 `start` nie zastępuje aktywnego modelu. `switch` jest jawną operacją zmiany:
 najpierw wykonuje bezpieczny stop, a dopiero potem start wybranego profilu.
 Do podglądu bez zmian stanu służy `--dry-run` przy `start`, `switch` i `stop`.
+
+Bez flagi launcher wystawia bezpośrednie API runtime na porcie `8000`.
+`--with-litellm` uruchamia model, czeka na jego gotowość, uruchamia i testuje
+LiteLLM na porcie `4000` oraz aktywuje ustawienia Claude Code z profilu. Jeżeli
+proxy nie wystartuje po świeżym starcie modelu, cały start jest wycofywany.
+Najpierw wykonaj jednorazowo `./run proxy install` i ustaw
+`LITELLM_MASTER_KEY` w `.env`.
 
 Launcher używa poniższych skryptów cyklu życia. Można je nadal wywołać
 bezpośrednio:
