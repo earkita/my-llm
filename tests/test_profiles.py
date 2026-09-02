@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from r9700 import launcher
 from r9700.backends import build_command
 from r9700.backends.vllm import environment as vllm_environment
 from r9700.config import ConfigurationError, ROOT, load_profile
@@ -222,6 +223,56 @@ class ProductionProfileTests(unittest.TestCase):
         records = json.loads(result.stdout)
         self.assertEqual([record["name"] for record in records], list(PROFILE_NAMES))
         self.assertTrue(all(record["tier"] == "production" for record in records))
+
+    def test_launcher_lists_every_production_profile(self) -> None:
+        result = subprocess.run(
+            [ROOT / "run", "launcher", "list"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        for name in PROFILE_NAMES:
+            self.assertIn(name, result.stdout)
+        self.assertIn("MAX CONTEXT", result.stdout)
+
+    def test_launcher_start_never_replaces_a_running_profile(self) -> None:
+        state = {
+            "profile": "glm53-flash",
+            "url": "http://127.0.0.1:8000",
+        }
+        with patch("r9700.launcher.managed_state", return_value=state):
+            with self.assertRaisesRegex(
+                ConfigurationError, "launcher switch qwen38-flash"
+            ):
+                launcher.start("qwen38-flash")
+
+    def test_launcher_dry_run_uses_persistent_lifecycle_script(self) -> None:
+        with (
+            patch("r9700.launcher.managed_state", return_value=None),
+            patch("r9700.launcher.subprocess.run") as run,
+        ):
+            run.return_value.returncode = 0
+            launcher.start("deepseek-v4-flash", dry_run=True)
+
+        command = run.call_args.args[0]
+        self.assertEqual(Path(command[0]), launcher.START_SCRIPT)
+        self.assertEqual(command[1:3], ["--profile", "deepseek-v4-flash"])
+        self.assertIn("--dry-run", command)
+
+    def test_launcher_switch_stops_before_starting_another_profile(self) -> None:
+        state = {"profile": "glm53-flash"}
+        with (
+            patch("r9700.launcher.managed_state", return_value=state),
+            patch("r9700.launcher.subprocess.run") as run,
+        ):
+            run.return_value.returncode = 0
+            launcher.switch("qwen38-flash")
+
+        commands = [call.args[0] for call in run.call_args_list]
+        self.assertEqual(Path(commands[0][0]), launcher.STOP_SCRIPT)
+        self.assertEqual(Path(commands[1][0]), launcher.START_SCRIPT)
+        self.assertEqual(commands[1][1:3], ["--profile", "qwen38-flash"])
 
     def test_shared_recipe_root_preserves_recipe_boundaries(self) -> None:
         shared = Path("/tmp/r9700-shared-recipes")

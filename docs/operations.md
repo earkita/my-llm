@@ -38,6 +38,25 @@ oraz SHA-256.
 
 ## Start i stop
 
+Najprościej użyć launchera:
+
+```bash
+./run launcher                         # interaktywne menu
+./run launcher list
+./run launcher start qwen38-flash
+./run launcher switch deepseek-v4-flash
+./run launcher status
+./run launcher logs --follow
+./run launcher stop
+```
+
+`start` nie zastępuje aktywnego modelu. `switch` jest jawną operacją zmiany:
+najpierw wykonuje bezpieczny stop, a dopiero potem start wybranego profilu.
+Do podglądu bez zmian stanu służy `--dry-run` przy `start`, `switch` i `stop`.
+
+Launcher używa poniższych skryptów cyklu życia. Można je nadal wywołać
+bezpośrednio:
+
 Najpierw upewnij się, że inny runtime nie jest aktywny:
 
 ```bash

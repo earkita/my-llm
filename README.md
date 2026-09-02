@@ -38,6 +38,14 @@ commity, obrazy patchy i artefakty nadal są weryfikowane przed startem.
 ## Użycie
 
 ```bash
+./run launcher
+./run launcher list
+./run launcher start glm53-flash
+./run launcher switch qwen38-flash
+./run launcher status
+./run launcher logs --follow
+./run launcher stop
+
 ./run profiles list
 ./run profiles show glm53-flash
 
@@ -48,6 +56,12 @@ skills/start-r9700-runtime/scripts/start-runtime.sh --profile glm53-flash
 ./run service status
 skills/stop-r9700-runtime/scripts/stop-runtime.sh
 ```
+
+`./run launcher` otwiera prosty interaktywny wybór modeli. Te same operacje są
+dostępne jako podkomendy do skryptów i automatyzacji. `start` nigdy nie
+zastępuje działającego modelu; zmiana wymaga jawnego `switch` albo wcześniejszego
+`stop`. Start korzysta z trwałej jednostki użytkownika, sprawdza host i limit
+mocy GPU, a następnie czeka na gotowość API.
 
 Pełny stack z LiteLLM i ustawieniami Claude Code:
 

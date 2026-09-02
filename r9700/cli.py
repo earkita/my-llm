@@ -6,7 +6,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import api, benchmark as benchmark_module, doctor as doctor_module, proxy
+from . import (
+    api,
+    benchmark as benchmark_module,
+    doctor as doctor_module,
+    launcher,
+    proxy,
+)
 from .config import (
     ConfigurationError,
     DEFAULT_PROFILE,
@@ -37,6 +43,14 @@ def _common_profile(parser: argparse.ArgumentParser) -> None:
         default=DEFAULT_PROFILE,
         help="self-contained profile from profiles/production",
     )
+
+
+def _launcher_start_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("profile", nargs="?", default=DEFAULT_PROFILE)
+    parser.add_argument("--host")
+    parser.add_argument("--port", type=int)
+    parser.add_argument("--ready-timeout", type=int, default=900)
+    parser.add_argument("--dry-run", action="store_true")
 
 
 def _tests(args: argparse.Namespace) -> None:
@@ -203,6 +217,30 @@ def parser() -> argparse.ArgumentParser:
     profiles_show = profiles_commands.add_parser("show")
     profiles_show.add_argument("name")
 
+    launcher_parser = commands.add_parser(
+        "launcher", help="interactively select and safely manage a production model"
+    )
+    launcher_commands = launcher_parser.add_subparsers(dest="launcher_command")
+    launcher_commands.add_parser("list", help="show launchable production models")
+    launcher_commands.add_parser("status", help="show runtime and unit state")
+    launcher_start = launcher_commands.add_parser(
+        "start", help="start one model without replacing a running model"
+    )
+    _launcher_start_options(launcher_start)
+    launcher_switch = launcher_commands.add_parser(
+        "switch", help="explicitly stop the current model and start another"
+    )
+    _launcher_start_options(launcher_switch)
+    launcher_switch.add_argument("--stop-timeout", type=int)
+    launcher_stop = launcher_commands.add_parser(
+        "stop", help="gracefully stop the current model"
+    )
+    launcher_stop.add_argument("--timeout", type=int)
+    launcher_stop.add_argument("--dry-run", action="store_true")
+    launcher_logs = launcher_commands.add_parser("logs", help="show runtime logs")
+    launcher_logs.add_argument("--follow", action="store_true")
+    launcher_logs.add_argument("--lines", type=int, default=100)
+
     model_parser = commands.add_parser("model", help="manage checkpoint data")
     model_commands = model_parser.add_subparsers(dest="model_command", required=True)
     for action in ("adopt", "download", "verify"):
@@ -325,6 +363,34 @@ def main(argv: list[str] | None = None) -> int:
                             f"{profile['tier']:<10} {profile['status']:<24} "
                             f"{profile['name']}"
                         )
+        elif args.command == "launcher":
+            if args.launcher_command is None:
+                launcher.interactive()
+            elif args.launcher_command == "list":
+                launcher.list_profiles()
+            elif args.launcher_command == "status":
+                launcher.status()
+            elif args.launcher_command == "start":
+                launcher.start(
+                    args.profile,
+                    host=args.host,
+                    port=args.port,
+                    ready_timeout=args.ready_timeout,
+                    dry_run=args.dry_run,
+                )
+            elif args.launcher_command == "switch":
+                launcher.switch(
+                    args.profile,
+                    host=args.host,
+                    port=args.port,
+                    ready_timeout=args.ready_timeout,
+                    stop_timeout=args.stop_timeout,
+                    dry_run=args.dry_run,
+                )
+            elif args.launcher_command == "stop":
+                launcher.stop(timeout=args.timeout, dry_run=args.dry_run)
+            else:
+                launcher.logs(follow=args.follow, lines=args.lines)
         elif args.command == "model":
             if args.model_command == "download":
                 download_model(args.name, directory=args.directory, dry_run=args.dry_run)
