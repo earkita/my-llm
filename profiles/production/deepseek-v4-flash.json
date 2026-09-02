@@ -51,17 +51,17 @@
       0,
       1,
       2,
-      6,
       3,
-      7
+      7,
+      4
     ],
     "gpu_bdfs": [
+      "0000:e3:00.0",
+      "0000:c3:00.0",
+      "0000:c6:00.0",
       "0000:03:00.0",
       "0000:23:00.0",
-      "0000:c3:00.0",
-      "0000:e3:00.0",
-      "0000:c6:00.0",
-      "0000:e6:00.0"
+      "0000:06:00.0"
     ],
     "parallel": {
       "tensor": 1,
@@ -143,74 +143,45 @@
       "VLLM_DSPARK_SKIP_REDUNDANT_HIDDEN_COPY": "1"
     },
     "hardware_topology": {
-      "captured_on": "2026-08-21",
+      "captured_on": "2026-09-02",
       "motherboard": "ASUS Pro WS WRX90E-SAGE SE",
-      "tp_pairs": [
-        [
-          0,
-          1
-        ],
-        [
-          2,
-          6
-        ],
-        [
-          3,
-          4
-        ],
-        [
-          5,
-          7
-        ]
-      ],
+      "note": "Post-relocation fast-first PP order; five PCIe 5 x16 paths followed by HIP 4 on a Gen3 x4 upstream segment for the final four-layer stage.",
       "devices": [
         {
           "rocm_device": 0,
-          "pci_bdf": "0000:03:00.0",
-          "effective_generation": 5,
-          "effective_width": 16
-        },
-        {
-          "rocm_device": 1,
-          "pci_bdf": "0000:23:00.0",
-          "effective_generation": 5,
-          "effective_width": 16
-        },
-        {
-          "rocm_device": 2,
-          "pci_bdf": "0000:c3:00.0",
-          "effective_generation": 5,
-          "effective_width": 16
-        },
-        {
-          "rocm_device": 3,
-          "pci_bdf": "0000:c6:00.0",
-          "effective_generation": 4,
-          "effective_width": 4
-        },
-        {
-          "rocm_device": 4,
-          "pci_bdf": "0000:c9:00.0",
-          "effective_generation": 4,
-          "effective_width": 4
-        },
-        {
-          "rocm_device": 5,
-          "pci_bdf": "0000:cc:00.0",
-          "effective_generation": 4,
-          "effective_width": 4
-        },
-        {
-          "rocm_device": 6,
           "pci_bdf": "0000:e3:00.0",
           "effective_generation": 5,
           "effective_width": 16
         },
         {
-          "rocm_device": 7,
-          "pci_bdf": "0000:e6:00.0",
+          "rocm_device": 1,
+          "pci_bdf": "0000:c3:00.0",
           "effective_generation": 5,
-          "effective_width": 8
+          "effective_width": 16
+        },
+        {
+          "rocm_device": 2,
+          "pci_bdf": "0000:c6:00.0",
+          "effective_generation": 5,
+          "effective_width": 16
+        },
+        {
+          "rocm_device": 3,
+          "pci_bdf": "0000:03:00.0",
+          "effective_generation": 5,
+          "effective_width": 16
+        },
+        {
+          "rocm_device": 7,
+          "pci_bdf": "0000:23:00.0",
+          "effective_generation": 5,
+          "effective_width": 16
+        },
+        {
+          "rocm_device": 4,
+          "pci_bdf": "0000:06:00.0",
+          "effective_generation": 3,
+          "effective_width": 4
         }
       ]
     }
@@ -245,6 +216,6 @@
   "verification": {
     "scope": "production",
     "model_max_context": 1048576,
-    "notes": "Exact-boundary 1M single-session profile retained from the verified source repository."
+    "notes": "Exact-boundary 1M evidence predates the card relocation; the current BDF order requires separate validation, with the new short smoke benchmark documented in summary.md."
   }
 }

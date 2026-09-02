@@ -31,6 +31,10 @@ cp .env.example .env
 Przed uruchomieniem proxy ustaw własny losowy `LITELLM_MASTER_KEY` w `.env`;
 kontroler nie ma wbudowanego klucza domyślnego.
 
+Jeżeli identyczne, już zatestowane recepty znajdują się w innym checkoutcie,
+można wskazać ich katalog przez `R9700_RECIPE_ROOT` w `.env`. Manifesty,
+commity, obrazy patchy i artefakty nadal są weryfikowane przed startem.
+
 ## Użycie
 
 ```bash

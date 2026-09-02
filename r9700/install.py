@@ -468,7 +468,8 @@ def _install_vllm(
         run(
             [
                 python,
-                ROOT / "run",
+                "-m",
+                "r9700.cli",
                 "test",
                 "runtime",
                 "--profile",

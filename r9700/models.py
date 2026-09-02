@@ -188,7 +188,14 @@ def verify_model(model_name: str, directory: str | None = None) -> dict:
     manifest_path = destination / ".model-source.json"
     if not manifest_path.is_file():
         raise ConfigurationError(f"model source manifest is absent: {manifest_path}")
-    payload = json.loads(manifest_path.read_text())
+    try:
+        payload = json.loads(manifest_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ConfigurationError(
+            f"model source manifest is invalid: {manifest_path}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise ConfigurationError(f"model source manifest is invalid: {manifest_path}")
     if (payload.get("repository"), payload.get("revision")) != (
         model["repository"],
         model["revision"],
@@ -199,6 +206,14 @@ def verify_model(model_name: str, directory: str | None = None) -> dict:
         accepted_profile_hashes.add(model["source_profile_sha256"])
     if payload.get("profile_sha256") not in accepted_profile_hashes:
         raise ConfigurationError("model source manifest belongs to another profile")
+    from .model_worker import validate
+
+    try:
+        checkpoint = validate(model, destination)
+    except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
+        raise ConfigurationError(f"model checkpoint validation failed: {exc}") from exc
+    if payload.get("checkpoint") != checkpoint:
+        raise ConfigurationError("model checkpoint differs from its source manifest")
     _verify_conversion(model, destination)
     payload["auxiliary_artifacts"] = _verify_auxiliary_artifacts(model)
     return payload

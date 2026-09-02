@@ -80,6 +80,15 @@ def _validate_model(profile: dict[str, Any], path: Path) -> None:
         raise ConfigurationError(
             f"source_profile_sha256 must be a 64-character SHA-256: {path}"
         )
+    checkpoint_weight_bytes = profile.get("checkpoint_weight_bytes")
+    if checkpoint_weight_bytes is not None and (
+        not isinstance(checkpoint_weight_bytes, int)
+        or isinstance(checkpoint_weight_bytes, bool)
+        or checkpoint_weight_bytes < 1
+    ):
+        raise ConfigurationError(
+            f"checkpoint_weight_bytes must be a positive integer: {path}"
+        )
     auxiliary_artifacts = profile.get("auxiliary_artifacts", [])
     if not isinstance(auxiliary_artifacts, list):
         raise ConfigurationError(f"auxiliary_artifacts must be a list: {path}")

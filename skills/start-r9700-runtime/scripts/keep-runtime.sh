@@ -16,17 +16,25 @@ stopping=0
 stop_managed_service() {
   ((stopping == 0)) || return
   stopping=1
-  "$python" "$repo_root/run" service stop --timeout 180 || true
+  "$repo_root/run" service stop --timeout 180 || true
   exit 0
 }
 trap stop_managed_service INT TERM
 
 cd -- "$repo_root"
-"$python" "$repo_root/run" service start "$@" --wait
+"$repo_root/run" service start "$@" --wait
 
-while "$python" "$repo_root/run" service status >/dev/null 2>&1; do
+while "$repo_root/run" service status >/dev/null 2>&1; do
   sleep 5 &
   wait $!
+done
+
+for ((attempt = 0; attempt < 10; attempt++)); do
+  if [[ ! -e "$repo_root/.runtime/service.json" ]]; then
+    printf '%s\n' 'managed runtime stopped cleanly; persistent keeper is stopping'
+    exit 0
+  fi
+  sleep 0.2
 done
 
 printf '%s\n' 'managed runtime exited; persistent keeper is stopping' >&2

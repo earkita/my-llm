@@ -59,21 +59,21 @@
       0,
       1,
       2,
-      6,
       3,
+      7,
       4,
       5,
-      7
+      6
     ],
     "gpu_bdfs": [
+      "0000:e3:00.0",
+      "0000:c3:00.0",
+      "0000:c6:00.0",
       "0000:03:00.0",
       "0000:23:00.0",
-      "0000:c3:00.0",
-      "0000:e3:00.0",
-      "0000:c6:00.0",
-      "0000:c9:00.0",
-      "0000:cc:00.0",
-      "0000:e6:00.0"
+      "0000:06:00.0",
+      "0000:09:00.0",
+      "0000:0c:00.0"
     ],
     "parallel": {
       "tensor": 8,
@@ -139,9 +139,9 @@
       "ROCBLAS_USE_HIPBLASLT": "0"
     },
     "hardware_topology": {
-      "captured_on": "2026-08-28",
+      "captured_on": "2026-09-02",
       "motherboard": "ASUS Pro WS WRX90E-SAGE SE",
-      "note": "TP8 exposes only the eight R9700 devices; the mixed-host source guard excludes the RTX 3080"
+      "note": "Post-relocation fast-first TP8 order 0,1,2,3,7,4,5,6; HIP 4,5,6 traverse Gen3 x4 upstream segments, and the mixed-host source guard excludes the RTX 3090."
     }
   },
   "stack": {
@@ -171,6 +171,6 @@
   "verification": {
     "scope": "production",
     "verified_context": 262144,
-    "notes": "Cache-safe TP8/EP8 MTP2 runtime retained from the verified source repository."
+    "notes": "Cache-safe TP8/EP8 MTP2 configuration is retained; the 262K evidence predates the card relocation, and the new short smoke benchmark is documented in summary.md."
   }
 }

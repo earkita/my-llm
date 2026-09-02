@@ -66,7 +66,7 @@ command=(
   "${keeper[@]}"
 )
 power_check=("$python" "$script_dir/check-power-cap.py" --watts "$required_power_cap_w")
-host_check=("$python" "$repo_root/run" doctor --profile "$profile")
+host_check=("$repo_root/run" doctor --profile "$profile")
 
 if ((dry_run)); then
   printf '%q ' "${host_check[@]}"
@@ -88,7 +88,7 @@ fi
 "${command[@]}"
 deadline=$((SECONDS + ready_timeout))
 while ((SECONDS < deadline)); do
-  status=$("$python" ./run service status 2>&1) && {
+  status=$(./run service status 2>&1) && {
     printf '%s unit=%s\n' "$status" "$unit"
     exit 0
   }

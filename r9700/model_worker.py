@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import struct
 from datetime import datetime
 from pathlib import Path
 
@@ -16,6 +17,39 @@ def sha256_file(path: Path) -> str:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def safetensors_payload_bytes(path: Path) -> int:
+    """Read the safetensors header and return tensor data bytes, not file bytes."""
+    size = path.stat().st_size
+    with path.open("rb") as stream:
+        prefix = stream.read(8)
+        if len(prefix) != 8:
+            raise RuntimeError(f"invalid safetensors header: {path}")
+        header_size = struct.unpack("<Q", prefix)[0]
+        if header_size < 2 or header_size > size - 8:
+            raise RuntimeError(f"invalid safetensors header size: {path}")
+        try:
+            header = json.loads(stream.read(header_size))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"invalid safetensors header JSON: {path}") from exc
+    if not isinstance(header, dict):
+        raise RuntimeError(f"invalid safetensors header object: {path}")
+    data_size = size - 8 - header_size
+    total = 0
+    for name, metadata in header.items():
+        if name == "__metadata__":
+            continue
+        offsets = metadata.get("data_offsets") if isinstance(metadata, dict) else None
+        if not (
+            isinstance(offsets, list)
+            and len(offsets) == 2
+            and all(isinstance(value, int) for value in offsets)
+            and 0 <= offsets[0] <= offsets[1] <= data_size
+        ):
+            raise RuntimeError(f"invalid safetensors data offsets: {path}: {name}")
+        total += offsets[1] - offsets[0]
+    return total
 
 
 def validate(model: dict, destination: Path) -> dict:
@@ -59,6 +93,19 @@ def validate(model: dict, destination: Path) -> dict:
                 f"{actual_hash} != {expected_hash}"
             )
     sizes = {name: (destination / name).stat().st_size for name in shards}
+    expected_weight_bytes = model.get("checkpoint_weight_bytes")
+    if expected_weight_bytes is not None:
+        if all(Path(name).suffix == ".safetensors" for name in shards):
+            actual_weight_bytes = sum(
+                safetensors_payload_bytes(destination / name) for name in shards
+            )
+        else:
+            actual_weight_bytes = sum(sizes.values())
+        if actual_weight_bytes != int(expected_weight_bytes):
+            raise RuntimeError(
+                "checkpoint tensor bytes differ: "
+                f"{actual_weight_bytes} != {expected_weight_bytes}"
+            )
     return {
         "index": index_path.name if index_path.is_file() else None,
         "index_sha256": sha256_file(index_path) if index_path.is_file() else None,

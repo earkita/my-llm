@@ -13,6 +13,7 @@ from ..config import ConfigurationError, ROOT, load_json
 from ..manifest import (
     default_recipe_name,
     recipe_install_path,
+    recipe_artifact_path,
     recipe_manifest,
     recipe_manifest_path,
     sha256_file,
@@ -79,9 +80,9 @@ def _verify_patch_assets(spec: dict[str, Any]) -> None:
             )
 
 
-def _prepare_source(spec: dict[str, Any]) -> Path:
+def _prepare_source(spec: dict[str, Any], recipe_name: str) -> Path:
     _verify_patch_assets(spec)
-    source = ROOT / spec["source_directory"]
+    source = recipe_artifact_path(recipe_name, spec["source_directory"])
     source.mkdir(parents=True, exist_ok=True)
     if not (source / ".git").exists():
         if any(source.iterdir()):
@@ -174,9 +175,9 @@ def install(
     for executable in ("git", "cmake", "ninja"):
         if shutil.which(executable) is None:
             raise ConfigurationError(f"required build tool is absent: {executable}")
-    source = _prepare_source(spec)
-    build = ROOT / spec["build_directory"]
-    binary = ROOT / spec["binary"]
+    source = _prepare_source(spec, selected)
+    build = recipe_artifact_path(selected, spec["build_directory"])
+    binary = recipe_artifact_path(selected, spec["binary"])
     rocm_home = rocm_root(recipe_name=selected)
     env = os.environ.copy()
     env.update(
@@ -232,6 +233,7 @@ def install(
         for path in sorted(binary.parent.glob("*.so*"))
         if path.is_file() and not path.is_symlink()
     )
+    recipe_root = recipe_install_path(selected).parent
     payload = {
         "schema_version": 1,
         "generated_at": datetime.now().astimezone().isoformat(),
@@ -240,7 +242,13 @@ def install(
         "source": _source_identity(source),
         "binary": str(binary),
         "artifact_sha256": {
-            str(path.relative_to(ROOT)): _sha256(path) for path in artifacts
+            str(
+                Path(".runtime")
+                / "recipes"
+                / selected
+                / path.relative_to(recipe_root)
+            ): _sha256(path)
+            for path in artifacts
         },
         "version": version,
     }
@@ -255,8 +263,8 @@ def install(
 def verify_install(recipe_name: str | None = None) -> dict[str, Any]:
     selected = _selected_recipe(recipe_name)
     spec = manifest(selected)
-    binary = ROOT / spec["binary"]
-    source = ROOT / spec["source_directory"]
+    binary = recipe_artifact_path(selected, spec["binary"])
+    source = recipe_artifact_path(selected, spec["source_directory"])
     install_path = recipe_install_path(selected)
     _verify_patch_assets(spec)
     if not install_path.is_file():
@@ -286,9 +294,11 @@ def verify_install(recipe_name: str | None = None) -> dict[str, Any]:
     if not isinstance(artifact_hashes, dict) or not artifact_hashes:
         raise ConfigurationError("llama.cpp artifact attestation is incomplete")
     for relative, expected in artifact_hashes.items():
-        path = ROOT / relative
+        path = recipe_artifact_path(selected, relative)
         if not path.is_file() or _sha256(path) != expected:
-            raise ConfigurationError(f"llama.cpp artifact identity is stale: {relative}")
+            raise ConfigurationError(
+                f"llama.cpp artifact identity is stale: {relative}"
+            )
     return installed
 
 
@@ -315,7 +325,7 @@ def command(
     model_path = model_directory / model_file
     spec = manifest(runtime["recipe"])
     args = [
-        str(ROOT / spec["binary"]),
+        str(recipe_artifact_path(runtime["recipe"], spec["binary"])),
         "--model",
         str(model_path),
         "--alias",

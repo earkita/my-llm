@@ -2,13 +2,24 @@ from __future__ import annotations
 
 import json
 import re
+import struct
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from r9700.backends import build_command
+from r9700.backends.vllm import environment as vllm_environment
 from r9700.config import ConfigurationError, ROOT, load_profile
-from r9700.manifest import recipe_names, sha256_file, verify_assets
+from r9700.manifest import (
+    recipe_artifact_path,
+    recipe_names,
+    sha256_file,
+    verify_assets,
+)
+from r9700.model_worker import validate as validate_checkpoint
+from r9700.models import verify_model
 from r9700.service import start
 
 
@@ -139,6 +150,48 @@ class ProductionProfileTests(unittest.TestCase):
                 rendered = " ".join(command)
                 for value in expected:
                     self.assertIn(value, rendered)
+                if profile["runtime"].get("backend", "vllm") == "vllm":
+                    self.assertEqual(
+                        command[1:3], ["-m", "r9700.vllm_entrypoint"]
+                    )
+
+    def test_vllm_workers_receive_the_rocm_triton_bootstrap(self) -> None:
+        runtime = {
+            "recipe": "fixture",
+            "transport": {
+                "p2p_disable": 1,
+                "shm_disable": 0,
+                "socket_ifname": "lo",
+                "runtime_connect": 1,
+                "hsa_legacy_ipc": 0,
+            },
+            "shutdown": {
+                "worker_timeout_seconds": 60,
+                "process_grace_seconds": 60,
+            },
+            "parallel": {},
+            "environment": {},
+        }
+        with (
+            patch(
+                "r9700.backends.vllm.base_environment",
+                return_value={"PATH": "/bin", "PYTHONPATH": "/existing"},
+            ),
+            patch("r9700.backends.vllm.rocm_root", return_value=Path("/rocm")),
+            patch(
+                "r9700.backends.vllm.recipe_venv",
+                return_value=Path("/recipe/venv"),
+            ),
+            patch("r9700.backends.vllm.visible_devices", return_value=["0"]),
+        ):
+            env = vllm_environment(runtime)
+
+        paths = env["PYTHONPATH"].split(":")
+        self.assertEqual(
+            paths[:2], [str(ROOT / "r9700/vllm_bootstrap"), str(ROOT)]
+        )
+        self.assertEqual(paths[2], "/existing")
+        self.assertTrue((Path(paths[0]) / "sitecustomize.py").is_file())
 
     def test_service_rejects_cross_profile_composition(self) -> None:
         with self.assertRaisesRegex(
@@ -169,6 +222,89 @@ class ProductionProfileTests(unittest.TestCase):
         records = json.loads(result.stdout)
         self.assertEqual([record["name"] for record in records], list(PROFILE_NAMES))
         self.assertTrue(all(record["tier"] == "production" for record in records))
+
+    def test_shared_recipe_root_preserves_recipe_boundaries(self) -> None:
+        shared = Path("/tmp/r9700-shared-recipes")
+        relative = (
+            ".runtime/recipes/vllm-dspark-v0280/venv/bin/python"
+        )
+        with patch.dict(
+            "os.environ", {"R9700_RECIPE_ROOT": str(shared)}, clear=False
+        ):
+            self.assertEqual(
+                recipe_artifact_path("vllm-dspark-v0280", relative),
+                shared / "vllm-dspark-v0280/venv/bin/python",
+            )
+            with self.assertRaisesRegex(
+                ConfigurationError, "recipe artifact path is outside"
+            ):
+                recipe_artifact_path("vllm-dspark-v0280", "/tmp/python")
+
+    def test_model_verification_rechecks_checkpoint_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary)
+            shard = destination / "model-00001.safetensors"
+            shard.write_bytes(b"test checkpoint")
+            model = {
+                "name": "fixture",
+                "repository": "example/model",
+                "revision": "0" * 40,
+                "expected_shards": 1,
+                "weight_pattern": "*.safetensors",
+                "required_files": [],
+                "_sha256": "1" * 64,
+            }
+            source = {
+                "repository": model["repository"],
+                "revision": model["revision"],
+                "profile_sha256": model["_sha256"],
+                "checkpoint": validate_checkpoint(model, destination),
+            }
+            (destination / ".model-source.json").write_text(
+                json.dumps(source)
+            )
+            with (
+                patch("r9700.models.load_model", return_value=model),
+                patch(
+                    "r9700.models.resolve_model_directory",
+                    return_value=destination,
+                ),
+            ):
+                verify_model("fixture")
+                shard.unlink()
+                with self.assertRaisesRegex(
+                    ConfigurationError, "checkpoint validation failed"
+                ):
+                    verify_model("fixture")
+
+    def test_safetensors_weight_bytes_exclude_container_headers(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary)
+            header = json.dumps(
+                {
+                    "weight": {
+                        "dtype": "F32",
+                        "shape": [1],
+                        "data_offsets": [0, 4],
+                    }
+                },
+                separators=(",", ":"),
+            ).encode()
+            shard = destination / "model.safetensors"
+            shard.write_bytes(struct.pack("<Q", len(header)) + header + b"data")
+            model = {
+                "expected_shards": 1,
+                "weight_pattern": "*.safetensors",
+                "required_files": [],
+                "checkpoint_weight_bytes": 4,
+            }
+            self.assertEqual(
+                validate_checkpoint(model, destination)["weight_bytes"],
+                shard.stat().st_size,
+            )
+            model["checkpoint_weight_bytes"] = 5
+            with self.assertRaisesRegex(RuntimeError, "tensor bytes differ"):
+                validate_checkpoint(model, destination)
 
 
 if __name__ == "__main__":

@@ -59,7 +59,7 @@ def _tests(args: argparse.Namespace) -> None:
             expected = venv / "bin" / "python"
         if backend == "vllm" and Path(sys.prefix).resolve() != venv.resolve():
             subprocess.run(
-                [expected, str(ROOT / "run"), "test", "runtime", "--profile", profile],
+                [expected, "-m", "r9700.cli", "test", "runtime", "--profile", profile],
                 cwd=ROOT,
                 check=True,
             )

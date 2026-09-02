@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
-from ..config import load_model, resolve_model_directory
+from ..config import ROOT, load_model, resolve_model_directory
 from ..manifest import recipe_venv
 from .common import base_environment, rocm_root, visible_devices
 
@@ -16,10 +17,15 @@ def environment(runtime: dict[str, Any]) -> dict[str, str]:
     devices = visible_devices(runtime)
     transport = runtime["transport"]
     shutdown = runtime["shutdown"]
+    bootstrap_path = ROOT / "r9700" / "vllm_bootstrap"
+    python_paths = [str(bootstrap_path), str(ROOT)]
+    if env.get("PYTHONPATH"):
+        python_paths.append(env["PYTHONPATH"])
     env.update(
         {
             "PATH": f"{rocm_home / 'bin'}:{venv / 'bin'}:{env.get('PATH', '')}",
             "TRITON_DEFAULT_BACKEND": "amd",
+            "PYTHONPATH": os.pathsep.join(python_paths),
             "HIP_VISIBLE_DEVICES": ",".join(devices),
             "NCCL_P2P_DISABLE": str(transport["p2p_disable"]),
             "NCCL_SHM_DISABLE": str(transport["shm_disable"]),
@@ -56,7 +62,9 @@ def command(
     scheduler = runtime["scheduler"]
     shutdown = runtime["shutdown"]
     args = [
-        str(recipe_venv(runtime["recipe"]) / "bin" / "vllm"),
+        str(recipe_venv(runtime["recipe"]) / "bin" / "python"),
+        "-m",
+        "r9700.vllm_entrypoint",
         "serve",
         str(model_directory),
         "--host",

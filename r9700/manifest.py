@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .config import ConfigurationError, ROOT, load_json
+from .config import ConfigurationError, ROOT, load_json, read_dotenv
 
 
 RECIPES_PATH = ROOT / "manifest" / "recipes.json"
@@ -18,6 +18,7 @@ DEFAULT_INSTALL_PATH = ROOT / ".runtime" / "install.json"
 # Compatibility names for callers that address the original DeepSeek recipe.
 MANIFEST_PATH = DEFAULT_MANIFEST_PATH
 INSTALL_PATH = DEFAULT_INSTALL_PATH
+RECIPE_PATH_PREFIX = Path(".runtime") / "recipes"
 
 
 def sha256_file(path: Path) -> str:
@@ -87,13 +88,49 @@ def recipe_manifest_path(name: str) -> Path:
     return path
 
 
+def recipe_storage_root() -> Path:
+    """Return the local or explicitly shared immutable recipe directory."""
+    configured = os.environ.get("R9700_RECIPE_ROOT") or read_dotenv().get(
+        "R9700_RECIPE_ROOT"
+    )
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return (ROOT / RECIPE_PATH_PREFIX).resolve()
+
+
 def recipe_install_path(name: str) -> Path:
-    path = (ROOT / recipe_record(name)["install_path"]).resolve()
+    relative = Path(recipe_record(name)["install_path"])
     try:
-        path.relative_to(ROOT / ".runtime")
+        suffix = relative.relative_to(RECIPE_PATH_PREFIX)
     except ValueError as exc:
         raise ConfigurationError(
-            f"runtime recipe install path leaves .runtime: {name}"
+            f"runtime recipe install path leaves .runtime/recipes: {name}"
+        ) from exc
+    root = recipe_storage_root()
+    path = (root / suffix).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError as exc:
+        raise ConfigurationError(f"runtime recipe leaves recipe root: {name}") from exc
+    return path
+
+
+def recipe_artifact_path(name: str, relative: str | os.PathLike[str]) -> Path:
+    """Resolve a manifest path belonging to one immutable recipe."""
+    expected_prefix = RECIPE_PATH_PREFIX / name
+    try:
+        suffix = Path(relative).relative_to(expected_prefix)
+    except ValueError as exc:
+        raise ConfigurationError(
+            f"recipe artifact path is outside {expected_prefix}: {relative}"
+        ) from exc
+    recipe_root = recipe_install_path(name).parent.resolve()
+    path = (recipe_root / suffix).resolve()
+    try:
+        path.relative_to(recipe_root)
+    except ValueError as exc:
+        raise ConfigurationError(
+            f"recipe artifact leaves recipe root: {relative}"
         ) from exc
     return path
 
@@ -124,22 +161,12 @@ def manifest_sha256(recipe_name: str | None = None) -> str:
 
 def recipe_venv(name: str) -> Path:
     manifest = runtime_manifest(name)
-    path = (ROOT / manifest["environment"]["venv"]).resolve()
-    try:
-        path.relative_to(ROOT / ".runtime")
-    except ValueError as exc:
-        raise ConfigurationError(f"recipe venv leaves .runtime: {name}") from exc
-    return path
+    return recipe_artifact_path(name, manifest["environment"]["venv"])
 
 
 def recipe_source_root(name: str) -> Path:
     manifest = runtime_manifest(name)
-    path = (ROOT / manifest["environment"]["source_root"]).resolve()
-    try:
-        path.relative_to(ROOT / ".runtime")
-    except ValueError as exc:
-        raise ConfigurationError(f"recipe source root leaves .runtime: {name}") from exc
-    return path
+    return recipe_artifact_path(name, manifest["environment"]["source_root"])
 
 
 def _constraint_key(line: str) -> str | None:
