@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import ConfigurationError, ROOT, load_model, read_dotenv
-from .service import managed_state
+from .service import managed_state as runtime_managed_state
 
 
 PROXY_ROOT = ROOT / ".runtime" / "litellm"
@@ -326,7 +326,7 @@ def test(*, timeout: float = 120) -> None:
         raise ConfigurationError("LiteLLM proxy is running with a stale config")
     dotenv = read_dotenv()
     key = _master_key(dotenv)
-    runtime_state = managed_state()
+    runtime_state = runtime_managed_state()
     active_profile = runtime_state.get("profile")
     if not isinstance(active_profile, str) or not active_profile:
         raise ConfigurationError(

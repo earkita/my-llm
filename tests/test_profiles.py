@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from r9700 import launcher
+from r9700 import launcher, proxy
 from r9700.backends import build_command
 from r9700.backends.vllm import environment as vllm_environment
 from r9700.config import ConfigurationError, ROOT, load_profile
@@ -327,6 +327,42 @@ class ProductionProfileTests(unittest.TestCase):
 
         wait.assert_called_once_with(timeout=900)
         self.assertEqual(Path(run.call_args.args[0][0]), launcher.STACK_SCRIPT)
+
+    def test_proxy_test_reads_the_inference_runtime_state(self) -> None:
+        proxy_state = {
+            "pid": 1234,
+            "probe_url": "http://127.0.0.1:4000",
+        }
+        runtime_state = {"profile": "qwen38-flash"}
+        with (
+            patch("r9700.proxy._state", return_value=proxy_state),
+            patch("r9700.proxy._identity_alive", return_value=True),
+            patch("r9700.proxy._config_matches", return_value=True),
+            patch(
+                "r9700.proxy.runtime_managed_state",
+                return_value=runtime_state,
+            ) as managed_runtime,
+            patch(
+                "r9700.proxy.load_model",
+                return_value={"served_name": "qwen3.8-flash-next-fp8"},
+            ),
+            patch(
+                "r9700.proxy._get",
+                return_value={
+                    "data": [{"id": "qwen3.8-flash-next-fp8"}],
+                },
+            ),
+            patch(
+                "r9700.proxy._post",
+                return_value={"choices": [{"message": {"content": "OK"}}]},
+            ),
+            patch("r9700.proxy.read_dotenv", return_value={}),
+            patch("r9700.proxy._master_key", return_value="test-key"),
+            patch("builtins.print"),
+        ):
+            proxy.test()
+
+        managed_runtime.assert_called_once_with()
 
     def test_launcher_stack_switch_stops_both_components_first(self) -> None:
         state = {
