@@ -19,7 +19,7 @@ from r9700.config import (
     load_profile,
     load_runtime,
 )
-from r9700.install import _make_venv_entrypoints_relocatable
+from r9700.install import _make_venv_entrypoints_relocatable, install
 from r9700.manifest import (
     recipe_artifact_path,
     recipe_names,
@@ -39,6 +39,19 @@ PROFILE_NAMES = (
 
 
 class ProductionProfileTests(unittest.TestCase):
+    @patch("r9700.install._install_vllm")
+    def test_install_all_skips_backends_without_a_registered_recipe(
+        self, install_vllm
+    ) -> None:
+        install(dry_run=True)
+
+        install_vllm.assert_called_once_with(
+            "vllm_deepseekv4flash_v0.28",
+            dry_run=True,
+            jobs=None,
+            rebuild=False,
+        )
+
     def test_venv_entrypoints_do_not_embed_recipe_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             venv = Path(temporary) / "recipe" / "venv"

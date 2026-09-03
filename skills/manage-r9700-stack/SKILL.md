@@ -21,9 +21,10 @@ Select another complete preset instead of choosing its components separately:
 ./run stack start --preset qwen38-flash
 ```
 
-The GLM preset selects the verified llama.cpp DFlash2 K=7 stack with a 1M
-target context. Qwen
-selects the production-ready vLLM 0.28 cache-safe MTP K=2 alternative.
+The default GLM preset selects the verified vLLM Quark/MXFP4 target-only stack
+with a 32K target context. Pass `--runtime-mode dflash2` to opt into the
+qualified experimental DFlash2 K=7 mode. Qwen selects the production-ready
+vLLM 0.28 cache-safe MTP K=2 alternative.
 
 The script checks that LiteLLM is installed before changing service state. It
 starts the selected model backend first, waits for readiness, then starts and

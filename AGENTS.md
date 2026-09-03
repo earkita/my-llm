@@ -36,7 +36,7 @@ prefixes in patch filenames because manifest order is significant.
 
 Recipe names use `backend_target_version`, for example
 `vllm_deepseekv4flash_v0.28`, `vllm_qwen38flash_pr53896`, and
-`llamacpp_glm53flash_pr27754`. Use lowercase ASCII letters, digits and
+`vllm_glm53flash_v0.28`. Use lowercase ASCII letters, digits and
 underscores; a dot is allowed only in a version such as `v0.28`.
 
 The manifest filename must be `manifest/<recipe-name>.json`, and generated

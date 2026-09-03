@@ -13,6 +13,7 @@ from .manifest import (
     default_recipe_name,
     recipe_constraints_path,
     recipe_install_path,
+    recipe_names,
     recipe_record,
     recipe_source_root,
     recipe_venv,
@@ -296,8 +297,9 @@ def install(
         selected = [recipe_name]
     elif backend == "all":
         selected = [
-            default_recipe_name(backend="vllm"),
-            default_recipe_name(backend="llama-cpp"),
+            default_recipe_name(backend=selected_backend)
+            for selected_backend in ("vllm", "llama-cpp")
+            if recipe_names(backend=selected_backend)
         ]
     else:
         selected = [default_recipe_name(backend=backend)]
