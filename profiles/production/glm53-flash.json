@@ -2,7 +2,7 @@
   "schema_version": 1,
   "name": "glm53-flash",
   "status": "production-ready",
-  "description": "GLM-5.3-Flash Quark MXFP4 MRV2 target on eight R9700 GPUs; DFlash2 is an explicit experimental mode",
+  "description": "GLM-5.3-Flash Quark MXFP4 MRV2 target on eight R9700 GPUs; validated DFlash2 K7 is an explicit experimental mode",
   "model": {
     "schema_version": 1,
     "name": "glm53-flash-quark-mxfp4",
@@ -60,24 +60,24 @@
     "schema_version": 1,
     "name": "glm53-flash-quark-mxfp4-mrv2-8xr9700-tp8-target-32k",
     "status": "production-ready",
-    "recipe": "vllm_glm53flash_pr53906",
+    "recipe": "vllm_glm53flash_v0.28",
     "description": "Qualified GLM-5.3 Quark MXFP4 target-only runtime with MRV2, TP8/EP8, BF16 KV, 32K context, and explicit gfx1201 emulation fallbacks",
     "required_model_family": "glm5next",
     "required_patches": [
       "0001",
       "0002",
       "0003",
-      "0004",
       "0005",
       "0007",
       "0008",
       "0009",
       "0010",
-      "0011",
       "0012",
       "0013",
       "0015",
-      "0016"
+      "0016",
+      "0017",
+      "0018"
     ],
     "gpu_order": [
       0,
@@ -146,9 +146,9 @@
     "linear_backend": "emulation",
     "experimental_modes": {
       "dflash2": {
-        "status": "blocked-upstream-correctness",
+        "status": "experimental-validated",
         "runtime_name": "glm53-flash-quark-mxfp4-mrv2-8xr9700-tp8-dflash2-k7-32k",
-        "reason": "MRV2 DFlash multi-token verification changes greedy target output and accepts almost no draft tokens on this stack; opt in only for diagnostics until vLLM #54928/#49559 and the cross-platform GLM verify defect are resolved.",
+        "reason": "Validated on 8x gfx1201 with coherent API output and non-zero K7 acceptance after the aligned KV layout, Triton sparse verify, kpool ring and invalid-index fixes. Keep explicit until the upstream fixes merge and long-context, concurrency and deterministic losslessness are qualified.",
         "runtime_overrides": {
           "speculative_config": {
             "model_artifact": "dflash2-drafter",
@@ -163,7 +163,7 @@
       "dflash2-k1": {
         "status": "diagnostic-only",
         "runtime_name": "glm53-flash-quark-mxfp4-mrv2-8xr9700-tp8-dflash2-k1-32k",
-        "reason": "Single-draft-token control for separating DFlash proposal quality from wider multi-token verification and rollback behavior.",
+        "reason": "Validated single-draft-token control for separating DFlash proposal quality from wider multi-token verification and rollback behavior; it is not the intended serving configuration.",
         "runtime_overrides": {
           "speculative_config": {
             "model_artifact": "dflash2-drafter",
@@ -178,7 +178,7 @@
       "extract-hidden-states-k1": {
         "status": "diagnostic-only",
         "runtime_name": "glm53-flash-quark-mxfp4-mrv2-8xr9700-tp8-extract-hidden-states-k1-32k",
-        "reason": "Always-accepted target-token control that captures the five DFlash auxiliary states while isolating MRV2 target verification and rollback.",
+        "reason": "Auxiliary-state extraction plumbing control. MRV2 repeats the previous target token as the next draft, so this mode is not expected to achieve high acceptance.",
         "runtime_overrides": {
           "speculative_config": {
             "method": "extract_hidden_states",

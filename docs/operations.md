@@ -87,8 +87,8 @@ Bezpieczne zatrzymanie:
 skills/stop-r9700-runtime/scripts/stop-runtime.sh
 ```
 
-Eksperymentalny DFlash nie jest włączany przez zwykły start. Do odtwarzalnej
-diagnostyki służą jawne tryby:
+Eksperymentalny DFlash nie jest włączany przez zwykły start. Zweryfikowany K7
+oraz kontrolne tryby K1 uruchamia się jawnie:
 
 ```bash
 ./run launcher start glm53-flash --runtime-mode dflash2-k1
@@ -96,8 +96,9 @@ diagnostyki służą jawne tryby:
 ./run launcher start glm53-flash --runtime-mode extract-hidden-states-k1
 ```
 
-Po testach zatrzymaj usługę przed zmianą trybu. Aktualna ścieżka DFlash/MRV2
-nie przechodzi bramki jakości i nie powinna obsługiwać ruchu użytkownika.
+Po testach zatrzymaj usługę przed zmianą trybu. K7 przeszedł bramkę API i
+akceptuje drafty, ale pozostaje eksperymentalny do czasu scalenia poprawek
+upstream oraz testów pełnego kontekstu i współbieżności.
 
 Skrypt startowy wymaga poprawnego limitu mocy i wykonuje host preflight.
 Nie zastępuje działającej usługi. Stop nigdy nie eskaluje do SIGKILL.
@@ -112,6 +113,9 @@ skills/measure-r9700-model/scripts/test-and-benchmark.sh \
   --prompt-tokens 8192 \
   --output-tokens 1024
 ```
+
+Dla jawnego trybu GLM dodaj `--runtime-mode dflash2`; helper przekaże tę samą
+tożsamość trybu do bramki API i benchmarku.
 
 Wyniki trafiają do ignorowanego `logs/`. Test API najpierw sprawdza tożsamość
 zarządzanej usługi, `/health`, `/v1/models`, deklarowany kontekst i dokładne

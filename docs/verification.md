@@ -13,32 +13,38 @@ prefill 1,858.35 tok/s i decode 24.48 tok/s.
 
 ## GLM-5.3-Flash Quark/MXFP4
 
-Aktualny target to `amd/GLM-5.3-Flash-Quark-MXFP4`: 62 shardy safetensors i
-185,066,521,464 bajty tensorów. Działa na ośmiu `gfx1201` przez vLLM
-`glm-release` z MRV2, TP8/EP8, BF16 KV i kontekstem kwalifikacyjnym 32K.
-Target-only przeszedł load, użycie wszystkich GPU, prefill, decode i sześć
-bramek API; odpowiedź chat była spójna.
+Target `amd/GLM-5.3-Flash-Quark-MXFP4` zawiera 62 shardy safetensors i
+185,066,521,464 bajty tensorów. Przetestowany build używa oficjalnego vLLM
+`main` `c7e6e36fa93a5b8cb95b74fa96e4abdf2f0be51d`, już po scaleniu PR #53906,
+oraz MRV2, TP8/EP8, BF16 KV i limitu 32K. Target-only przeszedł load na ośmiu
+`gfx1201`, prefill, decode oraz sześć bramek OpenAI API; odpowiedź była spójna.
 
-Szybki benchmark `256 + 64`, concurrency 1, dwa pomiary po jednym warm-upie:
+DFlash2 K7 jest jawnym trybem eksperymentalnym. Po usunięciu kolizyjnego
+overlay KV oraz dodaniu wyrównanego layoutu, wielotokenowego verify Triton,
+12-elementowego ringa kpool i walidacji indeksów uzyskano:
 
-| TTFT | Prefill | Decode | E2E |
+| Tryb | Próbki | Acceptance | Średnia długość acceptance | Wynik |
+|---|---:|---:|---:|---|
+| DFlash2 K1 | 2 | 52/74 (70.3%) | 1.62-1.80 | spójny tekst, API 6/6 |
+| DFlash2 K7 | 3 | 139/385 (36.1%) | 3.32-3.71 | spójny tekst, wszystkie pozycje K7 akceptowane, API 6/6 |
+
+Ostatni świeży start K7 dał 46/119 (38.7%) zaakceptowanych draftów i średnią
+3.71 tokenu na krok targetu. Benchmark `256 + 128`, concurrency 1, trzy pomiary
+po jednym warm-upie:
+
+| TTFT mean/p95 | Prefill | Decode mean/min | E2E mean/p95 |
 |---:|---:|---:|---:|
-| 0.574 s | 445.74 tok/s | 3.74 tok/s | 17.40 s |
+| 0.573/0.576 s | 446.60 tok/s | 23.63/21.65 tok/s | 5.967/6.373 s |
 
-DFlash2 jest przypięty rewizją i SHA-256, ale pozostaje trybem
-diagnostycznym. Minimalny obraz bliski PR #53906 dał:
+Testy mapowania ringa przeszły 14/14 przypadków CPU i 10/10 wybranych testów
+kerneli na `gfx1201`. Osobny test GPU z PR #55201, obejmujący ujemne i dodatnie
+indeksy poza zakresem ukończonych pooli, przeszedł 1/1.
 
-| Tryb | Zgodny początek z targetem | Acceptance | Wynik |
-|---|---:|---:|---|
-| K=1 | 6 tokenów | 1/62 | rozjazd po rollbacku |
-| K=7 | 3 tokeny | 2/427 | degradacja verify i powtarzany token |
-
-Patch #54163 dotyczący cache między turami pogarszał ten układ: K=1
-rozjeżdżał się już na tokenie zero. Został usunięty, ponieważ prefix cache jest
-wyłączony i nie jest potrzebny do kwalifikacji. Próba przeniesienia poprawki
-FP32 causal-conv z #52905 również nie poprawiła acceptance i została wycofana.
-Pozostały symptom odpowiada niezależnym błędom DFlash/MRV2 oraz GLM
-multi-token target verification; produkcja używa wyłącznie target-only.
+Tryb nie jest domyślny: wymagane #55239 i #55201 są nadal otwarte, #55219 jest
+draftem, a pełny kontekst, concurrency > 1 i deterministyczna losslessness nie
+zostały zakwalifikowane. Target-only sam zmienia hash tokenów między
+identycznymi seeded restartami na tym stosie EP/emulacji, więc równość tokenów
+między restartami jest sygnałem diagnostycznym, a nie jedyną bramką DFlash.
 
 ## Qwen3.8 Flash-Next
 
@@ -50,9 +56,13 @@ TTFT do 2.74 s. Przy 64K MTP2 zaakceptował 696 z 700 draftów i osiągnął
 
 ## Ograniczenia
 
-- Szybkie benchmarki 256+64 są testem regresji, nie testem przepustowości pod
+- Krótkie benchmarki są testem regresji, nie testem przepustowości pod dużym
   współbieżnym obciążeniem.
-- GLM został zakwalifikowany przy 32K; pełny limit checkpointu nie był testowany.
-- DFlash K1/K7 nie przechodzi bramki lossless i nie jest uruchamiany domyślnie.
-- Nie wykonano strojenia FP4BMM; na `gfx1201` stabilność i jakość mają
-  pierwszeństwo przed wydajnością.
+- GLM ma skonfigurowane 32K, lecz pełne żądanie 32K z DFlash nie było testowane.
+- Prefix cache i natywne FP4BMM pozostają wyłączone; na `gfx1201` poprawność ma
+  pierwszeństwo przed tuningiem.
+- Pełny fuzz kernela przeszedł 29/30 przypadków; seed 9 nadal różni się o jeden
+  bajt w skwantowanym KV. Skupione testy ringa i bounds-checku są zielone, a
+  odpowiadającej degradacji E2E nie zaobserwowano.
+- DFlash2 K7 wymaga jawnego `--runtime-mode dflash2` do czasu domknięcia
+  kwalifikacji i scalenia upstreamowych poprawek.

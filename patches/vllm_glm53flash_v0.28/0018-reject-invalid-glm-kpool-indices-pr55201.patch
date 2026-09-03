@@ -1,0 +1,122 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Luca Motz <luca.motz@icloud.com>
+Date: Fri, 4 Sep 2026 00:19:15 +0200
+Subject: [PATCH] [Bugfix] Reject invalid GLM kpool indices
+
+---
+ .../test_kpool_decode_update_batched.py       | 16 ++++++++++++++++
+ .../layers/sparse_attn_indexer_kpool.py       | 19 ++++++++++++++-----
+ .../models/glm5next/amd/ops/kpool_compress.py |  2 +-
+ .../glm5next/nvidia/ops/kpool_compress.py     |  2 +-
+ 4 files changed, 32 insertions(+), 7 deletions(-)
+
+diff --git a/tests/kernels/test_kpool_decode_update_batched.py b/tests/kernels/test_kpool_decode_update_batched.py
+index fb87ce3281..b1e175aa75 100644
+--- a/tests/kernels/test_kpool_decode_update_batched.py
++++ b/tests/kernels/test_kpool_decode_update_batched.py
+@@ -32,12 +32,14 @@ from vllm.platforms import current_platform
+ 
+ if current_platform.is_rocm():
+     from vllm.models.glm5next.amd.ops.kpool_compress import (
++        expand_pools_and_append_tail,
+         kpool_compress_and_write_cache,
+         kpool_decode_update_and_maybe_write_cache_batched,
+         kpool_seed_tail_cache,
+     )
+ else:
+     from vllm.models.glm5next.nvidia.ops.kpool_compress import (
++        expand_pools_and_append_tail,
+         kpool_compress_and_write_cache,
+         kpool_decode_update_and_maybe_write_cache_batched,
+         kpool_seed_tail_cache,
+@@ -52,6 +54,20 @@ FP8_DTYPE = current_platform.fp8_dtype()
+ FP8_MAX = torch.finfo(FP8_DTYPE).max
+ 
+ 
++def test_expand_pools_rejects_ids_outside_completed_pool_count():
++    pool_ids = torch.tensor([[0, 1, -1, -2, 2, 9]], dtype=torch.int64, device="cuda")
++    seq_lens = torch.tensor([10], dtype=torch.int32, device="cuda")
++
++    out = expand_pools_and_append_tail(pool_ids, seq_lens, pool_size=4)
++
++    expected = torch.tensor(
++        [[*range(8), *([-1] * 16), 8, 9, -1]],
++        dtype=torch.int32,
++        device="cuda",
++    )
++    torch.testing.assert_close(out, expected)
++
++
+ def _make_caches():
+     kv = torch.zeros(
+         NUM_BLOCKS, PAGE_SIZE, HEAD_DIM + 4, dtype=torch.uint8, device="cuda"
+diff --git a/vllm/model_executor/layers/sparse_attn_indexer_kpool.py b/vllm/model_executor/layers/sparse_attn_indexer_kpool.py
+index a995bb983f..e47d78928e 100644
+--- a/vllm/model_executor/layers/sparse_attn_indexer_kpool.py
++++ b/vllm/model_executor/layers/sparse_attn_indexer_kpool.py
+@@ -535,8 +535,13 @@ def sparse_attn_indexer_kpool(
+             # expand each pool back to its kpool constituent tokens.
+             select_k = topk_tokens // index_kpool if index_kpool > 1 else topk_tokens
+             if index_kpool > 1:
+-                pool_topk = torch.empty(
+-                    (num_rows, select_k), dtype=torch.int32, device=logits.device
++                # Top-k kernels may leave slots unwritten when a row has fewer
++                # than select_k pools.
++                pool_topk = torch.full(
++                    (num_rows, select_k),
++                    -1,
++                    dtype=torch.int32,
++                    device=logits.device,
+                 )
+                 topk_dst = pool_topk
+             else:
+@@ -581,7 +586,8 @@ def sparse_attn_indexer_kpool(
+                         pool_ids, q_seq, index_kpool
+                     )
+                 else:
+-                    valid = pool_ids >= 0
++                    pool_lens = chunk.cu_seqlen_ke - chunk.cu_seqlen_ks
++                    valid = (pool_ids >= 0) & (pool_ids < pool_lens[:, None])
+                     expanded = kpool_ops.expand_pools_to_tokens(
+                         pool_ids, valid, topk_tokens, index_kpool
+                     )
+@@ -798,8 +804,11 @@ def sparse_attn_indexer_kpool(
+         # then expand each pool back to its kpool tokens.
+         select_k = topk_tokens // index_kpool if index_kpool > 1 else topk_tokens
+         if index_kpool > 1:
+-            pool_topk = torch.empty(
+-                (num_rows, select_k), dtype=torch.int32, device=logits.device
++            pool_topk = torch.full(
++                (num_rows, select_k),
++                -1,
++                dtype=torch.int32,
++                device=logits.device,
+             )
+             topk_dst = pool_topk
+         else:
+diff --git a/vllm/models/glm5next/amd/ops/kpool_compress.py b/vllm/models/glm5next/amd/ops/kpool_compress.py
+index ac5cebbc08..04c7ae5927 100644
+--- a/vllm/models/glm5next/amd/ops/kpool_compress.py
++++ b/vllm/models/glm5next/amd/ops/kpool_compress.py
+@@ -847,7 +847,7 @@ def _expand_pools_and_append_tail_kernel(
+     o = cols % POOL_SIZE
+     pid = tl.load(pool_ids_ptr + row * pid_s0 + g, mask=mask & is_history, other=-1)
+     hist_val = (pid * POOL_SIZE + o).to(tl.int32)
+-    hist_out = tl.where(pid >= 0, hist_val, -1)
++    hist_out = tl.where((pid >= 0) & (pid < pool_len), hist_val, -1)
+ 
+     # Tail region [topk, out_cols): the request's trailing incomplete pool.
+     tail_off = cols - topk
+diff --git a/vllm/models/glm5next/nvidia/ops/kpool_compress.py b/vllm/models/glm5next/nvidia/ops/kpool_compress.py
+index 40b856e88f..ca9fe0bcc5 100644
+--- a/vllm/models/glm5next/nvidia/ops/kpool_compress.py
++++ b/vllm/models/glm5next/nvidia/ops/kpool_compress.py
+@@ -856,7 +856,7 @@ def _expand_pools_and_append_tail_kernel(
+     o = cols % POOL_SIZE
+     pid = tl.load(pool_ids_ptr + row * pid_s0 + g, mask=mask & is_history, other=-1)
+     hist_val = (pid * POOL_SIZE + o).to(tl.int32)
+-    hist_out = tl.where(pid >= 0, hist_val, -1)
++    hist_out = tl.where((pid >= 0) & (pid < pool_len), hist_val, -1)
+ 
+     # Tail region [topk, out_cols): the request's trailing incomplete pool.
+     tail_off = cols - topk

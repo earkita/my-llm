@@ -23,6 +23,9 @@ description: Validate a running R9700 vLLM model through its API and benchmark c
      --concurrency 2 --repetitions 5 --warmup 1
    ```
 
+   For an explicit embedded runtime mode, pass the same identity to both
+   checks with `--runtime-mode`, for example `--runtime-mode dflash2`.
+
 Use `--dry-run` to preview both commands without contacting the API.
 
 For an exact input-plus-output context-boundary test, pass `--full-context`

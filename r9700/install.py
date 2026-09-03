@@ -386,6 +386,7 @@ def _install_vllm(
             sys.executable,
             "--allow-existing",
             "--relocatable",
+            "--seed",
             venv,
         ]
     )

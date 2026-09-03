@@ -98,7 +98,7 @@ class ProductionProfileTests(unittest.TestCase):
     def test_only_required_recipes_and_assets_are_present(self) -> None:
         expected = {
             "vllm_deepseekv4flash_v0.28",
-            "vllm_glm53flash_pr53906",
+            "vllm_glm53flash_v0.28",
             "vllm_qwen38flash_pr53896",
         }
         self.assertEqual(set(recipe_names()), expected)
@@ -123,12 +123,20 @@ class ProductionProfileTests(unittest.TestCase):
     def test_glm_uses_an_isolated_repo_local_vllm_recipe(self) -> None:
         runtime = load_profile("glm53-flash")["runtime"]
         manifest = json.loads(
-            (ROOT / "manifest/vllm_glm53flash_pr53906.json").read_text()
+            (ROOT / "manifest/vllm_glm53flash_v0.28.json").read_text()
         )
-        self.assertEqual(runtime["recipe"], "vllm_glm53flash_pr53906")
+        self.assertEqual(runtime["recipe"], "vllm_glm53flash_v0.28")
         self.assertEqual(
             manifest["environment"]["venv"],
-            ".runtime/recipes/vllm_glm53flash_pr53906/venv",
+            ".runtime/recipes/vllm_glm53flash_v0.28/venv",
+        )
+        self.assertEqual(
+            manifest["sources"]["vllm"]["repository"],
+            "https://github.com/vllm-project/vllm.git",
+        )
+        self.assertEqual(
+            manifest["sources"]["vllm"]["commit"],
+            "c7e6e36fa93a5b8cb95b74fa96e4abdf2f0be51d",
         )
         self.assertEqual(runtime["environment"]["VLLM_USE_V2_MODEL_RUNNER"], "1")
 
@@ -264,6 +272,10 @@ class ProductionProfileTests(unittest.TestCase):
         runtime = activate_runtime_mode(
             profile["model"], profile["runtime"], "dflash2"
         )
+        self.assertEqual(
+            profile["runtime"]["experimental_modes"]["dflash2"]["status"],
+            "experimental-validated",
+        )
         speculative = runtime["speculative_config"]
         self.assertEqual(runtime["active_experimental_mode"], "dflash2")
         self.assertEqual(speculative["model_artifact"], "dflash2-drafter")
@@ -272,6 +284,11 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(speculative["num_speculative_tokens"], 7)
         self.assertEqual(speculative["draft_tensor_parallel_size"], 8)
         self.assertEqual(speculative["attention_backend"], "TRITON_ATTN")
+        self.assertTrue(
+            {"0010", "0012", "0017", "0018"}.issubset(
+                profile["runtime"]["required_patches"]
+            )
+        )
 
     def test_glm_embeds_k1_diagnostic_runtime_modes(self) -> None:
         dflash = load_runtime("glm53-flash", "dflash2-k1")

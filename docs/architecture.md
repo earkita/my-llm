@@ -27,7 +27,7 @@ nie profilami użytkownika. Rejestr zawiera wyłącznie:
 
 - `vllm_deepseekv4flash_v0.28` dla DeepSeek;
 - `vllm_qwen38flash_pr53896` dla Qwen;
-- `vllm_glm53flash_pr53906` dla GLM-5.3 Quark/MXFP4.
+- `vllm_glm53flash_v0.28` dla GLM-5.3 Quark/MXFP4.
 
 Nazwa receptury ma format `backend_target_version`. Wszystkie jej patche,
 również dotyczące bibliotek pomocniczych, znajdują się wyłącznie w katalogu

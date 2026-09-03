@@ -59,7 +59,7 @@ def _launcher_start_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--experimental-dflash2",
         action="store_true",
-        help="opt into the known-unsafe GLM DFlash2 MRV2 diagnostic mode",
+        help="opt into the validated but still experimental GLM DFlash2 K7 mode",
     )
     parser.add_argument(
         "--runtime-mode",

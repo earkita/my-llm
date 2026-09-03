@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_on": "2026-09-03",
+  "generated_on": "2026-09-04",
   "source_repository": "llm-runtime (historical source only; not required)",
   "policy": "Only source profiles under profiles/runtime/production were selected; model, runtime and stack settings were flattened into one deployment file without extends.",
   "profiles": {
@@ -20,16 +20,23 @@
     "glm53-flash": {
       "source_model": "https://huggingface.co/amd/GLM-5.3-Flash-Quark-MXFP4",
       "source_model_sha256": "b5688f25491202978c19c4d036eef579f61bbe07",
-      "source_runtime": "https://github.com/vllm-project/vllm/pull/53906",
-      "source_runtime_sha256": "4500c80c080328dfe62435d083f4063e00d987df",
+      "source_runtime": "https://github.com/vllm-project/vllm/commit/c7e6e36fa93a5b8cb95b74fa96e4abdf2f0be51d",
+      "source_runtime_sha256": "c7e6e36fa93a5b8cb95b74fa96e4abdf2f0be51d",
+      "upstream_runtime_commits": {
+        "glm53_pr53906_merge": "98ed0856f31fa3aaf5e27464e2b4ef5a8ee6b2f5",
+        "rocm_sparse_verify_pr55239_head": "d608ced8445a21ec3bffa01b73a889e914aff2fd",
+        "kpool_ring_pr55219_commit": "de63c84731cd719a6ab5c9e8d73289c9c96a7587",
+        "invalid_kpool_index_pr55201_head": "40bf4af864fb4e0fd3f84c5650ca9ba465c31ac8"
+      },
       "target_profile": "profiles/production/glm53-flash.json",
-      "target_profile_sha256": "4f4ae13d5fbad502e82ee8c694eade8247c4fb37e3951e5f0723a78ad9367f5c",
+      "target_profile_sha256": "3642fd4c9bab9cf27f3fd0b28349adad1d1796be93742dc5432c25cc9cc53f29",
       "intentional_changes": [
         "replaced the llama.cpp GGUF deployment with the AMD Quark MXFP4 checkpoint",
-        "pinned the current glm-release PR head and MRV2 correctness fixes",
-        "kept identity-bound DFlash2 with seven draft tokens as an explicit diagnostic mode",
-        "added K=1 DFlash and always-accepted hidden-state extraction modes for MRV2 isolation",
+        "pinned upstream main after the merged GLM-5.3 PR and retained the required MRV2 correctness fixes",
+        "kept identity-bound DFlash2 with seven draft tokens as an explicit validated experimental mode",
+        "added K=1 DFlash and hidden-state extraction modes for MRV2 isolation",
         "materialized and contracted GLM mHC outputs for DFlash auxiliary hidden states",
+        "replaced the unsafe draft-target KV overlay with aligned pages and added focused fixes from vLLM PRs #55239, #55219 and #55201",
         "excluded PR #54163 after a controlled ablation showed an additional DFlash K=1 correctness regression with prefix caching disabled"
       ]
     },
@@ -50,6 +57,6 @@
   "recipes": [
     "vllm_deepseekv4flash_v0.28",
     "vllm_qwen38flash_pr53896",
-    "vllm_glm53flash_pr53906"
+    "vllm_glm53flash_v0.28"
   ]
 }

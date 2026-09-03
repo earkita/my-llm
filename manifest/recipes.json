@@ -14,10 +14,10 @@
       "install_path": ".runtime/recipes/vllm_qwen38flash_pr53896/install.json",
       "smoke_profile": "qwen38-flash"
     },
-    "vllm_glm53flash_pr53906": {
+    "vllm_glm53flash_v0.28": {
       "backend": "vllm",
-      "path": "manifest/vllm_glm53flash_pr53906.json",
-      "install_path": ".runtime/recipes/vllm_glm53flash_pr53906/install.json",
+      "path": "manifest/vllm_glm53flash_v0.28.json",
+      "install_path": ".runtime/recipes/vllm_glm53flash_v0.28/install.json",
       "smoke_profile": "glm53-flash"
     }
   }

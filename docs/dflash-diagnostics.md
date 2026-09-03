@@ -60,10 +60,12 @@ Compare the exact output token sequences:
 
 The first capture is always the baseline. Comparison fails if prompt token IDs
 or deterministic generation settings differ. `greedy_equivalent=true` means
-the returned output token IDs are exactly equal, which is the losslessness
-gate. Per-request speculative metrics are preferred when exposed by vLLM;
-Prometheus counter deltas are also saved, but are process-wide and require an
-otherwise idle server.
+the returned output token IDs are exactly equal. On this gfx1201 EP/emulation
+stack, target-only itself has produced different token hashes across identical
+seeded restarts, so cross-restart equality is a diagnostic signal rather than
+the sole gate. Per-request speculative metrics are preferred when exposed by
+vLLM; Prometheus counter deltas are also saved, but are process-wide and
+require an otherwise idle server.
 
 The default capture is deliberately bounded to 64 generated tokens and five
 logprobs per position. Hard limits are 4,096 input tokens, 256 output tokens and
@@ -119,16 +121,23 @@ a performance benchmark mode.
 
 ## Qualified result on R9700
 
-The production target-only mode is correct. DFlash remains diagnostic-only:
+The production target-only mode is correct. DFlash2 K7 is now a validated but
+explicit experimental mode:
 
-- K=1 without the unrelated prefix-cache patch #54163 matches the first six
-  target tokens, then diverges after rollback; 1 of 62 drafts was accepted.
-- K=7 matches the first three target tokens and accepts the first two drafts,
-  then multi-token target verification degrades and output becomes repetitive;
-  2 of 427 draft tokens were accepted.
-- Adding #54163 caused an additional local regression: K=1 diverged at token
-  zero. It is intentionally excluded because prefix caching is disabled and
-  the patch is not required for this qualification.
+- two K1 captures accepted 52/74 draft tokens (61.5-80.0% per capture) and
+  returned coherent text;
+- three K7 captures accepted 139/385 draft tokens (33.1-38.7% per capture),
+  with accepted tokens at every one of the seven draft positions;
+- the final fresh K7 start passed all six API checks and produced 46/119
+  accepted drafts, mean acceptance length 3.71;
+- a 256-input/128-output benchmark measured 23.63 tok/s mean decode and
+  21.65 tok/s minimum decode at concurrency one.
 
-These results distinguish a valid DFlash checkpoint and valid initial hidden
-states from the remaining MRV2 multi-token verification/rollback defect.
+The correction is the combination of aligned DFlash/MLA cache pages (`0010`),
+the PR #55239 Triton multi-token verify path (`0012`), the focused PR #55219
+kpool rollback ring (`0017`) and PR #55201 invalid-pool rejection (`0018`). The
+old overlay patches, #54163 and the experimental #52905 causal-convolution
+change are intentionally excluded.
+
+K7 is not the default until the upstream fixes merge and full-context,
+concurrent and deterministic-losslessness tests are complete.

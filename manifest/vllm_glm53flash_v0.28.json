@@ -7,14 +7,14 @@
     "reference_gpu_count": 8
   },
   "environment": {
-    "venv": ".runtime/recipes/vllm_glm53flash_pr53906/venv",
-    "source_root": ".runtime/recipes/vllm_glm53flash_pr53906/src",
+    "venv": ".runtime/recipes/vllm_glm53flash_v0.28/venv",
+    "source_root": ".runtime/recipes/vllm_glm53flash_v0.28/src",
     "constraints": "constraints/rocm-7.14-py312.txt",
     "constraints_sha256": "085028ed6ad33bb4fc90087bff357dee0fcc7d5024369cf3b14963229b87e3cf",
     "constraint_overlays": [
       {
         "path": "constraints/vllm-glm53-flash-py312.override.txt",
-        "sha256": "b468ebfbac42241fde6233cc008b666fec887698114ea771606f9e98091b29f0"
+        "sha256": "1b9266311152125a1730c56998bf373f31cc93ee92fe129bc87228f5108735bc"
       }
     ],
     "rocm_version": "7.14.0",
@@ -42,11 +42,12 @@
       "patches": []
     },
     "vllm": {
-      "repository": "https://github.com/ZJY0516/vllm.git",
-      "commit": "4500c80c080328dfe62435d083f4063e00d987df",
-      "version": "0.28.0+glmrelease.4500c80c",
+      "repository": "https://github.com/vllm-project/vllm.git",
+      "commit": "c7e6e36fa93a5b8cb95b74fa96e4abdf2f0be51d",
+      "version": "v0.28.1rc0-main-c7e6e36fa",
       "upstream_pr": "https://github.com/vllm-project/vllm/pull/53906",
-      "upstream_verified_commit": "933876c388fb129ad82590660e6506614559cb86",
+      "upstream_pr_head": "4500c80c080328dfe62435d083f4063e00d987df",
+      "upstream_merge_commit": "98ed0856f31fa3aaf5e27464e2b4ef5a8ee6b2f5",
       "triton_mla_noncausal_commit": "7e2d79176f5bb56153cbae8224d37256355d39e7",
       "quark_weight_scale_fix": "https://github.com/vllm-project/vllm/pull/54770",
       "rocm_fp4_bmm_correctness_fix": "https://github.com/vllm-project/vllm/pull/51915",
@@ -56,71 +57,71 @@
       "excluded_dflash_prefix_cache_patch": "https://github.com/vllm-project/vllm/pull/54163",
       "dflash_mrv2_issue": "https://github.com/vllm-project/vllm/issues/49559",
       "dflash_greedy_k1_issue": "https://github.com/vllm-project/vllm/issues/54928",
+      "excluded_mrv2_eagle_attention_backend_fix": "https://github.com/vllm-project/vllm/pull/54826",
+      "rocm_sparse_verify_fix": "https://github.com/vllm-project/vllm/pull/55239",
+      "glm_kpool_speculative_rollback_fix": "https://github.com/vllm-project/vllm/pull/55219",
+      "glm_kpool_invalid_index_fix": "https://github.com/vllm-project/vllm/pull/55201",
       "glm_spec_verify_cross_platform_issue": "https://github.com/vllm-project/vllm-ascend/issues/15329",
-      "expected_diff_sha256": "dcab06b3ca095c784c8058eec0c49d3a97a1c51d04a29366b8b0f4bc026f8f23",
+      "expected_diff_sha256": "3eee3853b7dd65f18dfa80c11f338d8bbfd161f3ac47d3ecdeb79adddbe4b2fb",
       "full_index_diff": true,
-      "accepted_previous_images": [
-        {
-          "sha256": "8f48b5356bfee8bdaef13083c844f3f2ed29943b58fbb6bd7ea55863fa40573f",
-          "patch_count": 13
-        }
-      ],
+      "apply_intent_to_add": true,
+      "accepted_previous_images": [],
       "patches": [
         {
-          "path": "patches/vllm_glm53flash_pr53906/0001-quark-per-block-weight-scale.patch",
+          "path": "patches/vllm_glm53flash_v0.28/0001-quark-per-block-weight-scale.patch",
           "sha256": "c11fb0a3449e9553ceed4c875fbbf6932c251e07370eef84531607afd8cc1587"
         },
         {
-          "path": "patches/vllm_glm53flash_pr53906/0002-load-glm5next-quark-weight-scale.patch",
+          "path": "patches/vllm_glm53flash_v0.28/0002-load-glm5next-quark-weight-scale.patch",
           "sha256": "d06d0b12e076dd982b639c32312bb2bb630e15d5572205306b20b6fd8eb42a2d"
         },
         {
-          "path": "patches/vllm_glm53flash_pr53906/0003-glm5next-eagle3-mhc-hidden-states.patch",
+          "path": "patches/vllm_glm53flash_v0.28/0003-glm5next-eagle3-mhc-hidden-states.patch",
           "sha256": "49cc58cbcb3b5c066f9a0d5cb192991cd23e90a28ce2ed67cf26b4f1302c0f26"
         },
         {
-          "path": "patches/vllm_glm53flash_pr53906/0004-rocm-keep-glm-on-mrv2.patch",
-          "sha256": "4a678f97a825ce11a815966bfa090db5b9bbff57a46ed89ed5858b7b6fd591ca"
-        },
-        {
-          "path": "patches/vllm_glm53flash_pr53906/0005-honor-explicit-platform-target.patch",
+          "path": "patches/vllm_glm53flash_v0.28/0005-honor-explicit-platform-target.patch",
           "sha256": "e9ce3fc5836e310550d73532896503221b2d97144e2f8134c04f6a13fa513936"
         },
         {
-          "path": "patches/vllm_glm53flash_pr53906/0007-match-quark-overrides-for-glm5next-gate-up.patch",
+          "path": "patches/vllm_glm53flash_v0.28/0007-match-quark-overrides-for-glm5next-gate-up.patch",
           "sha256": "0e250a354abceae73b1e00dc21750f1450a13794434613c7dd548cfc22e7732f"
         },
         {
-          "path": "patches/vllm_glm53flash_pr53906/0008-enable-kpool-aiter-indexer-on-rdna4.patch",
+          "path": "patches/vllm_glm53flash_v0.28/0008-enable-kpool-aiter-indexer-on-rdna4.patch",
           "sha256": "35eba90678a8b851ea4a2e39c0e7f964321660886b2075f008eaeb03ba059cff"
         },
         {
-          "path": "patches/vllm_glm53flash_pr53906/0009-glm5next-conditional-generation-eagle3.patch",
+          "path": "patches/vllm_glm53flash_v0.28/0009-glm5next-conditional-generation-eagle3.patch",
           "sha256": "93ce62f71dda40c50138ddadd5669912b52a052eefced7ddf0b4901d05e8b791"
         },
         {
-          "path": "patches/vllm_glm53flash_pr53906/0010-glm5-dflash-kv-cache-groups.patch",
-          "sha256": "3c280154b1b056342a2c32ab78ba92f56120cdcd08b32dd4bc46ee587832def6"
+          "path": "patches/vllm_glm53flash_v0.28/0010-glm5-dflash-aligned-kv-layout.patch",
+          "sha256": "3b758732ab4427c1f2eae9bb61f64992c3f779bdde82b4200dace959f3f70f7e"
         },
         {
-          "path": "patches/vllm_glm53flash_pr53906/0011-zero-overlaid-kv-groups-by-stride.patch",
-          "sha256": "a178e28663a461b8a60e3017f7f53427f2f910ef2d6cc2a4026d006a33036d89"
+          "path": "patches/vllm_glm53flash_v0.28/0012-rocm-triton-sparse-verify-pr55239.patch",
+          "sha256": "78174b6dc174bc4ed5ce7cae6bf577079db0c645119a5cc335f11cf2d0951ba0"
         },
         {
-          "path": "patches/vllm_glm53flash_pr53906/0012-route-dflash-verify-to-triton-sparse.patch",
-          "sha256": "ceb0fd15ab37831ffd7cafae16fb2f5ed9025734a528411e2d1587953c8cfcd0"
-        },
-        {
-          "path": "patches/vllm_glm53flash_pr53906/0013-glm5next-dflash-mhc-contract.patch",
+          "path": "patches/vllm_glm53flash_v0.28/0013-glm5next-dflash-mhc-contract.patch",
           "sha256": "adfd259c7258a987ad227436054187b0c7c67376998219c089d8c8f4285a8fb8"
         },
         {
-          "path": "patches/vllm_glm53flash_pr53906/0015-quark-rocm-mla-correctness.patch",
+          "path": "patches/vllm_glm53flash_v0.28/0015-quark-rocm-mla-correctness.patch",
           "sha256": "56d5926e070b897843f39828f29e1ba71c45670fb41904aceecb0f72d34c91a1"
         },
         {
-          "path": "patches/vllm_glm53flash_pr53906/0016-dflash-mrv2-bounded-diagnostics.patch",
+          "path": "patches/vllm_glm53flash_v0.28/0016-dflash-mrv2-bounded-diagnostics.patch",
           "sha256": "d4660b6299609d9ec4c9062a988ce2678edfb759158c6b1480f7685b411d7161"
+        },
+        {
+          "path": "patches/vllm_glm53flash_v0.28/0017-glm5-kpool-speculative-ring-pr55219.patch",
+          "sha256": "95ad09fe538bfc0616219d3f7937b374b42b13d3b9da390c4c77c5d5f338f117"
+        },
+        {
+          "path": "patches/vllm_glm53flash_v0.28/0018-reject-invalid-glm-kpool-indices-pr55201.patch",
+          "sha256": "9501d106454ef8ea2e1dff5b91436cab13dabdb62d0ab1f19de4622e440de262"
         }
       ]
     },
