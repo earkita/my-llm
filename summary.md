@@ -153,10 +153,17 @@ Code integration is wanted.
 - GLM was qualified at a configured 32K limit, but a full 32K request was not
   run in DFlash mode.
 - DFlash concurrency above one and prefix caching were not qualified.
-- The full nearby GPU kernel fuzz file passed 29/30 cases; seed 9 retains a
-  one-byte difference in the quantized KV cache. The focused ring and invalid
-  pool-ID regressions pass, and no corresponding E2E quality failure was seen,
-  but the byte-level discrepancy remains tracked rather than hidden.
+- The official `c7e6e36` GPU kernel test file passes 29/30 invocations: 19/20
+  randomized seeds and all 10 deterministic variants. The locally extended
+  file passes 35/36; both fail only seed 9. `max diff 1` is the magnitude of
+  the raw FP8-code difference, not its count: exactly two of 270,336 KV-cache
+  bytes differ, both by one adjacent FP8 code, while the scale and tail cache
+  are exact. A 1,000-seed diagnostic found five such bytes across three seeds,
+  with no scale or tail failures; the production prefill and decode writers
+  agreed exactly for all 751 written vectors. The same seed-9 failure was
+  reproduced against the otherwise clean official commit, so it is not
+  introduced by the local ring or bounds patches and is retained as a strict
+  cross-implementation FP8-oracle discrepancy rather than hidden.
 - PR #55239 and PR #55201 remain open; PR #55219 remains a draft. Until their
   final upstream forms are known, K7 stays opt-in.
 

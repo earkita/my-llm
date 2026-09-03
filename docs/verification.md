@@ -61,8 +61,14 @@ TTFT do 2.74 s. Przy 64K MTP2 zaakceptował 696 z 700 draftów i osiągnął
 - GLM ma skonfigurowane 32K, lecz pełne żądanie 32K z DFlash nie było testowane.
 - Prefix cache i natywne FP4BMM pozostają wyłączone; na `gfx1201` poprawność ma
   pierwszeństwo przed tuningiem.
-- Pełny fuzz kernela przeszedł 29/30 przypadków; seed 9 nadal różni się o jeden
-  bajt w skwantowanym KV. Skupione testy ringa i bounds-checku są zielone, a
-  odpowiadającej degradacji E2E nie zaobserwowano.
+- Oficjalny plik testów kernela z `c7e6e36` przechodzi 29/30 wywołań: 19/20
+  seedów fuzz oraz wszystkie 10 wariantów deterministycznych. Nasz rozszerzony
+  plik przechodzi 35/36; w obu odpada tylko seed 9. `max diff 1` oznacza wartość
+  różnicy kodu FP8, nie liczbę bajtów: różnią się dokładnie 2 z 270 336 bajtów
+  KV, każdy o jeden sąsiedni kod FP8; skala i tail cache są identyczne. Próba
+  1000 seedów znalazła łącznie 5 takich bajtów w 3 seedach, bez różnic skali lub
+  taila, a produkcyjne writery prefill i decode były bitowo zgodne dla wszystkich
+  751 zapisanych wektorów. Seed 9 odtwarza się również na czystym oficjalnym
+  commicie, więc nie pochodzi z naszych patchy ringa ani bounds-checku.
 - DFlash2 K7 wymaga jawnego `--runtime-mode dflash2` do czasu domknięcia
   kwalifikacji i scalenia upstreamowych poprawek.
