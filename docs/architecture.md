@@ -27,15 +27,16 @@ nie profilami użytkownika. Rejestr zawiera wyłącznie:
 
 - `vllm_deepseekv4flash_v0.28` dla DeepSeek;
 - `vllm_qwen38flash_pr53896` dla Qwen;
-- `llamacpp_glm53flash_pr27754` dla GLM.
+- `vllm_glm53flash_pr53906` dla GLM-5.3 Quark/MXFP4.
 
 Nazwa receptury ma format `backend_target_version`. Wszystkie jej patche,
 również dotyczące bibliotek pomocniczych, znajdują się wyłącznie w katalogu
 `patches/<nazwa-receptury>/`.
 
 Manifest wskazuje dokładny commit, constraints oraz uporządkowane patche z
-SHA-256. llama.cpp korzysta z ROCm SDK 7.14 przygotowanego przez zachowaną
-receptę vLLM 0.28; instalator realizuje ten fundament automatycznie.
+SHA-256. Każda recepta buduje własne źródła i środowisko pod
+`.runtime/recipes/<nazwa>/`; żaden backend nie korzysta z checkoutu innego
+projektu.
 
 ## Stan procesu
 

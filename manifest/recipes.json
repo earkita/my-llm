@@ -14,11 +14,10 @@
       "install_path": ".runtime/recipes/vllm_qwen38flash_pr53896/install.json",
       "smoke_profile": "qwen38-flash"
     },
-    "llamacpp_glm53flash_pr27754": {
-      "backend": "llama-cpp",
-      "path": "manifest/llamacpp_glm53flash_pr27754.json",
-      "install_path": ".runtime/recipes/llamacpp_glm53flash_pr27754/install.json",
-      "foundation_recipe": "vllm_deepseekv4flash_v0.28",
+    "vllm_glm53flash_pr53906": {
+      "backend": "vllm",
+      "path": "manifest/vllm_glm53flash_pr53906.json",
+      "install_path": ".runtime/recipes/vllm_glm53flash_pr53906/install.json",
       "smoke_profile": "glm53-flash"
     }
   }

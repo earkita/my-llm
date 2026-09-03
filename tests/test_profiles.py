@@ -9,10 +9,16 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from r9700 import launcher, proxy
-from r9700.backends import build_command, build_environment
+from r9700 import api, launcher, proxy
+from r9700.backends import build_command
 from r9700.backends.vllm import environment as vllm_environment
-from r9700.config import ConfigurationError, ROOT, load_profile
+from r9700.config import (
+    ConfigurationError,
+    ROOT,
+    activate_runtime_mode,
+    load_profile,
+    load_runtime,
+)
 from r9700.install import _make_venv_entrypoints_relocatable
 from r9700.manifest import (
     recipe_artifact_path,
@@ -91,8 +97,8 @@ class ProductionProfileTests(unittest.TestCase):
 
     def test_only_required_recipes_and_assets_are_present(self) -> None:
         expected = {
-            "llamacpp_glm53flash_pr27754",
             "vllm_deepseekv4flash_v0.28",
+            "vllm_glm53flash_pr53906",
             "vllm_qwen38flash_pr53896",
         }
         self.assertEqual(set(recipe_names()), expected)
@@ -102,20 +108,11 @@ class ProductionProfileTests(unittest.TestCase):
                     recipe,
                     r"^(?:vllm|llamacpp)_[a-z0-9]+_(?:v\d+\.\d+|pr\d+)$",
                 )
-        for recipe in expected - {"llamacpp_glm53flash_pr27754"}:
+        for recipe in expected:
             with self.subTest(recipe=recipe):
                 verify_assets(recipe_name=recipe)
 
-        llama_manifest = json.loads(
-            (ROOT / "manifest" / "llamacpp_glm53flash_pr27754.json").read_text()
-        )
-        for patch in llama_manifest["patches"]:
-            path = ROOT / patch["path"]
-            self.assertTrue(path.is_file())
-            self.assertEqual(sha256_file(path), patch["sha256"])
-            self.assertEqual(path.parent.name, "llamacpp_glm53flash_pr27754")
-
-        for recipe in expected - {"llamacpp_glm53flash_pr27754"}:
+        for recipe in expected:
             manifest_path = ROOT / "manifest" / f"{recipe}.json"
             runtime_manifest = json.loads(manifest_path.read_text())
             for source in runtime_manifest["sources"].values():
@@ -123,17 +120,17 @@ class ProductionProfileTests(unittest.TestCase):
                     patch_path = ROOT / patch_record["path"]
                     self.assertEqual(patch_path.parent.name, recipe)
 
-    def test_llama_environment_loads_libraries_from_its_local_recipe(self) -> None:
+    def test_glm_uses_an_isolated_repo_local_vllm_recipe(self) -> None:
         runtime = load_profile("glm53-flash")["runtime"]
-        environment = build_environment(runtime)
-        local_binary_directory = (
-            ROOT
-            / ".runtime/recipes/llamacpp_glm53flash_pr27754/build/llama.cpp/bin"
+        manifest = json.loads(
+            (ROOT / "manifest/vllm_glm53flash_pr53906.json").read_text()
         )
+        self.assertEqual(runtime["recipe"], "vllm_glm53flash_pr53906")
         self.assertEqual(
-            environment["LD_LIBRARY_PATH"].split(":", 1)[0],
-            str(local_binary_directory),
+            manifest["environment"]["venv"],
+            ".runtime/recipes/vllm_glm53flash_pr53906/venv",
         )
+        self.assertEqual(runtime["environment"]["VLLM_USE_V2_MODEL_RUNNER"], "1")
 
     def test_provenance_hashes_current_flat_profiles(self) -> None:
         provenance = json.loads((ROOT / "provenance.json").read_text())
@@ -191,7 +188,7 @@ class ProductionProfileTests(unittest.TestCase):
     def test_commands_resolve_from_one_profile(self) -> None:
         expectations = {
             "deepseek-v4-flash": ("vllm", "--pipeline-parallel-size", "6"),
-            "glm53-flash": ("llama-server", "--spec-type", "draft-dflash"),
+            "glm53-flash": ("vllm", "--quantization", "quark"),
             "qwen38-flash": ("vllm", "--tensor-parallel-size", "8"),
         }
         for name, expected in expectations.items():
@@ -257,25 +254,82 @@ class ProductionProfileTests(unittest.TestCase):
         ):
             start("deepseek-v4-flash", "qwen38-flash")
 
-    def test_glm_dflash_artifact_is_identity_bound(self) -> None:
+    def test_glm_dflash_is_identity_bound_and_explicitly_opt_in(self) -> None:
         profile = load_profile("glm53-flash")
         artifact = profile["model"]["auxiliary_artifacts"][0]
-        runtime_artifact = profile["runtime"]["dflash2_artifact"]
-        self.assertEqual(
-            profile["runtime"]["llama_cpp"]["draft_model"],
-            artifact["path"],
-        )
-        for key in ("repository", "revision", "filename", "size_bytes", "sha256"):
-            self.assertEqual(artifact[key], runtime_artifact[key])
+        self.assertEqual(artifact["repository"], "incoai/GLM-5.3-Flash-DFlash2")
+        self.assertEqual(artifact["revision"][:7], "bf582e4")
+        self.assertNotIn("speculative_config", profile["runtime"])
 
-    def test_glm_prefix_cache_requires_the_rocm_device_context_fix(self) -> None:
+        runtime = activate_runtime_mode(
+            profile["model"], profile["runtime"], "dflash2"
+        )
+        speculative = runtime["speculative_config"]
+        self.assertEqual(runtime["active_experimental_mode"], "dflash2")
+        self.assertEqual(speculative["model_artifact"], "dflash2-drafter")
+        self.assertEqual(speculative["method"], "dflash")
+        # The checkpoint block size is eight: one anchor plus seven drafts.
+        self.assertEqual(speculative["num_speculative_tokens"], 7)
+        self.assertEqual(speculative["draft_tensor_parallel_size"], 8)
+        self.assertEqual(speculative["attention_backend"], "TRITON_ATTN")
+
+    def test_glm_embeds_k1_diagnostic_runtime_modes(self) -> None:
+        dflash = load_runtime("glm53-flash", "dflash2-k1")
+        self.assertEqual(dflash["active_experimental_mode"], "dflash2-k1")
+        self.assertEqual(
+            dflash["speculative_config"]["num_speculative_tokens"], 1
+        )
+        self.assertEqual(dflash["speculative_config"]["method"], "dflash")
+
+        extractor = load_runtime("glm53-flash", "extract-hidden-states-k1")
+        speculative = extractor["speculative_config"]
+        self.assertEqual(speculative["method"], "extract_hidden_states")
+        self.assertEqual(speculative["draft_sample_method"], "greedy")
+        self.assertEqual(
+            speculative["draft_model_config"]["hf_config"][
+                "eagle_aux_hidden_state_layer_ids"
+            ],
+            [6, 15, 25, 34, 43],
+        )
+
+    def test_vllm_speculative_model_resolves_from_identity_bound_artifact(self) -> None:
+        profile = load_profile("glm53-flash")
+        runtime = activate_runtime_mode(
+            profile["model"], profile["runtime"], "dflash2"
+        )
+        command = build_command(
+            profile["model"], runtime, Path("/models/glm"), "127.0.0.1", 8000
+        )
+        value = command[command.index("--speculative-config") + 1]
+        speculative_config = json.loads(value)
+        self.assertNotIn("model_artifact", speculative_config)
+        self.assertEqual(
+            speculative_config["model"],
+            str(Path(profile["model"]["auxiliary_artifacts"][0]["path"]).parent),
+        )
+
+    def test_glm_is_mrv2_without_prefix_cache(self) -> None:
         profile = load_profile("glm53-flash")
         runtime = profile["runtime"]
-        self.assertTrue(runtime["cache"]["prefix_cache"])
-        self.assertTrue(runtime["llama_cpp"]["cache_prompt"])
-        self.assertEqual(runtime["llama_cpp"]["cache_reuse"], 0)
-        self.assertEqual(runtime["llama_cpp"]["cache_ram_mib"], 0)
-        self.assertIn("0006", runtime["required_patches"])
+        self.assertFalse(runtime["cache"]["prefix_cache"])
+        self.assertEqual(runtime["cache"]["cpu_offload_gb"], 0)
+        self.assertEqual(runtime["parallel"]["tensor"], 8)
+        self.assertEqual(runtime["limits"]["max_model_len"], 32768)
+        self.assertEqual(runtime["environment"]["VLLM_USE_V2_MODEL_RUNNER"], "1")
+        self.assertEqual(runtime["moe_backend"], "emulation")
+        self.assertEqual(runtime["linear_backend"], "emulation")
+
+    def test_glm_model_download_includes_its_chat_template(self) -> None:
+        model = load_profile("glm53-flash")["model"]
+        self.assertIn("chat_template.jinja", model["required_files"])
+        self.assertIn("chat_template.jinja", model["allow_patterns"])
+
+    def test_glm_api_gate_keeps_reasoning_parser_enabled(self) -> None:
+        model = load_profile("glm53-flash")["model"]
+        body = api._literal_chat_body(model)
+        self.assertNotIn("chat_template_kwargs", body)
+        self.assertEqual(body["reasoning_effort"], "low")
+        self.assertGreaterEqual(body["max_tokens"], 256)
 
     def test_cli_lists_only_production_profiles(self) -> None:
         result = subprocess.run(
@@ -381,6 +435,53 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertIn("--proxy-ready-timeout", command)
         self.assertIn("--dry-run", command)
 
+    def test_launcher_enables_dflash_only_with_explicit_flag(self) -> None:
+        with (
+            patch("r9700.launcher.managed_state", return_value=None),
+            patch("r9700.launcher.subprocess.run") as run,
+        ):
+            run.return_value.returncode = 0
+            launcher.start("glm53-flash", dry_run=True)
+            launcher.start(
+                "glm53-flash",
+                experimental_dflash2=True,
+                dry_run=True,
+            )
+
+        default_command = run.call_args_list[0].args[0]
+        experimental_command = run.call_args_list[1].args[0]
+        self.assertNotIn("--runtime-mode", default_command)
+        mode_index = experimental_command.index("--runtime-mode")
+        self.assertEqual(experimental_command[mode_index + 1], "dflash2")
+
+    def test_launcher_accepts_a_generic_embedded_diagnostic_mode(self) -> None:
+        with (
+            patch("r9700.launcher.managed_state", return_value=None),
+            patch("r9700.launcher.subprocess.run") as run,
+        ):
+            run.return_value.returncode = 0
+            launcher.start(
+                "glm53-flash",
+                runtime_mode="extract-hidden-states-k1",
+                dry_run=True,
+            )
+
+        command = run.call_args.args[0]
+        mode_index = command.index("--runtime-mode")
+        self.assertEqual(
+            command[mode_index + 1], "extract-hidden-states-k1"
+        )
+
+    def test_launcher_rejects_dflash_for_another_profile(self) -> None:
+        with self.assertRaisesRegex(
+            ConfigurationError, "available only for glm53-flash"
+        ):
+            launcher.start(
+                "qwen38-flash",
+                experimental_dflash2=True,
+                dry_run=True,
+            )
+
     def test_launcher_waits_before_adding_litellm_to_active_model(self) -> None:
         state = {
             "profile": "qwen38-flash",
@@ -445,6 +546,18 @@ class ProductionProfileTests(unittest.TestCase):
             proxy.test()
 
         managed_runtime.assert_called_once_with()
+
+    def test_proxy_maps_legacy_state_without_profile_by_runtime(self) -> None:
+        profile = load_profile("qwen38-flash")
+        self.assertEqual(
+            proxy._active_profile_name(
+                {
+                    "model": profile["model"]["name"],
+                    "runtime": profile["runtime"]["name"],
+                }
+            ),
+            "qwen38-flash",
+        )
 
     def test_launcher_stack_switch_stops_both_components_first(self) -> None:
         state = {

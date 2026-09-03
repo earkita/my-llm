@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_on": "2026-09-01",
+  "generated_on": "2026-09-03",
   "source_repository": "llm-runtime (historical source only; not required)",
   "policy": "Only source profiles under profiles/runtime/production were selected; model, runtime and stack settings were flattened into one deployment file without extends.",
   "profiles": {
@@ -18,16 +18,19 @@
       ]
     },
     "glm53-flash": {
-      "source_model": "profiles/models/glm53-flash-ud-q4-k-xl-gguf.json",
-      "source_model_sha256": "473a6d87eaf71d7f2afcfe4a26b3fdc1977604f1cc315f68b6210e50b3de17e6",
-      "source_runtime": "profiles/runtime/production/glm53-flash-fastest-verified-q8-1m-dflash2.json",
-      "source_runtime_sha256": "095c57afcdb6f9cc8a45152dd168b21a4fa0ae48c07cb15e379b3defce454754",
+      "source_model": "https://huggingface.co/amd/GLM-5.3-Flash-Quark-MXFP4",
+      "source_model_sha256": "b5688f25491202978c19c4d036eef579f61bbe07",
+      "source_runtime": "https://github.com/vllm-project/vllm/pull/53906",
+      "source_runtime_sha256": "4500c80c080328dfe62435d083f4063e00d987df",
       "target_profile": "profiles/production/glm53-flash.json",
-      "target_profile_sha256": "56ca129bda8f8830aa6d0983fc1b21def6f878285631d2f884d88106625c49c9",
+      "target_profile_sha256": "4f4ae13d5fbad502e82ee8c694eade8247c4fb37e3951e5f0723a78ad9367f5c",
       "intentional_changes": [
-        "DFlash2 identity is also embedded in model.auxiliary_artifacts",
-        "embedded stack preset",
-        "common-prefix prompt caching enabled after applying the HIP-only multi-GPU device-context fix"
+        "replaced the llama.cpp GGUF deployment with the AMD Quark MXFP4 checkpoint",
+        "pinned the current glm-release PR head and MRV2 correctness fixes",
+        "kept identity-bound DFlash2 with seven draft tokens as an explicit diagnostic mode",
+        "added K=1 DFlash and always-accepted hidden-state extraction modes for MRV2 isolation",
+        "materialized and contracted GLM mHC outputs for DFlash auxiliary hidden states",
+        "excluded PR #54163 after a controlled ablation showed an additional DFlash K=1 correctness regression with prefix caching disabled"
       ]
     },
     "qwen38-flash": {
@@ -47,6 +50,6 @@
   "recipes": [
     "vllm_deepseekv4flash_v0.28",
     "vllm_qwen38flash_pr53896",
-    "llamacpp_glm53flash_pr27754"
+    "vllm_glm53flash_pr53906"
   ]
 }

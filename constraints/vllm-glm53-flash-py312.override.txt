@@ -1,0 +1,3 @@
+# Overrides relative to rocm-7.14-py312.txt for the GLM-5.3 glm-release recipe.
+flydsl==0.3.0
+huggingface_hub==1.28.0

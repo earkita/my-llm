@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from ..config import ROOT, load_model, resolve_model_directory
+from ..config import ConfigurationError, ROOT, load_model, resolve_model_directory
 from ..manifest import recipe_venv
 from .common import base_environment, rocm_root, visible_devices
 
@@ -133,9 +133,30 @@ def command(
     if runtime.get("speculative_config"):
         speculative_config = dict(runtime["speculative_config"])
         draft_profile_name = speculative_config.pop("model_profile", None)
+        draft_artifact_name = speculative_config.pop("model_artifact", None)
+        if draft_profile_name and draft_artifact_name:
+            raise ConfigurationError(
+                "speculative_config must choose model_profile or model_artifact"
+            )
         if draft_profile_name:
             draft_model = load_model(str(draft_profile_name))
             speculative_config["model"] = str(resolve_model_directory(draft_model))
+        elif draft_artifact_name:
+            matches = [
+                artifact
+                for artifact in model.get("auxiliary_artifacts", [])
+                if artifact.get("name") == draft_artifact_name
+            ]
+            if len(matches) != 1:
+                raise ConfigurationError(
+                    "speculative model_artifact must identify exactly one "
+                    "model auxiliary artifact"
+                )
+            artifact = matches[0]
+            # Auxiliary artifacts are identity-bound by the exact payload file,
+            # while vLLM needs the containing Hugging Face model directory so it
+            # can load config.json alongside the draft weights.
+            speculative_config["model"] = str(Path(str(artifact["path"])).parent)
         args += [
             "--speculative-config",
             json.dumps(speculative_config, separators=(",", ":")),

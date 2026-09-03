@@ -1,0 +1,162 @@
+diff --git a/tests/quantization/test_quark.py b/tests/quantization/test_quark.py
+index 49af26f..848e095 100644
+--- a/tests/quantization/test_quark.py
++++ b/tests/quantization/test_quark.py
+@@ -11,6 +11,7 @@ import importlib.metadata
+ from dataclasses import dataclass
+ from importlib.util import find_spec
+ from types import SimpleNamespace
++from unittest.mock import MagicMock, patch
+ 
+ import huggingface_hub
+ import lm_eval
+@@ -702,6 +703,68 @@ def enable_pickle(monkeypatch):
+     monkeypatch.setenv("VLLM_ALLOW_INSECURE_SERIALIZATION", "1")
+ 
+ 
++def test_quark_w8a8_fp8_per_block_registers_weight_scale(monkeypatch):
++    from vllm.model_executor.layers.quantization.utils.fp8_utils import (
++        get_fp8_block_weight_scale,
++    )
++
++    monkeypatch.setattr(
++        "vllm.model_executor.layers.quantization.quark.schemes."
++        "quark_w8a8_fp8.get_current_vllm_config",
++        lambda: SimpleNamespace(model_config=SimpleNamespace(dtype=torch.bfloat16)),
++    )
++    scheme = QuarkW8A8Fp8PerBlock(kFp8Static128BlockSym, kFp8Dynamic128Sym)
++
++    layer = torch.nn.Module()
++    layer.weight_scale = torch.tensor([2.0])
++    assert get_fp8_block_weight_scale(layer) is None
++    layer.scheme = scheme
++    assert get_fp8_block_weight_scale(layer) is layer.weight_scale
++    layer.weight_scale_inv = torch.tensor([3.0])
++    assert get_fp8_block_weight_scale(layer) is layer.weight_scale
++    layer.scheme = None
++    assert get_fp8_block_weight_scale(layer) is layer.weight_scale_inv
++
++    loaded = torch.nn.Module()
++
++    def weight_loader(param, loaded_weight):
++        return None
++
++    dummy_param = torch.nn.Parameter(torch.empty(1), requires_grad=False)
++    with (
++        patch(
++            "vllm.model_executor.layers.quantization.quark.schemes.quark_w8a8_fp8."
++            "validate_fp8_block_shape"
++        ),
++        patch(
++            "vllm.model_executor.layers.quantization.quark.schemes.quark_w8a8_fp8."
++            "create_fp8_weight_parameter",
++            return_value=dummy_param,
++        ),
++        patch(
++            "vllm.model_executor.layers.quantization.quark.schemes.quark_w8a8_fp8."
++            "create_fp8_scale_parameter",
++            return_value=dummy_param,
++        ),
++        patch(
++            "vllm.model_executor.layers.quantization.quark.schemes.quark_w8a8_fp8."
++            "init_fp8_linear_kernel",
++            return_value=MagicMock(),
++        ),
++    ):
++        scheme.create_weights(
++            loaded,
++            output_partition_sizes=[256],
++            input_size_per_partition=256,
++            params_dtype=torch.bfloat16,
++            weight_loader=weight_loader,
++            input_size=256,
++            output_size=256,
++        )
++    assert hasattr(loaded, "weight_scale")
++    assert not hasattr(loaded, "weight_scale_inv")
++
++
+ def test_quark_config_has_no_model_specific_fused_mappings():
+     config = QuarkConfig({})
+ 
+diff --git a/vllm/model_executor/layers/attention/mla_attention.py b/vllm/model_executor/layers/attention/mla_attention.py
+index f0cdd80..41aa7e8 100644
+--- a/vllm/model_executor/layers/attention/mla_attention.py
++++ b/vllm/model_executor/layers/attention/mla_attention.py
+@@ -260,7 +260,7 @@ from vllm.model_executor.layers.quantization.utils.quant_utils import (
+ from vllm.model_executor.utils import replace_parameter
+ from vllm.platforms import current_platform
+ from vllm.utils.flashinfer import has_flashinfer
+-from vllm.utils.math_utils import cdiv, round_down, round_up
++from vllm.utils.math_utils import cdiv, next_power_of_2, round_down, round_up
+ from vllm.utils.torch_utils import (
+     LayerNameType,
+     _encode_layer_name,
+@@ -665,12 +665,29 @@ class MLAAttention(nn.Module, AttentionLayerBase):
+ 
+         self.is_aiter_triton_fp8_bmm_enabled = rocm_aiter_ops.is_fp8bmm_enabled()
+ 
++        # AITER's FP4 BMM silently produces incorrect output for a
++        # non-power-of-two K (for example, GLM-5.2 uses 192). Retain the
++        # FP8/torch fallback unless both contractions satisfy the kernel.
++        fp4_bmm_k_supported = (
++            next_power_of_2(self.qk_nope_head_dim) == self.qk_nope_head_dim
++            and next_power_of_2(self.kv_lora_rank) == self.kv_lora_rank
++        )
+         # If kv_b_proj_weight is unquantized, quantize it to mxfp4 if supported
+         self.is_aiter_triton_fp4_bmm_enabled = (
+             rocm_aiter_ops.is_fp4bmm_enabled()
+             and hasattr(self.kv_b_proj, "weight")
+             and self.kv_b_proj.weight.dtype == torch.bfloat16
++            and fp4_bmm_k_supported
+         )
++        if rocm_aiter_ops.is_fp4bmm_enabled() and not fp4_bmm_k_supported:
++            logger.warning_once(
++                "AITER FP4 BMM is disabled because qk_nope_head_dim=%d and "
++                "kv_lora_rank=%d are not both powers of two; using FP8 BMM "
++                "instead. Set VLLM_ROCM_USE_AITER_FP8BMM=0 to fall back to "
++                "torch.bmm.",
++                self.qk_nope_head_dim,
++                self.kv_lora_rank,
++            )
+ 
+         # Attributes for forward_impl method
+         self._vllm_config = get_current_vllm_config()
+@@ -1194,8 +1211,9 @@ class MLAAttention(nn.Module, AttentionLayerBase):
+ 
+             self.W_K, self.W_K_scale = quark_quantize_weight_to_mxfp4(W_UK)
+             # Convert from (L, N, P) to (N, L, P)
+-            self.W_K = self.W_K.transpose(0, 1)
+-            self.W_K_scale = self.W_K_scale.transpose(0, 1)
++            # AITER's FP4 BMM can return NaNs for strided weights.
++            self.W_K = self.W_K.transpose(0, 1).contiguous()
++            self.W_K_scale = self.W_K_scale.transpose(0, 1).contiguous()
+ 
+             self.W_V, self.W_V_scale = quark_quantize_weight_to_mxfp4(
+                 W_UV.permute(1, 2, 0)
+diff --git a/vllm/v1/attention/ops/rocm_aiter_mla_sparse.py b/vllm/v1/attention/ops/rocm_aiter_mla_sparse.py
+index 62f91f2..33f6386 100644
+--- a/vllm/v1/attention/ops/rocm_aiter_mla_sparse.py
++++ b/vllm/v1/attention/ops/rocm_aiter_mla_sparse.py
+@@ -1202,14 +1202,17 @@ def _get_cached_wo_a_bf16(
+     cached = getattr(wo_a, "_dsv4_wo_a_bf16", None)
+     if cached is not None:
+         return cached
+-    if hasattr(wo_a, "weight_scale_inv"):
++    from vllm.model_executor.layers.quantization.utils.fp8_utils import (
++        get_fp8_block_weight_scale,
++    )
++
++    wo_a_scale_param = get_fp8_block_weight_scale(wo_a)
++    if wo_a_scale_param is not None:
+         wo_a_weight = wo_a.weight.view(n_local_groups, o_lora_rank, hidden_dim).to(
+             torch.float32
+         )
+         wo_a_scale = _expand_2d_block_scales(
+-            wo_a.weight_scale_inv.view(
+-                n_local_groups, -1, wo_a.weight_scale_inv.shape[-1]
+-            ),
++            wo_a_scale_param.view(n_local_groups, -1, wo_a_scale_param.shape[-1]),
+             o_lora_rank,
+             hidden_dim,
+         )

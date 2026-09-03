@@ -1,0 +1,477 @@
+diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
+index d7dd9441d7..17ca159aeb 100644
+--- a/vllm/v1/worker/gpu/model_runner.py
++++ b/vllm/v1/worker/gpu/model_runner.py
+@@ -1465,6 +1465,18 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+                 # Draft logits are needed for probabilistic rejection sampling.
+                 self.speculator.draft_logits,
+             )
++            if self.speculative_config is not None and self.speculative_config.use_dflash():
++                from vllm.v1.worker.gpu.spec_decode.dflash.diagnostics import (
++                    trace_target_verify,
++                )
++
++                trace_target_verify(
++                    logits,
++                    input_batch,
++                    sampler_output,
++                    self.req_states,
++                    self.cache_config.mamba_cache_mode,
++                )
+ 
+         if shard_metadata is not None:
+             # Gather the sharded sampler outputs from the TP ranks into a single
+@@ -1945,6 +1957,19 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+             num_rejected,
+             input_batch.query_start_loc,
+         )
++        if self.speculative_config is not None and self.speculative_config.use_dflash():
++            from vllm.v1.worker.gpu.spec_decode.dflash.diagnostics import (
++                trace_target_rollback,
++            )
++
++            trace_target_rollback(
++                input_batch,
++                self.req_states,
++                num_sampled,
++                num_rejected,
++                slot_mappings_by_layer,
++                self.cache_config.mamba_cache_mode,
++            )
+ 
+         if self.speculator is not None:
+             assert self.sampler is not None
+diff --git a/vllm/v1/worker/gpu/spec_decode/dflash/diagnostics.py b/vllm/v1/worker/gpu/spec_decode/dflash/diagnostics.py
+new file mode 100644
+index 0000000000..86cbf8f31a
+--- /dev/null
++++ b/vllm/v1/worker/gpu/spec_decode/dflash/diagnostics.py
+@@ -0,0 +1,290 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""Opt-in, bounded diagnostics for DFlash MRV2 correctness investigations.
++
++Set ``VLLM_DFLASH_TRACE_FILE`` to enable JSONL output.  Only global rank zero
++writes.  Full tensors and prompt text are never written: tensor payloads are
++limited to aggregate statistics and a small deterministic sample.  The trace
++is intentionally synchronous and should only be enabled for short diagnostic
++runs.
++"""
++
++from __future__ import annotations
++
++import json
++import math
++import os
++import threading
++from collections import defaultdict
++from pathlib import Path
++from typing import Any
++
++import numpy as np
++import torch
++
++
++_TRACE_FILE = os.environ.get("VLLM_DFLASH_TRACE_FILE", "").strip()
++
++
++def _bounded_env(name: str, default: int, maximum: int) -> int:
++    try:
++        value = int(os.environ.get(name, str(default)))
++    except ValueError:
++        value = default
++    return max(1, min(value, maximum))
++
++
++_MAX_EVENTS = _bounded_env("VLLM_DFLASH_TRACE_STEPS", 4, 32)
++_MAX_VALUES = _bounded_env("VLLM_DFLASH_TRACE_VALUES", 16, 64)
++_TOPK = _bounded_env("VLLM_DFLASH_TRACE_TOPK", 5, 20)
++_LOCK = threading.Lock()
++_EVENT_COUNTS: dict[str, int] = defaultdict(int)
++_SEQUENCE = 0
++
++
++def _is_rank_zero() -> bool:
++    if torch.distributed.is_available() and torch.distributed.is_initialized():
++        return torch.distributed.get_rank() == 0
++    try:
++        return int(os.environ.get("RANK", "0")) == 0
++    except ValueError:
++        return False
++
++
++def dflash_trace_enabled() -> bool:
++    return bool(_TRACE_FILE) and _is_rank_zero()
++
++
++def _json_scalar(value: Any) -> Any:
++    if isinstance(value, np.generic):
++        value = value.item()
++    if isinstance(value, float):
++        if math.isnan(value):
++            return "nan"
++        if math.isinf(value):
++            return "inf" if value > 0 else "-inf"
++    if isinstance(value, int | float | str | bool) or value is None:
++        return value
++    return str(value)
++
++
++def _sample_indices(size: int, count: int) -> torch.Tensor:
++    if size <= count:
++        return torch.arange(size, dtype=torch.int64)
++    # Integer arithmetic makes the sample stable across Python/NumPy versions.
++    return torch.tensor(
++        [index * (size - 1) // (count - 1) for index in range(count)],
++        dtype=torch.int64,
++    )
++
++
++def tensor_summary(tensor: torch.Tensor | np.ndarray | None) -> dict[str, Any] | None:
++    """Summarize one tensor without copying its full contents to the CPU."""
++    if tensor is None:
++        return None
++    if isinstance(tensor, np.ndarray):
++        tensor = torch.from_numpy(tensor)
++    detached = tensor.detach()
++    flat = detached.reshape(-1)
++    result: dict[str, Any] = {
++        "shape": list(detached.shape),
++        "dtype": str(detached.dtype).removeprefix("torch."),
++        "numel": flat.numel(),
++    }
++    if flat.numel() == 0:
++        result["sample_indices"] = []
++        result["sample"] = []
++        return result
++    indices_cpu = _sample_indices(flat.numel(), min(_MAX_VALUES, flat.numel()))
++    indices = indices_cpu.to(device=flat.device)
++    sampled_tensor = flat.index_select(0, indices)
++    sample = sampled_tensor.cpu().tolist()
++    result["sample_indices"] = indices_cpu.tolist()
++    result["sample"] = [_json_scalar(value) for value in sample]
++    if detached.is_floating_point():
++        all_finite = bool(torch.isfinite(flat).all().item())
++        result["all_finite"] = all_finite
++        if all_finite:
++            result.update(
++                {
++                    "mean": flat.mean(dtype=torch.float32).item(),
++                    "std": flat.std(unbiased=False).item(),
++                    "l2_norm": torch.linalg.vector_norm(flat).item(),
++                    "abs_max": torch.linalg.vector_norm(flat, ord=float("inf")).item(),
++                }
++            )
++    else:
++        result["min"] = flat.min().item()
++        result["max"] = flat.max().item()
++    return result
++
++
++def logits_summary(logits: torch.Tensor | None) -> dict[str, Any] | None:
++    """Summarize logits and retain top-k IDs/values for only bounded rows."""
++    if logits is None:
++        return None
++    result = tensor_summary(logits)
++    assert result is not None
++    if logits.ndim != 2 or logits.shape[0] == 0 or logits.shape[1] == 0:
++        return result
++    row_count = min(logits.shape[0], _MAX_VALUES)
++    row_indices_cpu = _sample_indices(logits.shape[0], row_count)
++    rows = logits.index_select(0, row_indices_cpu.to(device=logits.device)).float()
++    top_values, top_ids = torch.topk(rows, k=min(_TOPK, rows.shape[-1]), dim=-1)
++    result["top_rows"] = [
++        {
++            "row": int(row_index),
++            "token_ids": [int(value) for value in token_ids],
++            "values": [_json_scalar(value) for value in values],
++        }
++        for row_index, token_ids, values in zip(
++            row_indices_cpu.tolist(),
++            top_ids.cpu().tolist(),
++            top_values.cpu().tolist(),
++        )
++    ]
++    return result
++
++
++def mapping_summary(value: Any) -> Any:
++    """Recursively summarize tensors in cache/slot metadata containers."""
++    if isinstance(value, torch.Tensor | np.ndarray):
++        return tensor_summary(value)
++    if isinstance(value, dict):
++        return {
++            str(key): mapping_summary(item)
++            for key, item in list(value.items())[:_MAX_VALUES]
++        }
++    if isinstance(value, tuple | list):
++        return [mapping_summary(item) for item in value[:_MAX_VALUES]]
++    return _json_scalar(value)
++
++
++def _request_state_summary(input_batch: Any, req_states: Any) -> dict[str, Any]:
++    state_indices = input_batch.idx_mapping[: input_batch.num_reqs]
++    return {
++        "idx_mapping": tensor_summary(state_indices),
++        "num_computed_tokens": tensor_summary(
++            req_states.num_computed_tokens.gpu[state_indices]
++        ),
++        "total_len": tensor_summary(req_states.total_len.gpu[state_indices]),
++        "last_sampled_tokens": tensor_summary(
++            req_states.last_sampled_tokens[state_indices]
++        ),
++        "draft_tokens": tensor_summary(req_states.draft_tokens[state_indices]),
++    }
++
++
++def trace_target_verify(
++    logits: torch.Tensor,
++    input_batch: Any,
++    sampler_output: Any,
++    req_states: Any,
++    cache_mode: str,
++) -> None:
++    """Record MRV2 target verification logits and pre-rollback state."""
++    if not dflash_trace_enabled() or input_batch.num_draft_tokens == 0:
++        return
++    target_indices: list[int] = []
++    bonus_indices: list[int] = []
++    for start, end in zip(
++        input_batch.cu_num_logits_np[:-1], input_batch.cu_num_logits_np[1:]
++    ):
++        start_int = int(start)
++        end_int = int(end)
++        target_indices.extend(range(start_int, max(start_int, end_int - 1)))
++        if end_int > start_int:
++            bonus_indices.append(end_int - 1)
++    target_indices_tensor = torch.tensor(
++        target_indices, dtype=torch.int64, device=logits.device
++    )
++    bonus_indices_tensor = torch.tensor(
++        bonus_indices, dtype=torch.int64, device=logits.device
++    )
++    sampled_ids = sampler_output.sampled_token_ids
++    accepted_drafts = torch.clamp(sampler_output.num_sampled - 1, min=0)
++    trace_dflash_event(
++        "target_verify",
++        {
++            "request_ids": input_batch.req_ids[: input_batch.num_reqs],
++            "num_draft_tokens": input_batch.num_draft_tokens,
++            "num_draft_tokens_per_req": mapping_summary(
++                input_batch.num_draft_tokens_per_req
++            ),
++            "input_ids_at_logits": tensor_summary(
++                input_batch.input_ids[input_batch.logits_indices]
++            ),
++            "positions_at_logits": tensor_summary(
++                input_batch.positions[input_batch.logits_indices]
++            ),
++            "logits_indices": tensor_summary(input_batch.logits_indices),
++            "target_row_indices": tensor_summary(target_indices_tensor),
++            "bonus_row_indices": tensor_summary(bonus_indices_tensor),
++            "target_logits": logits_summary(logits[target_indices_tensor]),
++            "bonus_logits": logits_summary(logits[bonus_indices_tensor]),
++            "sampled_token_ids": tensor_summary(sampled_ids),
++            "num_sampled": tensor_summary(sampler_output.num_sampled),
++            "num_rejected": tensor_summary(sampler_output.num_rejected),
++            "accepted_draft_tokens": tensor_summary(accepted_drafts),
++            "query_start_loc": tensor_summary(input_batch.query_start_loc),
++            "seq_lens": tensor_summary(input_batch.seq_lens),
++            "num_computed_tokens_np": mapping_summary(
++                input_batch.num_computed_tokens_np
++            ),
++            "mamba_cache_mode": cache_mode,
++            "request_state_before_rollback": _request_state_summary(
++                input_batch, req_states
++            ),
++        },
++    )
++
++
++def trace_target_rollback(
++    input_batch: Any,
++    req_states: Any,
++    num_sampled: torch.Tensor,
++    num_rejected: torch.Tensor,
++    slot_mappings: Any,
++    cache_mode: str,
++) -> None:
++    """Record MRV2 state immediately after rejection postprocessing."""
++    if not dflash_trace_enabled() or input_batch.num_draft_tokens == 0:
++        return
++    trace_dflash_event(
++        "target_rollback",
++        {
++            "request_ids": input_batch.req_ids[: input_batch.num_reqs],
++            "num_sampled": tensor_summary(num_sampled),
++            "num_rejected": tensor_summary(num_rejected),
++            "query_start_loc": tensor_summary(input_batch.query_start_loc),
++            "target_slot_mappings": mapping_summary(slot_mappings),
++            "mamba_cache_mode": cache_mode,
++            "request_state_after_rollback": _request_state_summary(
++                input_batch, req_states
++            ),
++        },
++    )
++
++
++def trace_dflash_event(event: str, payload: dict[str, Any]) -> bool:
++    """Append one JSON event when enabled and below the per-event cap."""
++    global _SEQUENCE
++    if not dflash_trace_enabled():
++        return False
++    with _LOCK:
++        if _EVENT_COUNTS[event] >= _MAX_EVENTS:
++            return False
++        _EVENT_COUNTS[event] += 1
++        _SEQUENCE += 1
++        record = {
++            "schema_version": 1,
++            "sequence": _SEQUENCE,
++            "event": event,
++            "occurrence": _EVENT_COUNTS[event],
++            **payload,
++        }
++        path = Path(_TRACE_FILE)
++        path.parent.mkdir(parents=True, exist_ok=True)
++        with path.open("a", encoding="utf-8") as stream:
++            stream.write(json.dumps(record, separators=(",", ":")) + "\n")
++        return True
+diff --git a/vllm/v1/worker/gpu/spec_decode/dflash/speculator.py b/vllm/v1/worker/gpu/spec_decode/dflash/speculator.py
+index dd1bfdd5e7..13551985a6 100644
+--- a/vllm/v1/worker/gpu/spec_decode/dflash/speculator.py
++++ b/vllm/v1/worker/gpu/spec_decode/dflash/speculator.py
+@@ -23,6 +23,12 @@ from vllm.v1.worker.gpu.dp_utils import DPSyncState, dispatch_cg_and_sync_dp
+ from vllm.v1.worker.gpu.input_batch import InputBatch, InputBuffers
+ from vllm.v1.worker.gpu.model_states.interface import ModelState
+ from vllm.v1.worker.gpu.spec_decode.dflash.cudagraph import DFlashCudaGraphManager
++from vllm.v1.worker.gpu.spec_decode.dflash.diagnostics import (
++    dflash_trace_enabled,
++    mapping_summary,
++    tensor_summary,
++    trace_dflash_event,
++)
+ from vllm.v1.worker.gpu.spec_decode.dflash.utils import load_dflash_model
+ from vllm.v1.worker.gpu.spec_decode.speculator import DraftModelSpeculator
+ from vllm.v1.worker.gpu.spec_decode.utils import get_parallel_drafting_token_id
+@@ -343,14 +349,38 @@ class DFlashSpeculator(DraftModelSpeculator):
+         # number of rejected tokens, we maintain the size of input_ids and
+         # hidden_states the same as the target model's. This means, we pad each
+         # request's query length to include any rejected positions.
++        concatenated_aux = None
+         if aux_hidden_states:
+-            hidden_states = self.model.combine_hidden_states(
+-                torch.cat(aux_hidden_states, dim=-1)
+-            )
++            concatenated_aux = torch.cat(aux_hidden_states, dim=-1)
++            hidden_states = self.model.combine_hidden_states(concatenated_aux)
+         else:
+             hidden_states = last_hidden_states
+         self.hidden_states[:num_target_tokens].copy_(hidden_states[:num_target_tokens])
+ 
++        if dflash_trace_enabled() and not dummy_run:
++            trace_dflash_event(
++                "draft_hidden_states",
++                {
++                    "request_ids": input_batch.req_ids[:num_reqs],
++                    "num_target_tokens": num_target_tokens,
++                    "last_hidden_states": tensor_summary(
++                        last_hidden_states[:num_target_tokens]
++                    ),
++                    "aux_hidden_states": [
++                        tensor_summary(state[:num_target_tokens])
++                        for state in (aux_hidden_states or [])
++                    ],
++                    "concatenated_aux": tensor_summary(
++                        concatenated_aux[:num_target_tokens]
++                        if concatenated_aux is not None
++                        else None
++                    ),
++                    "combined_hidden_states": tensor_summary(
++                        hidden_states[:num_target_tokens]
++                    ),
++                },
++            )
++
+         if dummy_run and skip_attn_for_dummy_run:
+             # Memory profiling path: block_tables / kv_cache_config are not initialized.
+             # Since DFlash needs to build its own attention metadata, we must skip the
+@@ -410,6 +440,60 @@ class DFlashSpeculator(DraftModelSpeculator):
+                 self.sample_from_anchor,
+             )
+ 
++        if dflash_trace_enabled() and not dummy_run:
++            num_sample = num_reqs * self.num_speculative_steps
++            trace_dflash_event(
++                "draft_inputs",
++                {
++                    "request_ids": input_batch.req_ids[:num_reqs],
++                    "num_reqs": num_reqs,
++                    "num_target_tokens": num_target_tokens,
++                    "num_query_tokens": num_query_tokens,
++                    "num_sampled": tensor_summary(num_sampled[:num_reqs]),
++                    "num_rejected": tensor_summary(num_rejected[:num_reqs]),
++                    "last_sampled": tensor_summary(last_sampled[:num_reqs]),
++                    "next_prefill_tokens": tensor_summary(
++                        next_prefill_tokens[:num_reqs]
++                    ),
++                    "context_positions": tensor_summary(
++                        self.context_positions[:num_target_tokens]
++                    ),
++                    "context_slot_mappings": [
++                        tensor_summary(mapping[:num_target_tokens])
++                        for mapping in self._context_slot_mappings
++                    ],
++                    "query_input_ids": tensor_summary(
++                        self.input_buffers.input_ids[:num_query_tokens]
++                    ),
++                    "query_positions": tensor_summary(
++                        self.input_buffers.positions[:num_query_tokens]
++                    ),
++                    "query_slot_mappings": mapping_summary(
++                        {
++                            str(gid): self.block_tables.slot_mappings[
++                                gid, :num_query_tokens
++                            ]
++                            for gid in self.draft_kv_cache_group_ids
++                        }
++                    ),
++                    "sample_indices": tensor_summary(
++                        self.sample_indices[:num_sample]
++                    ),
++                    "sample_positions": tensor_summary(self.sample_pos[:num_sample]),
++                    "sample_idx_mapping": tensor_summary(
++                        self.sample_idx_mapping[:num_sample]
++                    ),
++                    "input_block_tables": mapping_summary(
++                        {
++                            str(gid): self.block_tables.input_block_tables[gid][
++                                :num_reqs
++                            ]
++                            for gid in self.draft_kv_cache_group_ids
++                        }
++                    ),
++                },
++            )
++
+         # Pre-insert context K/V into the cache. Runs eagerly outside the captured graph
+         # because the context shape varies per step. During dummy runs the block tables
+         # are placeholders, so we skip the cache write to avoid clobbering real entries.
+@@ -478,7 +562,16 @@ class DFlashSpeculator(DraftModelSpeculator):
+                 cudagraph_runtime_mode=batch_desc.cg_mode,
+             )
+ 
+-        return self.draft_tokens[:num_reqs]
++        proposed = self.draft_tokens[:num_reqs]
++        if dflash_trace_enabled() and not dummy_run:
++            trace_dflash_event(
++                "draft_proposals",
++                {
++                    "request_ids": input_batch.req_ids[:num_reqs],
++                    "draft_token_ids": tensor_summary(proposed),
++                },
++            )
++        return proposed
+ 
+ 
+ @triton.jit

@@ -15,7 +15,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .config import ConfigurationError, ROOT, load_profile, read_dotenv
+from .config import (
+    ConfigurationError,
+    ROOT,
+    list_runtime_profiles,
+    load_profile,
+    read_dotenv,
+)
 from .service import managed_state as runtime_managed_state
 
 
@@ -134,6 +140,32 @@ def _master_key(dotenv: dict[str, str]) -> str:
             "LITELLM_MASTER_KEY must be set in the environment or .env"
         )
     return key
+
+
+def _active_profile_name(runtime_state: dict[str, Any]) -> str:
+    explicit = runtime_state.get("profile")
+    if isinstance(explicit, str) and explicit:
+        return explicit
+
+    candidates: list[str] = []
+    for record in list_runtime_profiles():
+        profile = load_profile(record["name"])
+        expected = {
+            "model": profile["model"]["name"],
+            "runtime": profile["runtime"]["name"],
+            "recipe": profile["runtime"]["recipe"],
+        }
+        present = [key for key in expected if runtime_state.get(key) is not None]
+        if present and all(
+            runtime_state.get(key) == expected[key] for key in present
+        ):
+            candidates.append(str(profile["name"]))
+    if len(candidates) == 1:
+        return candidates[0]
+    raise ConfigurationError(
+        "managed runtime state cannot be mapped to one production profile; "
+        "restart it"
+    )
 
 
 def install() -> None:
@@ -327,11 +359,7 @@ def test(*, timeout: float = 120) -> None:
     dotenv = read_dotenv()
     key = _master_key(dotenv)
     runtime_state = runtime_managed_state()
-    active_profile = runtime_state.get("profile")
-    if not isinstance(active_profile, str) or not active_profile:
-        raise ConfigurationError(
-            "managed runtime state predates flat production profiles; restart it"
-        )
+    active_profile = _active_profile_name(runtime_state)
     profile = load_profile(active_profile)
     active_aliases = profile["stack"]["litellm_aliases"]
     test_model = profile["stack"]["claude_settings"]["env"]["ANTHROPIC_MODEL"]

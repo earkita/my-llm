@@ -1,0 +1,18 @@
+diff --git a/vllm/models/glm5next/nvidia/model.py b/vllm/models/glm5next/nvidia/model.py
+index 7f5dfc2..0000000 100644
+--- a/vllm/models/glm5next/nvidia/model.py
++++ b/vllm/models/glm5next/nvidia/model.py
+@@ -998,4 +998,13 @@ class Glm5NextForConditionalGeneration(
+     Glm4vForConditionalGeneration, HasInnerState, IsHybrid
+ ):
++    # GLM5Next fuses the dense and expert MLP gate/up projections in vLLM,
++    # while the Quark checkpoint describes them as separate modules.  The
++    # inherited GLM4V mapping lists gate_up_proj as its own shard, causing the
++    # dense-layer FP8 overrides to miss and fall back to global MXFP4.
++    packed_modules_mapping = {
++        "qkv_proj": ["q_proj", "k_proj", "v_proj"],
++        "gate_up_proj": ["gate_proj", "up_proj"],
++    }
++
+     # The text model (KDA + dense-MLA + MoE) is a hybrid mamba model. The
+     # multimodal wrapper must declare the same interfaces so vLLM treats it as

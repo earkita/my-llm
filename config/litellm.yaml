@@ -39,27 +39,27 @@ model_list:
 
   - model_name: glm-5.3-flash-low
     litellm_params:
-      model: hosted_vllm/glm-5.3-flash-ud-q4-k-xl
+      model: hosted_vllm/glm-5.3-flash-quark-mxfp4
       api_base: os.environ/HOSTED_INFERENCE_API_BASE
       reasoning_effort: low
     model_info:
-      max_input_tokens: 1048576
+      max_input_tokens: 32768
 
   - model_name: glm-5.3-flash-high
     litellm_params:
-      model: hosted_vllm/glm-5.3-flash-ud-q4-k-xl
+      model: hosted_vllm/glm-5.3-flash-quark-mxfp4
       api_base: os.environ/HOSTED_INFERENCE_API_BASE
       reasoning_effort: high
     model_info:
-      max_input_tokens: 1048576
+      max_input_tokens: 32768
 
   - model_name: glm-5.3-flash-max
     litellm_params:
-      model: hosted_vllm/glm-5.3-flash-ud-q4-k-xl
+      model: hosted_vllm/glm-5.3-flash-quark-mxfp4
       api_base: os.environ/HOSTED_INFERENCE_API_BASE
       reasoning_effort: max
     model_info:
-      max_input_tokens: 1048576
+      max_input_tokens: 32768
 
   - model_name: qwen3.8-flash-next-fp8
     litellm_params:

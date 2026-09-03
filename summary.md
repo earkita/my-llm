@@ -1,143 +1,129 @@
-# Production profile validation and smoke benchmark
+# Production profiles and GLM-5.3 qualification summary
 
-Date: 2026-09-02 (Europe/Warsaw)
+Date: 2026-09-03 (Europe/Warsaw)
 
 ## Outcome
 
-All three self-contained profiles in `profiles/production/` were validated,
-started sequentially, tested through their OpenAI-compatible API, benchmarked,
-and stopped gracefully. The managed runtime and its persistent systemd user
-unit were inactive after the run.
+The repository contains exactly three flat production profiles. GLM-5.3 was
+migrated from the historical llama.cpp/GGUF deployment to the requested AMD
+Quark/MXFP4 checkpoint and a repository-local vLLM `glm-release` recipe.
 
-The repository is a Python 3.12 control plane for pinned, isolated inference
-recipes. `./run` is its public entry point; each production profile embeds its
-model, runtime, and stack configuration. Recipe builds and generated state live
-outside version-controlled configuration, under `.runtime/` and `logs/`.
+The qualified GLM production mode is target-only. It loads on all eight R9700
+GPUs, completes prefill and decode, exposes a correct OpenAI-compatible chat
+API, and returns coherent text. DFlash2 is available only through explicit
+diagnostic runtime modes because current MRV2 multi-token verification and
+rollback are not lossless.
 
-## Test host
+## Test host and pinned GLM stack
 
-- CPU: AMD Ryzen Threadripper PRO 7955WX, 16 cores / 32 threads
-- RAM: 345 GiB
-- GPUs: 8 x AMD Radeon AI PRO R9700 (`gfx1201`)
-- GPU power cap verified before every start: 270 W on all eight R9700 cards
-- Kernel: Linux 7.0.0-29-generic x86_64
-- An NVIDIA RTX 3090 is also installed, but is intentionally excluded from the
-  production profiles.
+- 8 x AMD Radeon AI PRO R9700 32 GB (`gfx1201`), ROCm 7.14
+- target: `amd/GLM-5.3-Flash-Quark-MXFP4` revision
+  `b5688f25491202978c19c4d036eef579f61bbe07`
+- 62 safetensors shards, 185,066,521,464 tensor bytes
+- vLLM: `ZJY0516/vllm` `glm-release` commit
+  `4500c80c080328dfe62435d083f4063e00d987df` (PR #53906)
+- MRV2 forced with `VLLM_USE_V2_MODEL_RUNNER=1`
+- TP8 + EP8, BF16 KV, 32,768 context, no CPU offload, prefix cache disabled
+- Quark emulation backends on RDNA4; native FP4 BMM is intentionally disabled
+- DFlash2 artifact revision `bf582e4eacc1810f76656d1811693ff6c6737d2a`,
+  SHA-256 `b038e1d9d1e7833fa3880c2c0135ba9b673013f03da1b29fb831931584759dac`
 
-## Profile validation
+## Production profile checks
 
-| Profile | Backend and layout | Context limit | Checkpoint verification | API smoke test | Final lifecycle |
-|---|---|---:|---|---|---|
-| `glm53-flash` | llama.cpp, 8 GPUs | 1,048,576 | PASS: 6 GGUF shards, 199,707,321,347 bytes, plus verified DFlash artifact | PASS, 6/6 checks | start/ready/stop PASS |
-| `qwen38-flash` | vLLM, TP8 + EP | 262,144 | PASS: 131 safetensors shards, 185,502,232,570 tensor bytes | PASS, 6/6 checks | start/ready/stop PASS |
-| `deepseek-v4-flash` | vLLM, TP1 x PP6 | 1,048,576 | PASS: 48 safetensors shards, 166,886,535,336 file bytes | PASS, 6/6 checks | start/ready/stop PASS |
-
-Runtime recipe manifests and installed artifacts were hash-verified. Runtime
-import tests passed for all three recipes, host doctor checks passed for each
-profile, and all installation dry runs completed successfully.
+| Profile | Backend and layout | Context | Current checkpoint/API evidence |
+|---|---|---:|---|
+| `glm53-flash` | vLLM glm-release, TP8/EP8, target-only | 32,768 | 62 shards verified; 8 GPUs active; API 6/6; coherent chat |
+| `qwen38-flash` | vLLM 0.28, TP8/EP8, MTP K2 | 262,144 | verified on 2026-09-02 |
+| `deepseek-v4-flash` | vLLM 0.28, TP1/PP6, DSpark K5 | 1,048,576 | verified on 2026-09-02 |
 
 ## Fast benchmark
 
-The same low-cost smoke workload was used for every profile:
+Workload: 256 input tokens, 64 output tokens, concurrency 1, two measured
+repetitions after one warm-up. These are smoke/regression measurements, not a
+capacity ranking.
 
-```text
-prompt tokens: 256
-output tokens: 64
-concurrency: 1
-measured repetitions: 2
-warm-up repetitions: 1
-timeout: 600 seconds
+| Profile | Date | Mean TTFT (s) | Mean E2E (s) | Observed prefill (tok/s) | Mean decode (tok/s) | Aggregate output (tok/s) |
+|---|---|---:|---:|---:|---:|---:|
+| `glm53-flash` Quark target | 2026-09-03 | 0.574 | 17.399 | 445.74 | 3.74 | 3.68 |
+| `qwen38-flash` | 2026-09-02 | 0.347 | 2.715 | 738.41 | 26.76 | 23.68 |
+| `deepseek-v4-flash` | 2026-09-02 | 0.585 | 2.569 | 437.49 | 31.76 | 24.92 |
+
+The GLM artifact is stored locally under `.runtime/results/glm-target/`;
+DFlash captures are under `.runtime/diagnostics/glm-dflash/`. Generated
+evidence is intentionally not committed.
+
+## DFlash2 diagnosis
+
+The checkpoint itself is the correct GLM-5.3 DFlash2 model: architecture,
+vocabulary, hidden size, non-causal setting, mask token and five
+`target_layer_ids` match the target. The vLLM capture points resolve to target
+layers 6, 15, 25, 34 and 43, and the GLM mHC output is contracted as in the
+independently validated SGLang implementation.
+
+The decisive tests used one frozen 20-token prompt and greedy generation:
+
+| Runtime | Initial output IDs | Accepted drafts | Interpretation |
+|---|---|---:|---|
+| target-only | `3555, 374, 279, 12935, 914, 1939, ...` | n/a | baseline |
+| minimal DFlash K=1 | `3555, 374, 279, 12935, 914, 1939, ...` | 1/62 | initial target state is correct; diverges after rollback |
+| minimal DFlash K=7 | `3555, 374, 279, 4226, 30, 7943, 7943, ...` | 2/427 | first two drafts accepted; multi-token verify then degrades |
+
+An earlier 16-patch image made K=1 diverge at token zero. Ablation isolated
+that additional regression to the unrelated PR #54163 prefix-cache scheduler
+patch. It was removed from the final recipe: prefix caching is disabled, and
+the patch changes KDA/Mamba cache-boundary handling outside this
+qualification. Diagnostic-only error wrapping was also removed. The bounded
+trace patch remains opt-in and was proven not to affect the clean A/B.
+
+A separate A/B port of the BF16-to-FP32 causal-convolution change from PR
+#52905 reduced rather than improved acceptance and was reverted. No checkpoint
+conversion or weight modification was used.
+
+The remaining behavior matches independent upstream reports: DFlash can fail
+under MRV2 even on NVIDIA, greedy output can diverge at K=1, and GLM target
+verification with more than one query token can degrade on a different
+accelerator stack. The likely remaining defect is therefore the MRV2 GLM
+multi-token target verify/recurrent-state path, not the R9700 Quark loader or
+the DFlash checkpoint.
+
+## Final runtime modes
+
+```bash
+# qualified production path
+./run launcher start glm53-flash
+
+# explicit diagnostic controls only
+./run launcher start glm53-flash --runtime-mode extract-hidden-states-k1
+./run launcher start glm53-flash --runtime-mode dflash2-k1
+./run launcher start glm53-flash --runtime-mode dflash2
 ```
 
-| Profile | Mean TTFT (s) | Mean E2E (s) | Observed input (tok/s) | Mean decode (tok/s) | Min decode (tok/s) | Aggregate output (tok/s) |
-|---|---:|---:|---:|---:|---:|---:|
-| `glm53-flash` | 0.992 | 2.247 | 257.98 | 50.22 | 49.91 | 28.48 |
-| `qwen38-flash` | 0.347 | 2.715 | 738.41 | 26.76 | 24.75 | 23.68 |
-| `deepseek-v4-flash` | 0.585 | 2.569 | 437.49 | 31.76 | 31.72 | 24.92 |
-
-Raw benchmark artifacts:
-
-- [GLM benchmark](logs/smoke/glm53-flash/benchmark-20260902T145040.json)
-- [Qwen benchmark](logs/smoke/qwen38-flash/benchmark-20260902T150459.json)
-- [DeepSeek benchmark](logs/smoke/deepseek-v4-flash/benchmark-20260902T151237.json)
-- [GLM API test](logs/smoke/glm53-flash/api-20260902T145040.json)
-
-The observed input rate is derived from client-observed time to first token.
-These figures are a startup and regression smoke test, not a capacity or
-long-context benchmark. The small sample size should not be used to rank the
-models for production workloads.
-
-## GLM prefix-cache regression check
-
-On 2026-09-03, the GLM llama.cpp recipe was rebuilt with a HIP-only multi-GPU
-device-context fix derived from upstream llama.cpp PR #21170. Prompt caching
-was then enabled with `--cache-prompt --cache-reuse 0 --cache-ram 0` and tested
-against the production 8-GPU process.
-
-An identical 14,416-token request was issued repeatedly. The cold request
-evaluated all 14,416 prompt tokens in 69.53 seconds (207.34 tokens/s). Each
-measured warm request reported 14,412 cached tokens and evaluated only four new
-prompt tokens:
-
-| Warm request | Client E2E (s) | Cached tokens | Evaluated prompt tokens | Prompt eval (ms) |
-|---:|---:|---:|---:|---:|
-| 1 | 0.302 | 14,412 | 4 | 210.014 |
-| 2 | 0.276 | 14,412 | 4 | 195.828 |
-| 3 | 0.274 | 14,412 | 4 | 195.459 |
-
-The server survived every repeat, remained ready afterward, and the LiteLLM
-chat-completion probe passed through alias `glm-5.3-flash-high`. This directly
-covers the former second-request ROCm illegal-memory-access failure.
-
-## Changes required to run the profiles
-
-- Corrected code paths that invoked the Bash `run` entry point through Python.
-- Kept every runtime recipe and isolated environment under this checkout's
-  `.runtime/recipes/`; external recipe-root overrides are rejected by design.
-- Made model verification inspect the current checkpoint instead of trusting a
-  previously written source record. Safetensors validation now compares actual
-  tensor payload bytes and excludes container headers.
-- Updated Qwen and DeepSeek GPU BDF ordering for the host's current PCIe
-  placement, keeping the slower relocated links at the end of the layout.
-- Added a narrowly scoped ROCm Triton bootstrap for the vLLM parent and every
-  spawned worker. This is required on the mixed AMD/NVIDIA host because both
-  Triton drivers otherwise report active and vLLM disables Triton. Two Qwen
-  startup attempts exposed the parent/worker distinction; the final run passed
-  after the worker bootstrap was added.
-- Improved persistent keeper shutdown handling so a normal managed stop is not
-  misreported as an unexpected runtime exit.
-- Added regression tests for repository-local recipe boundaries, live
-  checkpoint revalidation, safetensors byte semantics, vLLM entry-point
-  construction, and worker Triton bootstrapping.
-- Added a HIP-scoped llama.cpp multi-GPU device-context patch and enabled GLM
-  common-prefix prompt caching after a repeated-request regression test.
-- Made the LiteLLM health test validate all aliases exposed by the active flat
-  production profile and probe the profile's configured Claude model alias.
+LiteLLM is not required for inference. Add `--with-litellm` to the qualified
+target-only start when Claude Code or a unified proxy endpoint is needed.
 
 ## Commands exercised
 
 ```bash
-./run test unit
-make dry-run
-./run test runtime --profile PROFILE
-./run model verify --profile PROFILE
-./run doctor --profile PROFILE
-skills/start-r9700-runtime/scripts/start-runtime.sh --profile PROFILE
-./run test api --profile PROFILE --timeout 600 --output OUTPUT
-./run benchmark --profile PROFILE --prompt-tokens 256 --output-tokens 64 \
+./run install --profile glm53-flash --rebuild
+./run test runtime --profile glm53-flash
+./run model verify glm53-flash
+./run doctor --profile glm53-flash
+make check
+skills/start-r9700-runtime/scripts/start-runtime.sh --profile glm53-flash
+./run test api --profile glm53-flash --timeout 600 --output OUTPUT
+./run benchmark --profile glm53-flash --prompt-tokens 256 --output-tokens 64 \
   --concurrency 1 --repetitions 2 --warmup 1 --timeout 600 --output OUTPUT
 skills/stop-r9700-runtime/scripts/stop-runtime.sh
-make check
 ```
 
-## Remaining observations
+## Relevant upstream status
 
-- DeepSeek's first start took about seven minutes because its six stages
-  compiled and warmed custom kernels. This was active compilation, not a hang.
-- The final Qwen and DeepSeek logs contain no OOM or fatal runtime error. vLLM
-  warns that some R9700-specific FP8/MoE tuning files are absent and falls back
-  to default kernels; targeted tuning could improve performance.
-- Qwen also reports that its speculative-token scheduling may be suboptimal.
-  That setting was left unchanged because this run establishes correctness and
-  a smoke baseline rather than retuning the production profile.
-- No long-context, concurrent-load, soak, or power-efficiency benchmark was run.
+- vLLM PR #53906 (`glm-release`) supplies GLM-5.3 target support and is not yet
+  merged at the tested commit.
+- vLLM issue #49559 reports near-zero DFlash acceptance under MRV2 on H800,
+  while MRV1 works.
+- vLLM issue #54928 reports greedy divergence with DFlash at K=1.
+- vLLM-Ascend issue #15329 reports healthy GLM prefill/single-token decode but
+  degraded logits in multi-token target verification.
+- SGLang PR #36755 validates contracted mHC hidden states with the official
+  DFlash2 checkpoint, supporting the auxiliary-state mapping used here.

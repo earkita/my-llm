@@ -20,6 +20,7 @@ from .backends import (
     verify_backend_install,
 )
 from .config import (
+    activate_runtime_mode,
     ConfigurationError,
     ROOT,
     load_profile,
@@ -149,6 +150,7 @@ def start(
     host: str | None = None,
     port: int | None = None,
     backend: str | None = None,
+    runtime_mode: str | None = None,
     wait_ready: bool = False,
     ready_timeout: float = 900,
 ) -> dict[str, Any]:
@@ -160,6 +162,8 @@ def start(
         )
     model = deployment["model"]
     runtime = runtime_deployment["runtime"]
+    if runtime_mode is not None:
+        runtime = activate_runtime_mode(model, runtime, runtime_mode)
     selected_backend = runtime_backend(runtime)
     selected_manifest_sha256 = backend_manifest_sha256(runtime)
     if backend is not None and backend != selected_backend:
@@ -202,6 +206,7 @@ def start(
         "model": model["name"],
         "model_profile_sha256": model["_sha256"],
         "runtime": runtime["name"],
+        "runtime_mode": runtime.get("active_experimental_mode"),
         "runtime_profile_sha256": runtime["_sha256"],
         "backend_manifest_sha256": selected_manifest_sha256,
         "runtime_manifest_sha256": selected_manifest_sha256,
@@ -234,6 +239,7 @@ def start(
         "backend": selected_backend,
         "recipe": runtime["recipe"],
         "runtime": runtime["name"],
+        "runtime_mode": runtime.get("active_experimental_mode"),
         "runtime_profile_sha256": runtime["_sha256"],
         "backend_manifest_sha256": selected_manifest_sha256,
         "runtime_manifest_sha256": selected_manifest_sha256,
@@ -269,7 +275,8 @@ def status() -> int:
     print(
         f"{label} PID={state['pid']} PGID={state['pgid']} "
         f"URL={state['url']} backend={state.get('backend', 'vllm')} "
-        f"recipe={state.get('recipe', '-')} runtime={state['runtime']} log={state['log']}"
+        f"recipe={state.get('recipe', '-')} "
+        f"runtime={state.get('runtime', 'legacy-state')} log={state['log']}"
     )
     return 0 if label == "ready" else 2
 

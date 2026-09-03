@@ -32,6 +32,7 @@ def gate(
     *,
     model_name: str,
     runtime_name: str,
+    runtime_mode: str | None = None,
     ready_timeout: float,
     stop_timeout: float,
     output: Path,
@@ -54,6 +55,7 @@ def gate(
             state = start(
                 model_name,
                 runtime_name,
+                runtime_mode=runtime_mode,
                 wait_ready=True,
                 ready_timeout=ready_timeout,
             )
@@ -62,6 +64,7 @@ def gate(
                 url=state["url"],
                 model_name=model_name,
                 runtime_name=runtime_name,
+                runtime_mode=runtime_mode,
                 timeout=600,
             )
             stop(timeout=stop_timeout)
@@ -87,6 +90,7 @@ def gate(
             "generated_at": datetime.now().astimezone().isoformat(),
             "model": model_name,
             "runtime": runtime_name,
+            "runtime_mode": runtime_mode,
             "legs": legs,
             "logs": logs,
             "ras": ras,

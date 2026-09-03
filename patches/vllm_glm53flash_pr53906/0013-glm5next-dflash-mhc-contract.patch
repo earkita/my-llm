@@ -1,0 +1,89 @@
+diff --git a/vllm/models/glm5next/nvidia/model.py b/vllm/models/glm5next/nvidia/model.py
+--- a/vllm/models/glm5next/nvidia/model.py
++++ b/vllm/models/glm5next/nvidia/model.py
+@@ -584,6 +584,10 @@ class Glm5NextModel(nn.Module, EagleModelMixin):
+ 
+         config = vllm_config.model_config.hf_config
+         self.config = config
++        speculative_config = vllm_config.speculative_config
++        self._dflash_aux_hidden_states = (
++            speculative_config is not None and speculative_config.use_dflash()
++        )
+ 
+         self.vocab_size = config.vocab_size
+         self.device = current_platform.device_type
+@@ -656,6 +660,35 @@ class Glm5NextModel(nn.Module, EagleModelMixin):
+     def embed_input_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
+         return self.embed_tokens(input_ids)
+ 
++    def _maybe_add_glm5next_hidden_state(
++        self,
++        aux_hidden_states: list[torch.Tensor],
++        layer_idx: int,
++        hidden_states: torch.Tensor,
++        residual: torch.Tensor | None,
++        post: torch.Tensor | None,
++        comb: torch.Tensor | None,
++        layer: Glm5NextDecoderLayer | None = None,
++    ) -> None:
++        if layer_idx not in self.aux_hidden_state_layers:
++            return
++
++        if not self._dflash_aux_hidden_states:
++            aux_hidden_states.append(hidden_states)
++            return
++
++        # The DFlash checkpoint was trained on the completed, contracted mHC
++        # layer output. GLM defers hc_post so it can fuse it with the next
++        # layer's hc_pre; the hot-path ``hidden_states`` here is only the MLP
++        # contribution and ``residual`` is the four-stream mHC bundle. Materialize
++        # hc_post only for capture, then contract [T, n, H] to [T, H].
++        if layer is None or residual is None or post is None or comb is None:
++            raise RuntimeError(
++                "DFlash auxiliary capture requires a completed GLM mHC layer"
++            )
++        mhc_output = layer.hc_post(hidden_states, residual, post, comb)
++        aux_hidden_states.append(hc_contract(mhc_output, layer.n))
++
+     def forward(
+         self,
+         input_ids: torch.Tensor | None,
+@@ -689,10 +722,17 @@ class Glm5NextModel(nn.Module, EagleModelMixin):
+         if self.is_sequence_parallel:
+             hidden_states = sp_shard(hidden_states)
+ 
+-        # GLM-5.3 mHC carries a bundle of residual streams whose shape does not
+-        # match hidden_states. EAGLE3 must capture hidden_states directly.
+-        aux_hidden_states = self._maybe_add_hidden_state(
+-            [], self.start_layer, hidden_states, None
++        # EAGLE3 consumes the direct hidden state, whereas DFlash was trained on
++        # the completed, contracted mHC output. Keep those capture contracts
++        # separate even though both use the SupportsEagle3 plumbing.
++        aux_hidden_states: list[torch.Tensor] = []
++        self._maybe_add_glm5next_hidden_state(
++            aux_hidden_states,
++            self.start_layer,
++            hidden_states,
++            residual,
++            post,
++            comb,
+         )
+         for layer_idx, layer in enumerate(
+             self._active_layers, start=self.start_layer
+@@ -700,8 +740,14 @@ class Glm5NextModel(nn.Module, EagleModelMixin):
+             hidden_states, residual, post, comb = layer(
+                 positions, hidden_states, residual, post, comb
+             )
+-            self._maybe_add_hidden_state(
+-                aux_hidden_states, layer_idx + 1, hidden_states, None
++            self._maybe_add_glm5next_hidden_state(
++                aux_hidden_states,
++                layer_idx + 1,
++                hidden_states,
++                residual,
++                post,
++                comb,
++                layer,
+             )
+ 
+         if not get_pp_group().is_last_rank:

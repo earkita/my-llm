@@ -1,0 +1,58 @@
+diff --git a/vllm/models/glm5next/nvidia/model.py b/vllm/models/glm5next/nvidia/model.py
+index 9988dd8..f208402 100644
+--- a/vllm/models/glm5next/nvidia/model.py
++++ b/vllm/models/glm5next/nvidia/model.py
+@@ -1067,7 +1067,7 @@ def _try_load_fp8_indexer_wk(name, tensor, buf, params_dict, loaded_params):
+     if "indexer.wk." not in name or "wk_weights" in name:
+         return False
+     is_weight = name.endswith(".weight") and tensor.dtype == torch.float8_e4m3fn
+-    is_scale = "weight_scale_inv" in name
++    is_scale = name.endswith((".weight_scale", ".weight_scale_inv"))
+     if not is_weight and not is_scale:
+         return False
+     layer_prefix = name.rsplit(".wk.", 1)[0]
+@@ -1119,7 +1119,7 @@ def _dequant_fp8_block(
+ 
+ 
+ # FP8 checkpoint projections that the MODEL keeps in BF16, so the block-FP8
+-# (weight + weight_scale_inv) must be dequantized to BF16 on load.
++# (weight + weight_scale) must be dequantized to BF16 on load.
+ # Maps checkpoint proj-suffix -> (buffer key, model target base, fused shard id
+ # or None for a direct projection, whether NoPE rope-padding applies).
+ _FP8_ATTN_PROJS = {
+@@ -1140,11 +1140,11 @@ def _try_load_fp8_attn_proj(
+ ) -> bool:
+     """Dequantize FP8 q_a_proj / kv_a_proj_with_mqa / o_proj to BF16 on load.
+ 
+-    The FP8 checkpoint stores these as block-FP8 (weight + weight_scale_inv),
++    The FP8 checkpoint stores these as block-FP8 (weight + weight_scale),
+     but the model holds them in BF16 (``fused_qkv_a_proj`` is always BF16 via
+     DeepSeekV2FusedQkvAProjLinear; ``o_proj`` is excluded by
+-    modules_to_not_convert). When the model target is BF16 (no
+-    ``weight_scale_inv`` param) we dequantize; otherwise we return False so the
++    modules_to_not_convert). When the model target is BF16 (no weight-scale
++    parameter) we dequantize; otherwise we return False so the
+     normal stacked/direct path loads the FP8 tensor as-is.
+     """
+     matched = None
+@@ -1156,16 +1156,16 @@ def _try_load_fp8_attn_proj(
+         return False
+     suffix, (key, target_base, shard_id, is_kva) = matched
+     is_weight = name.endswith(".weight") and tensor.dtype == torch.float8_e4m3fn
+-    is_scale = "weight_scale_inv" in name
++    is_scale = name.endswith((".weight_scale", ".weight_scale_inv"))
+     if not is_weight and not is_scale:
+         return False
+ 
+     layer_prefix = name.rsplit(suffix, 1)[0]
+     target_w = f"{layer_prefix}.{target_base}.weight"
+-    target_s = f"{layer_prefix}.{target_base}.weight_scale_inv"
++    target_scale = f"{layer_prefix}.{target_base}.weight_scale"
+     # If the model actually kept this projection in FP8, let the normal path
+-    # handle it (it has a weight_scale_inv param).
+-    if target_s in params_dict:
++    # handle either Quark's weight_scale or native FP8's weight_scale_inv.
++    if target_scale in params_dict or f"{target_scale}_inv" in params_dict:
+         return False
+ 
+     entry = buf.setdefault(layer_prefix, {}).setdefault(key, {})

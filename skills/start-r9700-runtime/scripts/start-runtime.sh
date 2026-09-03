@@ -20,15 +20,16 @@ extra=()
 unit=r9700-runtime.service
 
 usage() {
-  printf 'Usage: %s [--profile NAME|PATH] [--model-directory PATH] [--host HOST] [--port PORT] [--ready-timeout SECONDS] [--required-power-cap-w WATTS] [--dry-run]\n' "$0"
+  printf 'Usage: %s [--profile NAME|PATH] [--runtime-mode NAME] [--model-directory PATH] [--host HOST] [--port PORT] [--ready-timeout SECONDS] [--required-power-cap-w WATTS] [--dry-run]\n' "$0"
 }
 
 while (($#)); do
   case "$1" in
-    --profile|--model-directory|--host|--port|--ready-timeout|--required-power-cap-w)
+    --profile|--runtime-mode|--model-directory|--host|--port|--ready-timeout|--required-power-cap-w)
       (($# >= 2)) || { printf 'missing value for %s\n' "$1" >&2; exit 2; }
       case "$1" in
         --profile) profile=$2 ;;
+        --runtime-mode) extra+=("$1" "$2") ;;
         --ready-timeout) ready_timeout=$2 ;;
         --required-power-cap-w) required_power_cap_w=$2 ;;
         *) extra+=("$1" "$2") ;;

@@ -80,23 +80,58 @@ def literal_oracle(
     return passed, f"content={actual!r} finish_reason={finish!r}"
 
 
+def _literal_chat_body(model: dict[str, Any]) -> dict[str, Any]:
+    body: dict[str, Any] = {
+        "model": model["served_name"],
+        "messages": [
+            {"role": "system", "content": LITERAL_SYSTEM},
+            {"role": "user", "content": LITERAL_EXPECTED},
+        ],
+        "temperature": 0,
+        "max_tokens": 32,
+    }
+    if model["family"] == "glm5next":
+        # GLM-5.3's template ignores `thinking=false`. Passing it only disables
+        # reasoning extraction and can leak an unfinished scratchpad into
+        # message.content. Give low-effort reasoning enough room to close so
+        # the configured glm45 parser can expose the final answer.
+        body["reasoning_effort"] = "low"
+        body["max_tokens"] = 512
+    else:
+        body["chat_template_kwargs"] = {"thinking": False}
+    return body
+
+
 def test_api(
     *,
     url: str,
     model_name: str,
     runtime_name: str,
+    runtime_mode: str | None = None,
     output: Path | None = None,
     timeout: float = 600,
 ) -> dict[str, Any]:
     url = url.rstrip("/")
     model = load_model(model_name)
-    runtime = load_runtime(runtime_name)
+    runtime = load_runtime(runtime_name, runtime_mode)
     state = managed_state()
+    expected_mode = runtime.get("active_experimental_mode")
+    runtime_ok = state.get("runtime") == runtime["name"]
+    runtime_hash_ok = (
+        state.get("runtime_profile_sha256") == runtime["_sha256"]
+    )
+    if expected_mode is None:
+        runtime_ok = state.get("runtime", runtime["name"]) == runtime["name"]
+        runtime_hash_ok = (
+            state.get("runtime_profile_sha256", runtime["_sha256"])
+            == runtime["_sha256"]
+        )
     managed_ok = (
         state.get("url") == url
         and state.get("model") == model["name"]
-        and state.get("runtime") == runtime["name"]
-        and state.get("runtime_profile_sha256") == runtime["_sha256"]
+        and runtime_ok
+        and runtime_hash_ok
+        and state.get("runtime_mode") == expected_mode
     )
     started = datetime.now().astimezone()
     health_ok = False
@@ -118,18 +153,7 @@ def test_api(
     )
 
     if model["family"] in {"deepseek_v4", "deepseek_v4_flash", "glm5next"}:
-        body = {
-            "model": model["served_name"],
-            "messages": [
-                {"role": "system", "content": LITERAL_SYSTEM},
-                {"role": "user", "content": LITERAL_EXPECTED},
-            ],
-            "chat_template_kwargs": {"thinking": False},
-            "temperature": 0,
-            "max_tokens": 32,
-        }
-        if model["family"] == "glm5next":
-            body["reasoning_effort"] = "low"
+        body = _literal_chat_body(model)
         response, elapsed = post_json(url + "/v1/chat/completions", body, timeout)
         generation_ok, detail = literal_oracle(response)
         check_name = "literal_chat"
@@ -169,6 +193,7 @@ def test_api(
         "url": url,
         "model": model["name"],
         "runtime": runtime["name"],
+        "runtime_mode": expected_mode,
         "checks": checks,
         "passed": all(checks.values()),
         "elapsed_seconds": elapsed,

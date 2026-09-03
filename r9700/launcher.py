@@ -7,7 +7,13 @@ from typing import Any
 
 from . import proxy
 from .backends import runtime_backend
-from .config import ConfigurationError, ROOT, list_runtime_profiles, load_profile
+from .config import (
+    ConfigurationError,
+    ROOT,
+    activate_runtime_mode,
+    list_runtime_profiles,
+    load_profile,
+)
 from .service import managed_state, status as service_status
 from .service import wait as service_wait
 
@@ -44,6 +50,52 @@ def _target(profile_name: str) -> tuple[str, dict[str, Any]]:
     return str(profile["name"]), profile
 
 
+def _state_matches_target(
+    state: dict[str, Any],
+    *,
+    profile_name: str,
+    model_name: str,
+    runtime_name: str,
+    runtime_mode: str | None,
+) -> bool:
+    """Match both current and pre-runtime-mode managed state records."""
+    expected = {
+        "profile": profile_name,
+        "model": model_name,
+        "runtime": runtime_name,
+    }
+    present = [key for key in expected if state.get(key) is not None]
+    if not present or any(state.get(key) != expected[key] for key in present):
+        return False
+    active_mode = state.get("runtime_mode")
+    if runtime_mode is None:
+        return active_mode in (None, "")
+    # An experimental runtime must carry its explicit mode and runtime name;
+    # an older ambiguous state must never be upgraded implicitly.
+    return active_mode == runtime_mode and state.get("runtime") == runtime_name
+
+
+def _desired_runtime(
+    profile: dict[str, Any],
+    runtime_mode: str | None,
+    experimental_dflash2: bool,
+) -> tuple[str | None, dict[str, Any]]:
+    if runtime_mode and experimental_dflash2:
+        raise ConfigurationError(
+            "choose --runtime-mode or --experimental-dflash2, not both"
+        )
+    if experimental_dflash2:
+        if profile["name"] != "glm53-flash":
+            raise ConfigurationError(
+                "--experimental-dflash2 is available only for glm53-flash"
+            )
+        runtime_mode = "dflash2"
+    runtime = profile["runtime"]
+    if runtime_mode:
+        runtime = activate_runtime_mode(profile["model"], runtime, runtime_mode)
+    return runtime_mode, runtime
+
+
 def _run(command: list[str]) -> None:
     result = subprocess.run(command, cwd=ROOT, check=False)
     if result.returncode:
@@ -58,6 +110,7 @@ def _start_command(
     host: str | None = None,
     port: int | None = None,
     ready_timeout: int = 900,
+    runtime_mode: str | None = None,
     dry_run: bool = False,
 ) -> list[str]:
     if ready_timeout < 1:
@@ -65,6 +118,8 @@ def _start_command(
     if port is not None and not 1 <= port <= 65535:
         raise ConfigurationError("port must be between 1 and 65535")
     command = [str(START_SCRIPT), "--profile", profile_name]
+    if runtime_mode:
+        command.extend(("--runtime-mode", runtime_mode))
     if host:
         command.extend(("--host", host))
     if port is not None:
@@ -80,6 +135,7 @@ def _stack_start_command(
     *,
     ready_timeout: int = 900,
     proxy_ready_timeout: int = 120,
+    runtime_mode: str | None = None,
     dry_run: bool = False,
 ) -> list[str]:
     if ready_timeout < 1 or proxy_ready_timeout < 1:
@@ -94,6 +150,8 @@ def _stack_start_command(
         "--proxy-ready-timeout",
         str(proxy_ready_timeout),
     ]
+    if runtime_mode:
+        command.extend(("--runtime-mode", runtime_mode))
     if dry_run:
         command.append("--dry-run")
     return command
@@ -127,14 +185,31 @@ def start(
     ready_timeout: int = 900,
     proxy_ready_timeout: int = 120,
     with_litellm: bool = False,
+    experimental_dflash2: bool = False,
+    runtime_mode: str | None = None,
     dry_run: bool = False,
 ) -> None:
-    name, _ = _target(profile_name)
+    name, profile = _target(profile_name)
+    runtime_mode, desired_runtime = _desired_runtime(
+        profile, runtime_mode, experimental_dflash2
+    )
     state = _running_state()
     proxy_state = _proxy_running_state()
-    if state and state.get("profile") != name and not dry_run:
+    matches_running = bool(
+        state
+        and _state_matches_target(
+            state,
+            profile_name=name,
+            model_name=profile["model"]["name"],
+            runtime_name=desired_runtime["name"],
+            runtime_mode=runtime_mode,
+        )
+    )
+    if state and not matches_running and not dry_run:
         raise ConfigurationError(
-            f"{state['profile']} is already running at {state['url']}; "
+            f"{state.get('profile', state.get('model', 'unknown'))} "
+            f"({state.get('runtime', 'legacy state')}) is already running at "
+            f"{state['url']}; "
             f"use './run launcher switch {name}' to replace it explicitly"
         )
     if state and not with_litellm and not dry_run:
@@ -158,6 +233,7 @@ def start(
                 name,
                 ready_timeout=ready_timeout,
                 proxy_ready_timeout=proxy_ready_timeout,
+                runtime_mode=runtime_mode,
                 dry_run=dry_run,
             )
         )
@@ -168,6 +244,7 @@ def start(
             host=host,
             port=port,
             ready_timeout=ready_timeout,
+            runtime_mode=runtime_mode,
             dry_run=dry_run,
         )
     )
@@ -214,9 +291,14 @@ def switch(
     stop_timeout: int | None = None,
     proxy_stop_timeout: int | None = None,
     with_litellm: bool = False,
+    experimental_dflash2: bool = False,
+    runtime_mode: str | None = None,
     dry_run: bool = False,
 ) -> None:
-    name, _ = _target(profile_name)
+    name, profile = _target(profile_name)
+    runtime_mode, desired_runtime = _desired_runtime(
+        profile, runtime_mode, experimental_dflash2
+    )
     if with_litellm:
         if host or port is not None:
             raise ConfigurationError(
@@ -227,6 +309,7 @@ def switch(
             name,
             ready_timeout=ready_timeout,
             proxy_ready_timeout=proxy_ready_timeout,
+            runtime_mode=runtime_mode,
             dry_run=dry_run,
         )
         _stack_stop_command(
@@ -240,28 +323,41 @@ def switch(
             host=host,
             port=port,
             ready_timeout=ready_timeout,
+            runtime_mode=runtime_mode,
             dry_run=dry_run,
         )
         if stop_timeout is not None and stop_timeout < 1:
             raise ConfigurationError("stop timeout must be a positive integer")
     state = _running_state()
-    if state and state.get("profile") == name and with_litellm:
+    matches_running = bool(
+        state
+        and _state_matches_target(
+            state,
+            profile_name=name,
+            model_name=profile["model"]["name"],
+            runtime_name=desired_runtime["name"],
+            runtime_mode=runtime_mode,
+        )
+    )
+    if state and matches_running and with_litellm:
         start(
             name,
             ready_timeout=ready_timeout,
             proxy_ready_timeout=proxy_ready_timeout,
             with_litellm=True,
+            runtime_mode=runtime_mode,
             dry_run=dry_run,
         )
         return
-    if state and state.get("profile") == name and not dry_run:
+    if state and matches_running and not dry_run:
         print(
             f"already running profile={name} PID={state['pid']} URL={state['url']}"
         )
         return
 
     if state:
-        print(f"switching {state['profile']} -> {name}", flush=True)
+        active = state.get("profile", state.get("model", "unknown"))
+        print(f"switching {active} -> {name}", flush=True)
         stop(
             timeout=stop_timeout,
             proxy_timeout=proxy_stop_timeout,
@@ -281,6 +377,7 @@ def switch(
         ready_timeout=ready_timeout,
         proxy_ready_timeout=proxy_ready_timeout,
         with_litellm=with_litellm,
+        runtime_mode=runtime_mode,
         dry_run=dry_run,
     )
 

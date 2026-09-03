@@ -1,0 +1,89 @@
+diff --git a/tests/v1/worker/test_kv_block_zeroer.py b/tests/v1/worker/test_kv_block_zeroer.py
+index 64a8177..2cb4188 100644
+--- a/tests/v1/worker/test_kv_block_zeroer.py
++++ b/tests/v1/worker/test_kv_block_zeroer.py
+@@ -65,6 +65,47 @@ def test_attention_blocks_are_zeroed(spec):
+     assert torch.equal(storage, expected)
+ 
+ 
++@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
++def test_overlaid_groups_may_share_base_address_with_different_block_strides():
++    """A shared raw pool can expose layer-outer target and draft views from
++    the same base address even though their per-layer block strides differ."""
++    device = torch.device("cuda")
++    num_blocks = 4
++    spec = SlidingWindowSpec(
++        block_size=2,
++        num_kv_heads=1,
++        head_size=1,
++        dtype=torch.uint8,
++        sliding_window=4,
++    )
++    raw = torch.ones(32, dtype=torch.uint8, device=device)
++    target = torch.as_strided(raw, (num_blocks, 1, 2, 2), (4, 4, 2, 1))
++    draft = torch.as_strided(raw, (num_blocks, 1, 2, 2), (8, 4, 2, 1))
++    assert target.data_ptr() == draft.data_ptr()
++    assert target.stride(0) != draft.stride(0)
++
++    zeroer = KVBlockZeroer(
++        device,
++        attn_groups_iter=[
++            AttentionGroup(None, ["target"], spec, 0),
++            AttentionGroup(None, ["draft"], spec, 1),
++        ],
++        kernel_block_sizes=[2, 2],
++        static_forward_context={
++            "target": SimpleNamespace(kv_cache=target),
++            "draft": SimpleNamespace(kv_cache=draft),
++        },
++        num_blocks=num_blocks,
++    )
++
++    zeroer.zero_block_ids([1])
++    torch.accelerator.synchronize()
++
++    assert (raw[4:12] == 0).all()
++    assert (raw[:4] == 1).all()
++    assert (raw[12:] == 1).all()
++
++
+ @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+ def test_layers_in_one_group_may_use_different_kernel_pages_per_block():
+     """Derive kernel pages per block from each layer's allocation."""
+diff --git a/vllm/v1/worker/utils.py b/vllm/v1/worker/utils.py
+index 067a2b0..1454052 100644
+--- a/vllm/v1/worker/utils.py
++++ b/vllm/v1/worker/utils.py
+@@ -147,7 +147,7 @@ class KVBlockZeroer:
+         # Overlaid layers (packed layouts) share a base address but may have
+         # different page sizes; keep the widest span per address so newly
+         # allocated blocks are fully zeroed for every overlaying group.
+-        seen_ptrs: dict[int, int] = {}
++        seen_segments: dict[tuple[int, int], int] = {}
+         seg_addrs: list[int] = []
+         seg_block_strides: list[int] = []
+         seg_page_sizes: list[int] = []
+@@ -195,18 +195,16 @@ class KVBlockZeroer:
+                     assert (dp + off_bytes) % 4 == 0
+                     for virtual_index in range(ratio):
+                         addr = dp + off_bytes + virtual_index * block_stride_bytes
+-                        if (idx := seen_ptrs.get(addr)) is not None:
+-                            assert (
+-                                seg_block_strides[idx]
+-                                == logical_block_stride_bytes // 4
+-                            )
++                        stride_el = logical_block_stride_bytes // 4
++                        segment_key = (addr, stride_el)
++                        if (idx := seen_segments.get(segment_key)) is not None:
+                             seg_page_sizes[idx] = max(
+                                 seg_page_sizes[idx], kernel_page_bytes // 4
+                             )
+                             continue
+-                        seen_ptrs[addr] = len(seg_addrs)
++                        seen_segments[segment_key] = len(seg_addrs)
+                         seg_addrs.append(addr)
+-                        seg_block_strides.append(logical_block_stride_bytes // 4)
++                        seg_block_strides.append(stride_el)
+                         seg_page_sizes.append(kernel_page_bytes // 4)
+ 
+         if not seg_addrs:

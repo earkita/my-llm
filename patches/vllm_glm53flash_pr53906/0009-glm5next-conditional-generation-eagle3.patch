@@ -1,0 +1,19 @@
+diff --git a/vllm/models/glm5next/nvidia/model.py b/vllm/models/glm5next/nvidia/model.py
+--- a/vllm/models/glm5next/nvidia/model.py
++++ b/vllm/models/glm5next/nvidia/model.py
+@@ -992,10 +992,14 @@ class Glm5NextForCausalLM(
+ @MULTIMODAL_REGISTRY.register_processor(
+     Glm5NextMultiModalProcessor,
+     info=Glm5NextProcessingInfo,
+     dummy_inputs=Glm4vDummyInputsBuilder,
+ )
+ class Glm5NextForConditionalGeneration(
+-    Glm4vForConditionalGeneration, HasInnerState, IsHybrid
++    Glm4vForConditionalGeneration,
++    HasInnerState,
++    SupportsEagle,
++    SupportsEagle3,
++    IsHybrid,
+ ):
+     # GLM5Next fuses the dense and expert MLP gate/up projections in vLLM,
+     # while the Quark checkpoint describes them as separate modules.  The

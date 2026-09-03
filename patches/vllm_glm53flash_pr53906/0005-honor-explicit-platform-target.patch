@@ -1,0 +1,24 @@
+diff --git a/vllm/platforms/__init__.py b/vllm/platforms/__init__.py
+index b34b0b9..bef8826 100644
+--- a/vllm/platforms/__init__.py
++++ b/vllm/platforms/__init__.py
+@@ -231,6 +231,19 @@ builtin_platform_plugins = {
+ 
+ 
+ def resolve_current_platform_cls_qualname() -> str:
++    # A caller-selected accelerator target is authoritative on mixed-vendor
++    # hosts. Otherwise NVML and AMDSMI can both find devices and activate the
++    # CUDA and ROCm plugins at the same time.
++    explicit_target = os.getenv("VLLM_TARGET_DEVICE")
++    if explicit_target in builtin_platform_plugins:
++        platform_cls_qualname = builtin_platform_plugins[explicit_target]()
++        if platform_cls_qualname is None:
++            raise RuntimeError(
++                f"Explicit platform target {explicit_target!r} is unavailable"
++            )
++        logger.debug("Explicitly selected platform %s.", explicit_target)
++        return platform_cls_qualname
++
+     # An explicit CPU target is authoritative. Native CPU-only CI jobs reuse
+     # an accelerator wheel and can run on accelerator hosts, so probing every
+     # plugin would otherwise activate both CPU and the host accelerator.

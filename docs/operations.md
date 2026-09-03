@@ -31,8 +31,9 @@ Dla istniejących wag:
 ./run model verify qwen38-flash
 ```
 
-`glm53-flash` wymaga także przypiętego pliku
-`/mnt/ai/models/glm/GLM-5.3-Flash-DFlash2-GGUF/GLM-5.3-Flash-DFlash2-BF16.gguf`.
+`glm53-flash` przypina także model DFlash2, ale profil kwalifikacyjny uruchamia
+domyślnie wyłącznie target Quark/MXFP4. Plikiem draftera jest
+`/mnt/ai/models/glm/GLM-5.3-Flash-DFlash2-HF-bf582e4/model.safetensors`.
 Download pobiera go automatycznie, a adopt i start wymagają poprawnego rozmiaru
 oraz SHA-256.
 
@@ -85,6 +86,18 @@ Bezpieczne zatrzymanie:
 ```bash
 skills/stop-r9700-runtime/scripts/stop-runtime.sh
 ```
+
+Eksperymentalny DFlash nie jest włączany przez zwykły start. Do odtwarzalnej
+diagnostyki służą jawne tryby:
+
+```bash
+./run launcher start glm53-flash --runtime-mode dflash2-k1
+./run launcher start glm53-flash --runtime-mode dflash2
+./run launcher start glm53-flash --runtime-mode extract-hidden-states-k1
+```
+
+Po testach zatrzymaj usługę przed zmianą trybu. Aktualna ścieżka DFlash/MRV2
+nie przechodzi bramki jakości i nie powinna obsługiwać ruchu użytkownika.
 
 Skrypt startowy wymaga poprawnego limitu mocy i wykonuje host preflight.
 Nie zastępuje działającej usługi. Stop nigdy nie eskaluje do SIGKILL.

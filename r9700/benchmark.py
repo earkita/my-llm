@@ -182,6 +182,7 @@ def benchmark(
     url: str,
     model_name: str,
     runtime_name: str,
+    runtime_mode: str | None = None,
     prompt_tokens: int,
     output_tokens: int,
     concurrency: int,
@@ -198,7 +199,7 @@ def benchmark(
     if prompt_variant_offset < 0:
         raise ConfigurationError("prompt variant offset must be non-negative")
     model = load_model(model_name)
-    runtime = load_runtime(runtime_name)
+    runtime = load_runtime(runtime_name, runtime_mode)
     backend = runtime_backend(runtime)
     selected_manifest_sha256 = backend_manifest_sha256(runtime)
     validate_compatibility(model, runtime)
@@ -235,6 +236,7 @@ def benchmark(
         or state.get("backend", "vllm") != backend
         or state.get("recipe") != runtime["recipe"]
         or state.get("runtime") != runtime["name"]
+        or state.get("runtime_mode") != runtime.get("active_experimental_mode")
         or state.get("runtime_profile_sha256") != runtime["_sha256"]
     ):
         raise ConfigurationError("managed service identity differs from benchmark profiles")

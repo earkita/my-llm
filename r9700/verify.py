@@ -96,9 +96,11 @@ def verify_python_environment(recipe_name: str) -> dict:
     return payload
 
 
-def verify_runtime(model_name: str, runtime_name: str) -> dict:
+def verify_runtime(
+    model_name: str, runtime_name: str, runtime_mode: str | None = None
+) -> dict:
     model = load_model(model_name)
-    runtime = load_runtime(runtime_name)
+    runtime = load_runtime(runtime_name, runtime_mode)
     validate_compatibility(model, runtime)
     backend = runtime_backend(runtime)
     installed = verify_backend_install(runtime)

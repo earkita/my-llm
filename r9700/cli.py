@@ -56,6 +56,15 @@ def _launcher_start_options(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="start and verify the LiteLLM proxy after the model",
     )
+    parser.add_argument(
+        "--experimental-dflash2",
+        action="store_true",
+        help="opt into the known-unsafe GLM DFlash2 MRV2 diagnostic mode",
+    )
+    parser.add_argument(
+        "--runtime-mode",
+        help="select another explicit diagnostic mode embedded in the profile",
+    )
     parser.add_argument("--dry-run", action="store_true")
 
 
@@ -72,21 +81,28 @@ def _tests(args: argparse.Namespace) -> None:
         doctor_module.doctor(profile)
 
     def runtime() -> None:
-        runtime_profile = load_runtime(profile)
+        runtime_profile = load_runtime(profile, args.runtime_mode)
         backend = runtime_backend(runtime_profile)
         if backend == "vllm":
             venv = recipe_venv(runtime_profile["recipe"])
             expected = venv / "bin" / "python"
         if backend == "vllm" and Path(sys.prefix).resolve() != venv.resolve():
-            subprocess.run(
-                [expected, "-m", "r9700.cli", "test", "runtime", "--profile", profile],
-                cwd=ROOT,
-                check=True,
-            )
+            command = [
+                expected,
+                "-m",
+                "r9700.cli",
+                "test",
+                "runtime",
+                "--profile",
+                profile,
+            ]
+            if args.runtime_mode:
+                command.extend(("--runtime-mode", args.runtime_mode))
+            subprocess.run(command, cwd=ROOT, check=True)
             return
         if backend == "vllm":
             verify_python_environment(runtime_profile["recipe"])
-        verify_runtime(profile, profile)
+        verify_runtime(profile, profile, args.runtime_mode)
 
     def patch() -> None:
         runtime_profile = load_runtime(profile)
@@ -127,12 +143,13 @@ def _tests(args: argparse.Namespace) -> None:
             url=args.url,
             model_name=profile,
             runtime_name=profile,
+            runtime_mode=args.runtime_mode,
             output=args.output,
             timeout=args.timeout,
         )
 
     def gpu() -> None:
-        runtime_profile = load_runtime(profile)
+        runtime_profile = load_runtime(profile, args.runtime_mode)
         world = runtime_profile["parallel"]["tensor"] * runtime_profile["parallel"]["pipeline"]
         executable = recipe_venv(runtime_profile["recipe"]) / "bin" / "torchrun"
         environment = _native_environment(runtime_profile)
@@ -159,6 +176,7 @@ def _tests(args: argparse.Namespace) -> None:
         lifecycle_gate(
             model_name=profile,
             runtime_name=profile,
+            runtime_mode=args.runtime_mode,
             ready_timeout=args.ready_timeout,
             stop_timeout=args.stop_timeout,
             output=args.output,
@@ -274,6 +292,7 @@ def parser() -> argparse.ArgumentParser:
     service_start.add_argument("--host")
     service_start.add_argument("--port", type=int)
     service_start.add_argument("--backend", choices=("vllm", "llama-cpp"))
+    service_start.add_argument("--runtime-mode")
     service_start.add_argument("--wait", action="store_true")
     service_start.add_argument("--ready-timeout", type=float, default=900)
     service_wait = service_commands.add_parser("wait")
@@ -313,6 +332,7 @@ def parser() -> argparse.ArgumentParser:
     )
     stack_start = stack_commands.add_parser("start")
     stack_start.add_argument("--preset", default=DEFAULT_STACK_PRESET)
+    stack_start.add_argument("--runtime-mode")
     stack_start.add_argument("--dry-run", action="store_true")
     for action in ("stop", "status", "presets"):
         stack_commands.add_parser(action)
@@ -324,6 +344,9 @@ def parser() -> argparse.ArgumentParser:
     _common_profile(test_parser)
     test_parser.add_argument("--url", default="http://127.0.0.1:8000")
     test_parser.add_argument("--timeout", type=float, default=600)
+    test_parser.add_argument(
+        "--runtime-mode", help="resolve an explicit embedded diagnostic runtime mode"
+    )
     test_parser.add_argument("--output", type=_path)
     test_parser.add_argument("--master-port", type=int, default=29571)
     test_parser.add_argument("--ready-timeout", type=float, default=900)
@@ -341,6 +364,9 @@ def parser() -> argparse.ArgumentParser:
     bench.add_argument("--pin-data-parallel", action="store_true")
     bench.add_argument("--data-parallel-rank", type=int)
     bench.add_argument("--timeout", type=float, default=900)
+    bench.add_argument(
+        "--runtime-mode", help="benchmark an explicit embedded diagnostic runtime mode"
+    )
     bench.add_argument("--output", type=_path, required=True)
     return root
 
@@ -394,6 +420,8 @@ def main(argv: list[str] | None = None) -> int:
                     ready_timeout=args.ready_timeout,
                     proxy_ready_timeout=args.proxy_ready_timeout,
                     with_litellm=args.with_litellm,
+                    experimental_dflash2=args.experimental_dflash2,
+                    runtime_mode=args.runtime_mode,
                     dry_run=args.dry_run,
                 )
             elif args.launcher_command == "switch":
@@ -406,6 +434,8 @@ def main(argv: list[str] | None = None) -> int:
                     stop_timeout=args.stop_timeout,
                     proxy_stop_timeout=args.proxy_stop_timeout,
                     with_litellm=args.with_litellm,
+                    experimental_dflash2=args.experimental_dflash2,
+                    runtime_mode=args.runtime_mode,
                     dry_run=args.dry_run,
                 )
             elif args.launcher_command == "stop":
@@ -437,6 +467,7 @@ def main(argv: list[str] | None = None) -> int:
                     host=args.host,
                     port=args.port,
                     backend=args.backend,
+                    runtime_mode=args.runtime_mode,
                     wait_ready=args.wait,
                     ready_timeout=args.ready_timeout,
                 )
@@ -484,6 +515,8 @@ def main(argv: list[str] | None = None) -> int:
             ]
             if args.stack_command == "start":
                 command.extend(("--preset", args.preset))
+                if args.runtime_mode:
+                    command.extend(("--runtime-mode", args.runtime_mode))
                 if args.dry_run:
                     command.append("--dry-run")
             return subprocess.run(command, cwd=ROOT, check=False).returncode
@@ -492,6 +525,7 @@ def main(argv: list[str] | None = None) -> int:
                 url=args.url,
                 model_name=args.profile,
                 runtime_name=args.profile,
+                runtime_mode=args.runtime_mode,
                 prompt_tokens=args.prompt_tokens,
                 output_tokens=args.output_tokens,
                 concurrency=args.concurrency,

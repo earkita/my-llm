@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -175,6 +176,8 @@ def load_profile(name_or_path: str) -> dict[str, Any]:
     _validate_model(model, path)
     validate_runtime(runtime)
     validate_compatibility(model, runtime)
+    for mode in runtime.get("experimental_modes", {}):
+        activate_runtime_mode(model, runtime, mode)
     if runtime.get("llama_cpp", {}).get("speculative_type") == "draft-dflash":
         draft_model = runtime["llama_cpp"].get("draft_model")
         matches = [
@@ -196,6 +199,55 @@ def load_profile(name_or_path: str) -> dict[str, Any]:
     result["runtime"]["_path"] = str(path)
     result["runtime"]["_sha256"] = canonical_sha256(runtime)
     return result
+
+
+def activate_runtime_mode(
+    model: dict[str, Any], runtime: dict[str, Any], mode: str
+) -> dict[str, Any]:
+    """Resolve one explicit, opt-in runtime mode embedded in a profile."""
+    modes = runtime.get("experimental_modes", {})
+    if not isinstance(modes, dict):
+        raise ConfigurationError("runtime.experimental_modes must be an object")
+    selected = modes.get(mode)
+    if not isinstance(selected, dict):
+        available = ", ".join(sorted(modes)) or "none"
+        raise ConfigurationError(
+            f"unknown experimental runtime mode {mode!r}; available: {available}"
+        )
+    runtime_name = selected.get("runtime_name")
+    overrides = selected.get("runtime_overrides")
+    if not isinstance(runtime_name, str) or not runtime_name:
+        raise ConfigurationError(
+            f"experimental runtime mode {mode!r} requires runtime_name"
+        )
+    if not isinstance(overrides, dict) or not overrides:
+        raise ConfigurationError(
+            f"experimental runtime mode {mode!r} requires runtime_overrides"
+        )
+    forbidden = sorted(
+        key
+        for key in overrides
+        if not isinstance(key, str)
+        or not key
+        or key.startswith("_")
+        or key in {"name", "experimental_modes", "active_experimental_mode"}
+    )
+    if forbidden:
+        raise ConfigurationError(
+            f"experimental runtime mode {mode!r} cannot override: "
+            + ", ".join(map(str, forbidden))
+        )
+    resolved = deepcopy(runtime)
+    resolved.pop("experimental_modes", None)
+    resolved.update(deepcopy(overrides))
+    resolved["name"] = runtime_name
+    resolved["active_experimental_mode"] = mode
+    validate_runtime(resolved)
+    validate_compatibility(model, resolved)
+    if "_path" in runtime:
+        resolved["_path"] = runtime["_path"]
+    resolved["_sha256"] = canonical_sha256(resolved)
+    return resolved
 
 
 def list_runtime_profiles(tier: str = "production") -> list[dict[str, Any]]:
@@ -220,8 +272,14 @@ def list_runtime_profiles(tier: str = "production") -> list[dict[str, Any]]:
     return sorted(records, key=lambda value: (value["tier"], value["name"]))
 
 
-def load_runtime(name_or_path: str) -> dict[str, Any]:
-    return load_profile(name_or_path)["runtime"]
+def load_runtime(
+    name_or_path: str, runtime_mode: str | None = None
+) -> dict[str, Any]:
+    profile = load_profile(name_or_path)
+    runtime = profile["runtime"]
+    if runtime_mode is not None:
+        return activate_runtime_mode(profile["model"], runtime, runtime_mode)
+    return runtime
 
 
 def load_model(name_or_path: str) -> dict[str, Any]:
@@ -241,6 +299,14 @@ def validate_runtime(profile: dict[str, Any]) -> None:
     missing = [key for key in required if key not in profile]
     if missing:
         raise ConfigurationError(f"runtime profile is missing fields: {missing}")
+    experimental_modes = profile.get("experimental_modes", {})
+    if not isinstance(experimental_modes, dict) or any(
+        not isinstance(name, str) or not name or not isinstance(value, dict)
+        for name, value in experimental_modes.items()
+    ):
+        raise ConfigurationError(
+            "runtime.experimental_modes must map non-empty names to objects"
+        )
     recipe = profile.get("recipe")
     if not isinstance(recipe, str) or not recipe:
         raise ConfigurationError("runtime recipe must be a non-empty string")
@@ -549,18 +615,38 @@ def validate_compatibility(model: dict[str, Any], runtime: dict[str, Any]) -> No
         )
     speculative = runtime.get("speculative_config")
     if speculative:
+        draft_profile = speculative.get("model_profile")
+        draft_artifact = speculative.get("model_artifact")
+        if draft_profile and draft_artifact:
+            raise ConfigurationError(
+                "speculative_config must choose model_profile or model_artifact"
+            )
+        if draft_artifact:
+            matches = [
+                artifact
+                for artifact in model.get("auxiliary_artifacts", [])
+                if artifact.get("name") == draft_artifact
+            ]
+            if len(matches) != 1:
+                raise ConfigurationError(
+                    "speculative model_artifact must identify exactly one "
+                    "model auxiliary artifact"
+                )
         method = speculative.get("method")
-        capability = {
+        capabilities = {
             "dspark": "supports_dspark",
             "mtp": "supports_mtp",
             "eagle3": "supports_eagle3",
-        }.get(method)
-        if capability is None:
+            "dflash": "supports_dflash",
+            "extract_hidden_states": None,
+        }
+        if method not in capabilities:
             raise ConfigurationError(
                 f"runtime {runtime['name']} uses unsupported speculative method "
                 f"{method!r}"
             )
-        if not model.get(capability, False):
+        capability = capabilities[method]
+        if capability is not None and not model.get(capability, False):
             raise ConfigurationError(
                 f"runtime {runtime['name']} enables {method.upper()} for an "
                 f"incompatible model"

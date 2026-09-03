@@ -1,0 +1,49 @@
+diff --git a/vllm/model_executor/layers/quantization/quark/schemes/quark_w8a8_fp8.py b/vllm/model_executor/layers/quantization/quark/schemes/quark_w8a8_fp8.py
+index 40bdac7..5011bcc 100644
+--- a/vllm/model_executor/layers/quantization/quark/schemes/quark_w8a8_fp8.py
++++ b/vllm/model_executor/layers/quantization/quark/schemes/quark_w8a8_fp8.py
+@@ -230,6 +230,9 @@ class QuarkW8A8Fp8PerBlock(QuarkScheme):
+         return QuarkW8A8Fp8.get_min_capability()
+ 
+     def process_weights_after_loading(self, layer) -> None:
++        # Quark exports the dequant multiplier as ``weight_scale`` (the same
++        # numerical convention as ``weight_scale_inv`` used by native block
++        # FP8). Kernels multiply weight by scale; do not invert it here.
+         self.fp8_linear.process_weights_after_loading(layer)
+ 
+     def create_weights(
+@@ -280,8 +283,9 @@ class QuarkW8A8Fp8PerBlock(QuarkScheme):
+             weight_loader,
+             scale_dtype=scale_dtype,
+         )
+-        # DeepSeek V4 weight mappers route checkpoint ".scale" tensors here.
+-        layer.register_parameter("weight_scale_inv", weight_scale)
++        # Match Quark-exported checkpoints. Fp8LinearMethod uses the alternate
++        # name ``weight_scale_inv`` for the same dequant multiplier.
++        layer.register_parameter("weight_scale", weight_scale)
+ 
+         assert self.activation_quant_key is not None
+         self.fp8_linear = init_fp8_linear_kernel(
+diff --git a/vllm/model_executor/layers/quantization/utils/fp8_utils.py b/vllm/model_executor/layers/quantization/utils/fp8_utils.py
+index 0d49e35..95b6c6e 100644
+--- a/vllm/model_executor/layers/quantization/utils/fp8_utils.py
++++ b/vllm/model_executor/layers/quantization/utils/fp8_utils.py
+@@ -50,6 +50,18 @@ def is_fp8(x: torch.dtype | torch.Tensor) -> bool:
+     return x == torch.float8_e4m3fn or x == torch.float8_e4m3fnuz
+ 
+ 
++def get_fp8_block_weight_scale(layer: torch.nn.Module) -> torch.Tensor | None:
++    """Return the block-FP8 weight scale for supported quant methods."""
++    # Local import avoids a circular import: quark_w8a8_fp8 imports this module.
++    from vllm.model_executor.layers.quantization.quark.schemes.quark_w8a8_fp8 import (
++        QuarkW8A8Fp8PerBlock,
++    )
++
++    if isinstance(getattr(layer, "scheme", None), QuarkW8A8Fp8PerBlock):
++        return getattr(layer, "weight_scale", None)
++    return getattr(layer, "weight_scale_inv", None)
++
++
+ def input_to_float8(
+     x: torch.Tensor, dtype: torch.dtype | None = None
+ ) -> tuple[torch.Tensor, torch.Tensor]:

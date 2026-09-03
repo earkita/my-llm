@@ -10,7 +10,7 @@ dedykowanym magazynie modeli wskazanym przez profile produkcyjne.
 | Profil | Backend | GPU | Równoległość | Kontekst | Spekulacja |
 |---|---|---:|---|---:|---|
 | `deepseek-v4-flash` | vLLM 0.28 | 6 | TP1/PP6 | 1,048,576 | DSpark K5 |
-| `glm53-flash` | llama.cpp | 8 | split warstwowy | 1,048,576 limit modelu | DFlash2 K7 |
+| `glm53-flash` | vLLM `glm-release` / PR #53906 | 8 | TP8/EP8 | 32,768 (kwalifikacja) | target-only MRV2 |
 | `qwen38-flash` | vLLM 0.28 | 8 | TP8/EP8 | 262,144 | MTP K2 |
 
 Każdy deployment jest jednym plikiem w `profiles/production/`. Plik zawiera
@@ -55,6 +55,10 @@ checkoutów.
 ./run install --profile glm53-flash
 ./run model verify glm53-flash
 
+# jawne tryby diagnostyczne; nie są produkcyjne
+./run launcher start glm53-flash --runtime-mode dflash2-k1
+./run launcher start glm53-flash --runtime-mode dflash2
+
 skills/start-r9700-runtime/scripts/start-runtime.sh --profile glm53-flash
 ./run service status
 skills/stop-r9700-runtime/scripts/stop-runtime.sh
@@ -91,6 +95,11 @@ rewizję, a `./run model adopt PROFILE --directory PATH` rejestruje istniejący
 checkpoint. GLM dodatkowo przypina i sprawdza rozmiar oraz SHA-256 draftera
 DFlash2. Serwis nie wystartuje, jeżeli którykolwiek wymagany artefakt ma inną
 tożsamość.
+
+Domyślny `glm53-flash` jest stabilnym trybem target-only. DFlash2 pozostaje
+wyłącznie jawnym eksperymentem: checkpoint proponuje poprawne pierwsze tokeny,
+ale bieżący MRV2 degraduje logits podczas wielotokenowej weryfikacji i
+rollbacku.
 
 Szczegóły: [architektura](docs/architecture.md),
 [operacje](docs/operations.md), [dowody i ograniczenia](docs/verification.md).

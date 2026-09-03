@@ -24,13 +24,15 @@ proxy_ready_timeout=120
 runtime_stop_timeout=180
 proxy_stop_timeout=30
 required_power_cap_w=270
+runtime_mode=
 dry_run=0
 
 usage() {
   cat <<EOF
 Usage:
   $0 start [--preset NAME] [--runtime-ready-timeout SECONDS]
-     [--proxy-ready-timeout SECONDS] [--required-power-cap-w WATTS] [--dry-run]
+     [--proxy-ready-timeout SECONDS] [--runtime-mode NAME]
+     [--required-power-cap-w WATTS] [--dry-run]
   $0 stop [--runtime-timeout SECONDS] [--proxy-timeout SECONDS] [--dry-run]
   $0 status
   $0 presets
@@ -46,10 +48,11 @@ esac
 
 while (($#)); do
   case "$1" in
-    --preset|--runtime-ready-timeout|--proxy-ready-timeout|--runtime-timeout|--proxy-timeout|--required-power-cap-w)
+    --preset|--runtime-mode|--runtime-ready-timeout|--proxy-ready-timeout|--runtime-timeout|--proxy-timeout|--required-power-cap-w)
       (($# >= 2)) || { printf 'missing value for %s\n' "$1" >&2; exit 2; }
       case "$1" in
         --preset) preset=$2 ;;
+        --runtime-mode) runtime_mode=$2 ;;
         --runtime-ready-timeout) runtime_ready_timeout=$2 ;;
         --proxy-ready-timeout) proxy_ready_timeout=$2 ;;
         --runtime-timeout) runtime_stop_timeout=$2 ;;
@@ -112,6 +115,9 @@ runtime_start_command=(
   --ready-timeout "$runtime_ready_timeout"
   --required-power-cap-w "$required_power_cap_w"
 )
+if [[ -n $runtime_mode ]]; then
+  runtime_start_command+=(--runtime-mode "$runtime_mode")
+fi
 proxy_start_command=("$start_proxy" --ready-timeout "$proxy_ready_timeout")
 proxy_stop_command=("$stop_proxy" --timeout "$proxy_stop_timeout")
 runtime_stop_command=("$stop_runtime" --timeout "$runtime_stop_timeout")
@@ -172,24 +178,47 @@ PY
 }
 
 assert_runtime_identity() {
-  "$python" - "$runtime_state" "$profile_path" <<'PY'
+  "$python" - "$runtime_state" "$profile_path" "$runtime_mode" <<'PY'
 import json
 import sys
 
 state = json.load(open(sys.argv[1], encoding="utf-8"))
 profile = json.load(open(sys.argv[2], encoding="utf-8"))
+mode = sys.argv[3] or None
+runtime_name = profile["runtime"]["name"]
+if mode:
+    try:
+        runtime_name = profile["runtime"]["experimental_modes"][mode]["runtime_name"]
+    except KeyError as exc:
+        raise SystemExit(f"unknown experimental runtime mode: {mode}") from exc
 expected = (
     profile["name"],
     profile["model"]["name"],
-    profile["runtime"]["name"],
+    runtime_name,
+    mode,
 )
-actual = (state.get("profile"), state.get("model"), state.get("runtime"))
-if actual != expected:
+actual = (
+    state.get("profile"),
+    state.get("model"),
+    state.get("runtime"),
+    state.get("runtime_mode"),
+)
+present = [index for index, value in enumerate(actual[:3]) if value is not None]
+identity_matches = bool(present) and all(
+    actual[index] == expected[index] for index in present
+)
+if mode is None:
+    mode_matches = actual[3] in (None, "")
+else:
+    # Experimental modes cannot be inferred safely from a legacy state.
+    mode_matches = actual[2] == expected[2] and actual[3] == mode
+if not identity_matches or not mode_matches:
     raise SystemExit(
         "running inference identity differs from the production preset: "
-        f"profile={actual[0]} model={actual[1]} runtime={actual[2]}; "
+        f"profile={actual[0]} model={actual[1]} runtime={actual[2]} "
+        f"mode={actual[3]}; "
         f"expected profile={expected[0]} model={expected[1]} "
-        f"runtime={expected[2]}"
+        f"runtime={expected[2]} mode={expected[3]}"
     )
 PY
 }
