@@ -10,11 +10,11 @@
     "venv": ".runtime/recipes/vllm_qwen38flash_pr53896/venv",
     "source_root": ".runtime/recipes/vllm_qwen38flash_pr53896/src",
     "constraints": "constraints/rocm-7.14-py312.txt",
-    "constraints_sha256": "085028ed6ad33bb4fc90087bff357dee0fcc7d5024369cf3b14963229b87e3cf",
+    "constraints_sha256": "90d1e6123f3f0b5002ce36c979d48bdf120238738ce73429f3a24269341ec8ed",
     "constraint_overlays": [
       {
         "path": "constraints/vllm-qwen38-flash-next-py312.override.txt",
-        "sha256": "0b6911847af746cf80610a3647c807190374fadf3dcb4bc468d0083681728561"
+        "sha256": "1d9d4b853c5ec7610c6574c133fb9cf9113205db43c2e11b9c9889ddd2e66b20"
       }
     ],
     "rocm_version": "7.14.0",

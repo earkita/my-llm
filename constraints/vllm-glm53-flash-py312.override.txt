@@ -1,3 +1,4 @@
-# Overrides relative to rocm-7.14-py312.txt for the GLM-5.3 upstream-main recipe.
-flydsl==0.3.0
+# Overrides and additions relative to rocm-7.14-py312.txt for the GLM-5.3 upstream-main recipe.
 huggingface_hub==1.28.0
+mooncake-transfer-engine-rocm==0.3.13.post1
+msgpack==1.2.2

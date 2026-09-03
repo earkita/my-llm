@@ -133,6 +133,22 @@ class ProductionProfileTests(unittest.TestCase):
                     patch_path = ROOT / patch_record["path"]
                     self.assertEqual(patch_path.parent.name, recipe)
 
+    def test_every_constraint_file_has_a_consumer(self) -> None:
+        referenced = {proxy.REQUIREMENTS_PATH.resolve()}
+        for recipe in recipe_names():
+            manifest = json.loads(
+                (ROOT / "manifest" / f"{recipe}.json").read_text()
+            )
+            environment = manifest["environment"]
+            referenced.add((ROOT / environment["constraints"]).resolve())
+            referenced.update(
+                (ROOT / overlay["path"]).resolve()
+                for overlay in environment.get("constraint_overlays", [])
+            )
+
+        present = {path.resolve() for path in (ROOT / "constraints").glob("*")}
+        self.assertEqual(present, referenced)
+
     def test_glm_uses_an_isolated_repo_local_vllm_recipe(self) -> None:
         runtime = load_profile("glm53-flash")["runtime"]
         manifest = json.loads(

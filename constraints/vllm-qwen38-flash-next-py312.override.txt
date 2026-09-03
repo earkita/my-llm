@@ -1,3 +1,2 @@
 # Overrides relative to rocm-7.14-py312.txt for the Qwen3.8 Flash-Next PR recipe.
-flydsl==0.3.0
 huggingface_hub==1.28.0

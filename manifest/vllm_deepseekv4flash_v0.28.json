@@ -10,13 +10,7 @@
     "venv": ".runtime/recipes/vllm_deepseekv4flash_v0.28/venv",
     "source_root": ".runtime/recipes/vllm_deepseekv4flash_v0.28/src",
     "constraints": "constraints/rocm-7.14-py312.txt",
-    "constraints_sha256": "085028ed6ad33bb4fc90087bff357dee0fcc7d5024369cf3b14963229b87e3cf",
-    "constraint_overlays": [
-      {
-        "path": "constraints/vllm-qwen-v0271-py312.override.txt",
-        "sha256": "bc821a79fec3f6d489dbf2338b018b978b2701caa8819b59c88254394383a6d5"
-      }
-    ],
+    "constraints_sha256": "90d1e6123f3f0b5002ce36c979d48bdf120238738ce73429f3a24269341ec8ed",
     "rocm_version": "7.14.0",
     "rocm_index_url": "https://repo.amd.com/rocm/whl-multi-arch/",
     "torch_version": "2.13.0+rocm7.14.0",

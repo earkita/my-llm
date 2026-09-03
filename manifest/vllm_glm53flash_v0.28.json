@@ -10,11 +10,11 @@
     "venv": ".runtime/recipes/vllm_glm53flash_v0.28/venv",
     "source_root": ".runtime/recipes/vllm_glm53flash_v0.28/src",
     "constraints": "constraints/rocm-7.14-py312.txt",
-    "constraints_sha256": "085028ed6ad33bb4fc90087bff357dee0fcc7d5024369cf3b14963229b87e3cf",
+    "constraints_sha256": "90d1e6123f3f0b5002ce36c979d48bdf120238738ce73429f3a24269341ec8ed",
     "constraint_overlays": [
       {
         "path": "constraints/vllm-glm53-flash-py312.override.txt",
-        "sha256": "1b9266311152125a1730c56998bf373f31cc93ee92fe129bc87228f5108735bc"
+        "sha256": "f6a4484d90a27489f9c1f4bbe3e94eb8392adc8537be4167de2cb50340b694ad"
       }
     ],
     "rocm_version": "7.14.0",
