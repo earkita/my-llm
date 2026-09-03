@@ -54,13 +54,14 @@
     "backend": "llama-cpp",
     "recipe": "llama-cpp-glm53-pr27754",
     "status": "production-ready",
-    "description": "User-approved production GLM-5.3-Flash llama.cpp profile: fastest verified configuration with model-native 1M target context, symmetric Q8_0 KV, FA on, rebalanced 8-GPU layer split, ubatch 64, and DFlash2 K7 with rolling 8K draft cache; prompt depth verified at 4K, 16K, and 32K",
+    "description": "User-approved production GLM-5.3-Flash llama.cpp profile: fastest verified configuration with model-native 1M target context, symmetric Q8_0 KV, FA on, rebalanced 8-GPU layer split, ubatch 64, common-prefix prompt caching, and DFlash2 K7 with rolling 8K draft cache; prompt depth verified at 4K, 16K, and 32K",
     "required_model_family": "glm5next",
     "required_patches": [
       "0001",
       "0003",
       "0004",
-      "0005"
+      "0005",
+      "0006"
     ],
     "gpu_order": [
       0,
@@ -96,7 +97,7 @@
     "cache": {
       "dtype": "q8_0",
       "block_size": 16,
-      "prefix_cache": false,
+      "prefix_cache": true,
       "cpu_offload_gb": 0
     },
     "scheduler": {
@@ -136,7 +137,7 @@
       "fit": false,
       "fit_target_mib": 2048,
       "load_mode": "mmap",
-      "cache_prompt": false,
+      "cache_prompt": true,
       "cache_reuse": 0,
       "cache_ram_mib": 0,
       "speculative_type": "draft-dflash",

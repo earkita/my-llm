@@ -67,6 +67,28 @@ These figures are a startup and regression smoke test, not a capacity or
 long-context benchmark. The small sample size should not be used to rank the
 models for production workloads.
 
+## GLM prefix-cache regression check
+
+On 2026-09-03, the GLM llama.cpp recipe was rebuilt with a HIP-only multi-GPU
+device-context fix derived from upstream llama.cpp PR #21170. Prompt caching
+was then enabled with `--cache-prompt --cache-reuse 0 --cache-ram 0` and tested
+against the production 8-GPU process.
+
+An identical 14,416-token request was issued repeatedly. The cold request
+evaluated all 14,416 prompt tokens in 69.53 seconds (207.34 tokens/s). Each
+measured warm request reported 14,412 cached tokens and evaluated only four new
+prompt tokens:
+
+| Warm request | Client E2E (s) | Cached tokens | Evaluated prompt tokens | Prompt eval (ms) |
+|---:|---:|---:|---:|---:|
+| 1 | 0.302 | 14,412 | 4 | 210.014 |
+| 2 | 0.276 | 14,412 | 4 | 195.828 |
+| 3 | 0.274 | 14,412 | 4 | 195.459 |
+
+The server survived every repeat, remained ready afterward, and the LiteLLM
+chat-completion probe passed through alias `glm-5.3-flash-high`. This directly
+covers the former second-request ROCm illegal-memory-access failure.
+
 ## Changes required to run the profiles
 
 - Corrected code paths that invoked the Bash `run` entry point through Python.
@@ -87,6 +109,10 @@ models for production workloads.
 - Added regression tests for shared recipe roots, live checkpoint revalidation,
   safetensors byte semantics, vLLM entry-point construction, and worker Triton
   bootstrapping.
+- Added a HIP-scoped llama.cpp multi-GPU device-context patch and enabled GLM
+  common-prefix prompt caching after a repeated-request regression test.
+- Made the LiteLLM health test validate all aliases exposed by the active flat
+  production profile and probe the profile's configured Claude model alias.
 
 ## Commands exercised
 

@@ -111,6 +111,16 @@ class ProductionProfileTests(unittest.TestCase):
         )
         self.assertEqual(configured, expected)
 
+    def test_qwen_claude_stack_disables_unstable_long_context_thinking(self) -> None:
+        settings = load_profile("qwen38-flash")["stack"]["claude_settings"]
+        environment = settings["env"]
+        self.assertEqual(
+            environment["ANTHROPIC_MODEL"],
+            "qwen3.8-flash-next-fast",
+        )
+        self.assertEqual(environment["CLAUDE_CODE_DISABLE_THINKING"], "1")
+        self.assertEqual(environment["MAX_THINKING_TOKENS"], "0")
+
     def test_no_production_profile_enables_cpu_offload(self) -> None:
         for name in PROFILE_NAMES:
             with self.subTest(profile=name):
@@ -212,6 +222,15 @@ class ProductionProfileTests(unittest.TestCase):
         for key in ("repository", "revision", "filename", "size_bytes", "sha256"):
             self.assertEqual(artifact[key], runtime_artifact[key])
 
+    def test_glm_prefix_cache_requires_the_rocm_device_context_fix(self) -> None:
+        profile = load_profile("glm53-flash")
+        runtime = profile["runtime"]
+        self.assertTrue(runtime["cache"]["prefix_cache"])
+        self.assertTrue(runtime["llama_cpp"]["cache_prompt"])
+        self.assertEqual(runtime["llama_cpp"]["cache_reuse"], 0)
+        self.assertEqual(runtime["llama_cpp"]["cache_ram_mib"], 0)
+        self.assertIn("0006", runtime["required_patches"])
+
     def test_cli_lists_only_production_profiles(self) -> None:
         result = subprocess.run(
             [ROOT / "run", "profiles", "list", "--json"],
@@ -285,6 +304,10 @@ class ProductionProfileTests(unittest.TestCase):
                 "r9700.launcher.managed_state",
                 side_effect=[state, ConfigurationError("stopped")],
             ),
+            patch(
+                "r9700.launcher.proxy.managed_state",
+                side_effect=ConfigurationError("stopped"),
+            ),
             patch("r9700.launcher.subprocess.run") as run,
             patch("builtins.print"),
         ):
@@ -343,13 +366,26 @@ class ProductionProfileTests(unittest.TestCase):
                 return_value=runtime_state,
             ) as managed_runtime,
             patch(
-                "r9700.proxy.load_model",
-                return_value={"served_name": "qwen3.8-flash-next-fp8"},
+                "r9700.proxy.load_profile",
+                return_value={
+                    "stack": {
+                        "litellm_aliases": [
+                            "qwen3.8-flash-next-fp8",
+                            "qwen3.8-flash-next",
+                        ],
+                        "claude_settings": {
+                            "env": {"ANTHROPIC_MODEL": "qwen3.8-flash-next"},
+                        },
+                    },
+                },
             ),
             patch(
                 "r9700.proxy._get",
                 return_value={
-                    "data": [{"id": "qwen3.8-flash-next-fp8"}],
+                    "data": [
+                        {"id": "qwen3.8-flash-next-fp8"},
+                        {"id": "qwen3.8-flash-next"},
+                    ],
                 },
             ),
             patch(

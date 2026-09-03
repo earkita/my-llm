@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .config import ConfigurationError, ROOT, load_model, read_dotenv
+from .config import ConfigurationError, ROOT, load_profile, read_dotenv
 from .service import managed_state as runtime_managed_state
 
 
@@ -332,21 +332,25 @@ def test(*, timeout: float = 120) -> None:
         raise ConfigurationError(
             "managed runtime state predates flat production profiles; restart it"
         )
-    active_model = load_model(active_profile)["served_name"]
+    profile = load_profile(active_profile)
+    active_aliases = profile["stack"]["litellm_aliases"]
+    test_model = profile["stack"]["claude_settings"]["env"]["ANTHROPIC_MODEL"]
     try:
         models = _get(state["probe_url"] + "/v1/models", key=key, timeout=timeout)
     except (OSError, ValueError, urllib.error.URLError) as exc:
         raise ConfigurationError(f"LiteLLM model-list request failed: {exc}") from exc
     identifiers = {row.get("id") for row in models.get("data", []) if isinstance(row, dict)}
-    if active_model not in identifiers:
+    missing_aliases = sorted(set(active_aliases) - identifiers)
+    if missing_aliases:
         raise ConfigurationError(
-            f"LiteLLM model list does not expose active model {active_model}"
+            "LiteLLM model list does not expose active profile aliases: "
+            + ", ".join(missing_aliases)
         )
     try:
         completion = _post(
             state["probe_url"] + "/v1/chat/completions",
             {
-                "model": active_model,
+                "model": test_model,
                 "messages": [{"role": "user", "content": "Reply with OK"}],
                 "max_tokens": 8,
             },
@@ -358,4 +362,4 @@ def test(*, timeout: float = 120) -> None:
     choices = completion.get("choices")
     if not isinstance(choices, list) or not choices:
         raise ConfigurationError("LiteLLM chat completion returned no choices")
-    print(f"LiteLLM proxy test: PASS model={active_model} chat_completion=true")
+    print(f"LiteLLM proxy test: PASS model={test_model} chat_completion=true")

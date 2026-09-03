@@ -23,10 +23,11 @@
       "source_runtime": "profiles/runtime/production/glm53-flash-fastest-verified-q8-1m-dflash2.json",
       "source_runtime_sha256": "095c57afcdb6f9cc8a45152dd168b21a4fa0ae48c07cb15e379b3defce454754",
       "target_profile": "profiles/production/glm53-flash.json",
-      "target_profile_sha256": "8f5f11669c7eca5787b2e8aea211cc059cbc83c62668cd9017b4ef9ab559302e",
+      "target_profile_sha256": "75c9a8ca03afe41716012dcdb215f0be2735a823fba38c0e387015e4db835f74",
       "intentional_changes": [
         "DFlash2 identity is also embedded in model.auxiliary_artifacts",
-        "embedded stack preset"
+        "embedded stack preset",
+        "common-prefix prompt caching enabled after applying the HIP-only multi-GPU device-context fix"
       ]
     },
     "qwen38-flash": {
@@ -35,10 +36,11 @@
       "source_runtime": "profiles/runtime/production/qwen38-flash-next-fp8-8x-cache-safe-mtp2.json",
       "source_runtime_sha256": "22b4431b0c4ecfd74cb08b89ab815292bf4ce78ab2d0b71aab0ca446484f9f04",
       "target_profile": "profiles/production/qwen38-flash.json",
-      "target_profile_sha256": "4edadc676054a972b89279f44abad7c18a00b5de3d25d931ccaab9da151b47e0",
+      "target_profile_sha256": "aaccf078a292555ed0f94420cc96d59bd1be44e1f6425e85ebb160782f82e772",
       "intentional_changes": [
         "embedded stack preset",
-        "GPU BDF order updated for the post-relocation host topology captured on 2026-09-02"
+        "GPU BDF order updated for the post-relocation host topology captured on 2026-09-02",
+        "Claude Code defaults to the non-thinking Qwen alias because long-context reasoning loops under the current runtime"
       ]
     }
   },

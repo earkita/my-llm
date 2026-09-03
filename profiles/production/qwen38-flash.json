@@ -159,9 +159,11 @@
       },
       "env": {
         "ANTHROPIC_BASE_URL": "http://127.0.0.1:4000",
-        "ANTHROPIC_MODEL": "qwen3.8-flash-next-thinking",
+        "ANTHROPIC_MODEL": "qwen3.8-flash-next-fast",
         "ANTHROPIC_SMALL_FAST_MODEL": "qwen3.8-flash-next-fast",
         "DISABLE_PROMPT_CACHING": "0",
+        "CLAUDE_CODE_DISABLE_THINKING": "1",
+        "MAX_THINKING_TOKENS": "0",
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
         "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
         "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "262144"

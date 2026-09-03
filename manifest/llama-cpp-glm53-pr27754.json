@@ -25,9 +25,13 @@
     {
       "path": "patches/llama-cpp-glm53-pr27754/0005-full-context-speculative-tail.patch",
       "sha256": "3e906db41477ce056501a2e3afb2210eb8fd73fd5aac2268d31d988c2cb6dc7b"
+    },
+    {
+      "path": "patches/llama-cpp-glm53-pr27754/0006-rocm-multigpu-set-device.patch",
+      "sha256": "0c326094361c102c9073c7b5bdfcae92f83f6d31987d74cbacb9660e57c87b5b"
     }
   ],
-  "expected_diff_sha256": "8e566341961a53c02c5304d734a5f399a162fe8e24674609f4742d2ce122f9c2",
+  "expected_diff_sha256": "348b59e6d3d46cafc585719bee119443669968ec8dc8040130587cbfab8f3121",
   "cmake": {
     "generator": "Ninja",
     "build_type": "Release",
