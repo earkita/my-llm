@@ -42,6 +42,40 @@ def _pip_command(python: Path) -> list[str | Path]:
     return [python, "-m", "pip"]
 
 
+def _make_venv_entrypoints_relocatable(venv: Path) -> None:
+    """Replace absolute venv Python shebangs with a local-path trampoline."""
+    launcher = (
+        b"#!/bin/sh\n"
+        b"'''exec' \"$(dirname -- \"$(realpath -- \"$0\")\")\"/'python' \"$0\" \"$@\"\n"
+        b"' '''\n"
+    )
+    bin_directory = venv / "bin"
+    if not bin_directory.is_dir():
+        return
+    for entrypoint in bin_directory.iterdir():
+        if entrypoint.is_symlink() or not entrypoint.is_file():
+            continue
+        with entrypoint.open("rb") as stream:
+            first_line = stream.readline()
+            if not first_line.startswith(b"#!"):
+                continue
+            remainder = stream.read()
+        if not first_line.endswith(b"\n"):
+            continue
+        try:
+            interpreter = Path(first_line[2:].decode().strip().split(maxsplit=1)[0])
+        except (UnicodeDecodeError, IndexError):
+            continue
+        if (
+            not interpreter.is_absolute()
+            or not interpreter.name.startswith("python")
+            or interpreter.parent.name != "bin"
+            or interpreter.parent.parent.name != "venv"
+        ):
+            continue
+        entrypoint.write_bytes(launcher + remainder)
+
+
 def _torch_install_requirements(environment: dict[str, Any], arch: str) -> list[str]:
     """Build the Torch/ROCm requirement set for SDK-wheel or system ROCm."""
     torch = environment["torch_version"]
@@ -284,7 +318,7 @@ def install(
                     str(foundation),
                     dry_run=dry_run,
                     jobs=jobs,
-                    rebuild=rebuild,
+                    rebuild=False,
                 )
             install_llama_cpp(
                 dry_run=dry_run,
@@ -316,6 +350,7 @@ def _install_vllm(
             venv = recipe_venv(recipe_name)
             if not (venv / "bin" / "vllm").is_file():
                 raise ConfigurationError("attested vLLM executable is absent")
+            _make_venv_entrypoints_relocatable(venv)
             print(
                 f"runtime recipe already installed: {recipe_name} "
                 f"({installed['runtime_manifest_sha256']})"
@@ -330,7 +365,7 @@ def _install_vllm(
         raise ConfigurationError(
             f"installer requires Python {expected_python}, found {actual_python}"
         )
-    for executable in ("git", "gcc", "g++", "cmake", "ninja"):
+    for executable in ("uv", "git", "gcc", "g++", "cmake", "ninja"):
         if shutil.which(executable) is None:
             raise ConfigurationError(
                 f"required build tool is absent: {executable}; "
@@ -343,7 +378,17 @@ def _install_vllm(
     constraints = recipe_constraints_path(recipe_name)
     build_jobs = jobs or int(os.environ.get("NATIVE_BUILD_JOBS", os.cpu_count() or 1))
 
-    run([sys.executable, "-m", "venv", venv])
+    run(
+        [
+            "uv",
+            "venv",
+            "--python",
+            sys.executable,
+            "--allow-existing",
+            "--relocatable",
+            venv,
+        ]
+    )
     python = venv / "bin" / "python"
     # Venvs created from relocated or externally managed interpreters may not
     # provide a usable ``bin/pip`` script. The module entrypoint is tied to the
@@ -462,6 +507,7 @@ def _install_vllm(
         import_name="vllm",
         env=dict(build_env, VLLM_TARGET_DEVICE="rocm"),
     )
+    _make_venv_entrypoints_relocatable(venv)
     write_install_manifest(recipe_name)
     record = recipe_record(recipe_name)
     try:

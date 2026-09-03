@@ -6,28 +6,28 @@
   "commit": "d07e71ede795b6ab60bb46d9212a6c584e4b2272",
   "upstream_pr": "https://github.com/ggml-org/llama.cpp/pull/27754",
   "nextn_reference_commit": "603f02995abe563db8e406a692609acc8e3e165d",
-  "source_directory": ".runtime/recipes/llama-cpp-glm53-pr27754/src/llama.cpp",
-  "build_directory": ".runtime/recipes/llama-cpp-glm53-pr27754/build/llama.cpp",
-  "binary": ".runtime/recipes/llama-cpp-glm53-pr27754/build/llama.cpp/bin/llama-server",
+  "source_directory": ".runtime/recipes/llamacpp_glm53flash_pr27754/src/llama.cpp",
+  "build_directory": ".runtime/recipes/llamacpp_glm53flash_pr27754/build/llama.cpp",
+  "binary": ".runtime/recipes/llamacpp_glm53flash_pr27754/build/llama.cpp/bin/llama-server",
   "patches": [
     {
-      "path": "patches/llama-cpp-glm53-pr27754/0001-flatten-softmax-grid.patch",
+      "path": "patches/llamacpp_glm53flash_pr27754/0001-flatten-softmax-grid.patch",
       "sha256": "46bd91112572b625aad61c1b2a7295552162f5d3a3769bf2906c26f8c3a0854a"
     },
     {
-      "path": "patches/llama-cpp-glm53-pr27754/0003-separate-draft-ubatch.patch",
+      "path": "patches/llamacpp_glm53flash_pr27754/0003-separate-draft-ubatch.patch",
       "sha256": "2d922883ce98b832fafcd8471e318df8967c2c2f3d9043c64b914072e2587a86"
     },
     {
-      "path": "patches/llama-cpp-glm53-pr27754/0004-rolling-draft-context.patch",
+      "path": "patches/llamacpp_glm53flash_pr27754/0004-rolling-draft-context.patch",
       "sha256": "49a411f590fd3be3db373750d3655a0b4c8f5e2abcd4568f8e024232cfcfb134"
     },
     {
-      "path": "patches/llama-cpp-glm53-pr27754/0005-full-context-speculative-tail.patch",
+      "path": "patches/llamacpp_glm53flash_pr27754/0005-full-context-speculative-tail.patch",
       "sha256": "3e906db41477ce056501a2e3afb2210eb8fd73fd5aac2268d31d988c2cb6dc7b"
     },
     {
-      "path": "patches/llama-cpp-glm53-pr27754/0006-rocm-multigpu-set-device.patch",
+      "path": "patches/llamacpp_glm53flash_pr27754/0006-rocm-multigpu-set-device.patch",
       "sha256": "0c326094361c102c9073c7b5bdfcae92f83f6d31987d74cbacb9660e57c87b5b"
     }
   ],

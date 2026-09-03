@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .config import ConfigurationError, ROOT, load_json, read_dotenv
+from .config import ConfigurationError, ROOT, load_json
 
 
 RECIPES_PATH = ROOT / "manifest" / "recipes.json"
@@ -89,12 +89,7 @@ def recipe_manifest_path(name: str) -> Path:
 
 
 def recipe_storage_root() -> Path:
-    """Return the local or explicitly shared immutable recipe directory."""
-    configured = os.environ.get("R9700_RECIPE_ROOT") or read_dotenv().get(
-        "R9700_RECIPE_ROOT"
-    )
-    if configured:
-        return Path(configured).expanduser().resolve()
+    """Return the repository-local immutable recipe directory."""
     return (ROOT / RECIPE_PATH_PREFIX).resolve()
 
 

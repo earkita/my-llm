@@ -10,9 +10,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 from r9700 import launcher, proxy
-from r9700.backends import build_command
+from r9700.backends import build_command, build_environment
 from r9700.backends.vllm import environment as vllm_environment
 from r9700.config import ConfigurationError, ROOT, load_profile
+from r9700.install import _make_venv_entrypoints_relocatable
 from r9700.manifest import (
     recipe_artifact_path,
     recipe_names,
@@ -32,6 +33,24 @@ PROFILE_NAMES = (
 
 
 class ProductionProfileTests(unittest.TestCase):
+    def test_venv_entrypoints_do_not_embed_recipe_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            venv = Path(temporary) / "recipe" / "venv"
+            bin_directory = venv / "bin"
+            bin_directory.mkdir(parents=True)
+            entrypoint = bin_directory / "tool"
+            entrypoint.write_text(
+                "#!/some/other/checkout/.runtime/recipes/demo/venv/bin/python\n"
+                "print('ok')\n"
+            )
+
+            _make_venv_entrypoints_relocatable(venv)
+
+            content = entrypoint.read_text()
+            self.assertTrue(content.startswith("#!/bin/sh\n'''exec'"))
+            self.assertIn("$(realpath -- \"$0\")", content)
+            self.assertNotIn("/some/other/checkout", content)
+
     def test_repository_contains_exactly_three_flat_profiles(self) -> None:
         root = ROOT / "profiles" / "production"
         self.assertEqual(
@@ -72,22 +91,49 @@ class ProductionProfileTests(unittest.TestCase):
 
     def test_only_required_recipes_and_assets_are_present(self) -> None:
         expected = {
-            "llama-cpp-glm53-pr27754",
-            "vllm-dspark-v0280",
-            "vllm-qwen38-flash-next-v0280-pr53896",
+            "llamacpp_glm53flash_pr27754",
+            "vllm_deepseekv4flash_v0.28",
+            "vllm_qwen38flash_pr53896",
         }
         self.assertEqual(set(recipe_names()), expected)
-        for recipe in expected - {"llama-cpp-glm53-pr27754"}:
+        for recipe in expected:
+            with self.subTest(recipe=recipe):
+                self.assertRegex(
+                    recipe,
+                    r"^(?:vllm|llamacpp)_[a-z0-9]+_(?:v\d+\.\d+|pr\d+)$",
+                )
+        for recipe in expected - {"llamacpp_glm53flash_pr27754"}:
             with self.subTest(recipe=recipe):
                 verify_assets(recipe_name=recipe)
 
         llama_manifest = json.loads(
-            (ROOT / "manifest" / "llama-cpp-glm53-pr27754.json").read_text()
+            (ROOT / "manifest" / "llamacpp_glm53flash_pr27754.json").read_text()
         )
         for patch in llama_manifest["patches"]:
             path = ROOT / patch["path"]
             self.assertTrue(path.is_file())
             self.assertEqual(sha256_file(path), patch["sha256"])
+            self.assertEqual(path.parent.name, "llamacpp_glm53flash_pr27754")
+
+        for recipe in expected - {"llamacpp_glm53flash_pr27754"}:
+            manifest_path = ROOT / "manifest" / f"{recipe}.json"
+            runtime_manifest = json.loads(manifest_path.read_text())
+            for source in runtime_manifest["sources"].values():
+                for patch_record in source["patches"]:
+                    patch_path = ROOT / patch_record["path"]
+                    self.assertEqual(patch_path.parent.name, recipe)
+
+    def test_llama_environment_loads_libraries_from_its_local_recipe(self) -> None:
+        runtime = load_profile("glm53-flash")["runtime"]
+        environment = build_environment(runtime)
+        local_binary_directory = (
+            ROOT
+            / ".runtime/recipes/llamacpp_glm53flash_pr27754/build/llama.cpp/bin"
+        )
+        self.assertEqual(
+            environment["LD_LIBRARY_PATH"].split(":", 1)[0],
+            str(local_binary_directory),
+        )
 
     def test_provenance_hashes_current_flat_profiles(self) -> None:
         provenance = json.loads((ROOT / "provenance.json").read_text())
@@ -439,22 +485,24 @@ class ProductionProfileTests(unittest.TestCase):
 
         run.assert_not_called()
 
-    def test_shared_recipe_root_preserves_recipe_boundaries(self) -> None:
-        shared = Path("/tmp/r9700-shared-recipes")
+    def test_recipe_root_cannot_be_redirected_outside_the_repository(self) -> None:
         relative = (
-            ".runtime/recipes/vllm-dspark-v0280/venv/bin/python"
+            ".runtime/recipes/vllm_deepseekv4flash_v0.28/venv/pyvenv.cfg"
         )
         with patch.dict(
-            "os.environ", {"R9700_RECIPE_ROOT": str(shared)}, clear=False
+            "os.environ",
+            {"R9700_RECIPE_ROOT": "/tmp/r9700-shared-recipes"},
+            clear=False,
         ):
             self.assertEqual(
-                recipe_artifact_path("vllm-dspark-v0280", relative),
-                shared / "vllm-dspark-v0280/venv/bin/python",
+                recipe_artifact_path("vllm_deepseekv4flash_v0.28", relative),
+                ROOT
+                / ".runtime/recipes/vllm_deepseekv4flash_v0.28/venv/pyvenv.cfg",
             )
             with self.assertRaisesRegex(
                 ConfigurationError, "recipe artifact path is outside"
             ):
-                recipe_artifact_path("vllm-dspark-v0280", "/tmp/python")
+                recipe_artifact_path("vllm_deepseekv4flash_v0.28", "/tmp/python")
 
     def test_model_verification_rechecks_checkpoint_files(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

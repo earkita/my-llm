@@ -1,24 +1,24 @@
 {
   "schema_version": 1,
-  "default_recipe": "vllm-dspark-v0280",
+  "default_recipe": "vllm_deepseekv4flash_v0.28",
   "recipes": {
-    "vllm-dspark-v0280": {
+    "vllm_deepseekv4flash_v0.28": {
       "backend": "vllm",
-      "path": "manifest/vllm-dspark-v0280.json",
-      "install_path": ".runtime/recipes/vllm-dspark-v0280/install.json",
+      "path": "manifest/vllm_deepseekv4flash_v0.28.json",
+      "install_path": ".runtime/recipes/vllm_deepseekv4flash_v0.28/install.json",
       "smoke_profile": "deepseek-v4-flash"
     },
-    "vllm-qwen38-flash-next-v0280-pr53896": {
+    "vllm_qwen38flash_pr53896": {
       "backend": "vllm",
-      "path": "manifest/vllm-qwen38-flash-next-v0280-pr53896.json",
-      "install_path": ".runtime/recipes/vllm-qwen38-flash-next-v0280-pr53896/install.json",
+      "path": "manifest/vllm_qwen38flash_pr53896.json",
+      "install_path": ".runtime/recipes/vllm_qwen38flash_pr53896/install.json",
       "smoke_profile": "qwen38-flash"
     },
-    "llama-cpp-glm53-pr27754": {
+    "llamacpp_glm53flash_pr27754": {
       "backend": "llama-cpp",
-      "path": "manifest/llama-cpp-glm53-pr27754.json",
-      "install_path": ".runtime/recipes/llama-cpp-glm53-pr27754/install.json",
-      "foundation_recipe": "vllm-dspark-v0280",
+      "path": "manifest/llamacpp_glm53flash_pr27754.json",
+      "install_path": ".runtime/recipes/llamacpp_glm53flash_pr27754/install.json",
+      "foundation_recipe": "vllm_deepseekv4flash_v0.28",
       "smoke_profile": "glm53-flash"
     }
   }

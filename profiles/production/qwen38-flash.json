@@ -51,7 +51,7 @@
     "schema_version": 1,
     "name": "qwen38-flash-next-fp8-8x-cache-safe-mtp2",
     "status": "production-ready",
-    "recipe": "vllm-qwen38-flash-next-v0280-pr53896",
+    "recipe": "vllm_qwen38flash_pr53896",
     "description": "Production-ready Qwen3.8 Flash-Next FP8 vLLM 0.28 TP8/EP8 profile on eight R9700 GPUs with prefix caching, gfx1201-safe Triton dispatch, and native MTP K2",
     "required_model_family": "qwen4_exp",
     "required_patches": [],

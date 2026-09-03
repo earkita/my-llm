@@ -92,8 +92,8 @@ covers the former second-request ROCm illegal-memory-access failure.
 ## Changes required to run the profiles
 
 - Corrected code paths that invoked the Bash `run` entry point through Python.
-- Added an optional `R9700_RECIPE_ROOT` so exact hash-matched recipe builds can
-  be reused from shared storage without duplicating roughly 25 GiB locally.
+- Kept every runtime recipe and isolated environment under this checkout's
+  `.runtime/recipes/`; external recipe-root overrides are rejected by design.
 - Made model verification inspect the current checkpoint instead of trusting a
   previously written source record. Safetensors validation now compares actual
   tensor payload bytes and excludes container headers.
@@ -106,9 +106,9 @@ covers the former second-request ROCm illegal-memory-access failure.
   after the worker bootstrap was added.
 - Improved persistent keeper shutdown handling so a normal managed stop is not
   misreported as an unexpected runtime exit.
-- Added regression tests for shared recipe roots, live checkpoint revalidation,
-  safetensors byte semantics, vLLM entry-point construction, and worker Triton
-  bootstrapping.
+- Added regression tests for repository-local recipe boundaries, live
+  checkpoint revalidation, safetensors byte semantics, vLLM entry-point
+  construction, and worker Triton bootstrapping.
 - Added a HIP-scoped llama.cpp multi-GPU device-context patch and enabled GLM
   common-prefix prompt caching after a repeated-request regression test.
 - Made the LiteLLM health test validate all aliases exposed by the active flat

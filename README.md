@@ -1,9 +1,9 @@
 # my-llm
 
 Minimalne repozytorium uruchomieniowe dla trzech zweryfikowanych modeli na
-AMD Radeon AI PRO R9700. Zostało wydzielone z
-`/home/ea/ai/llm-runtime`; nie zawiera checkpointów, środowisk `.runtime`,
-logów ani profili laboratoryjnych.
+AMD Radeon AI PRO R9700. Nie zależy od innych checkoutów: receptury,
+środowiska `.runtime`, stan usług i logi są lokalne. Checkpointy pozostają na
+dedykowanym magazynie modeli wskazanym przez profile produkcyjne.
 
 ## Profile
 
@@ -21,7 +21,7 @@ odrzuca każdy profil, w którym wystąpi.
 ## Przygotowanie kontrolera
 
 ```bash
-cd /home/ea/ai/my-llm
+cd my-llm
 uv venv --python 3.12 .venv
 uv pip install --python .venv/bin/python -e .
 cp .env.example .env
@@ -31,9 +31,9 @@ cp .env.example .env
 Przed uruchomieniem proxy ustaw własny losowy `LITELLM_MASTER_KEY` w `.env`;
 kontroler nie ma wbudowanego klucza domyślnego.
 
-Jeżeli identyczne, już zatestowane recepty znajdują się w innym checkoutcie,
-można wskazać ich katalog przez `R9700_RECIPE_ROOT` w `.env`. Manifesty,
-commity, obrazy patchy i artefakty nadal są weryfikowane przed startem.
+Receptury i ich izolowane środowiska są zawsze przechowywane lokalnie pod
+`.runtime/recipes/`. Kontroler nie korzysta z buildów należących do innych
+checkoutów.
 
 ## Użycie
 

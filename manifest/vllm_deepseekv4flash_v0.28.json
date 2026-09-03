@@ -7,8 +7,8 @@
     "reference_gpu_count": 8
   },
   "environment": {
-    "venv": ".runtime/recipes/vllm-dspark-v0280/venv",
-    "source_root": ".runtime/recipes/vllm-dspark-v0280/src",
+    "venv": ".runtime/recipes/vllm_deepseekv4flash_v0.28/venv",
+    "source_root": ".runtime/recipes/vllm_deepseekv4flash_v0.28/src",
     "constraints": "constraints/rocm-7.14-py312.txt",
     "constraints_sha256": "085028ed6ad33bb4fc90087bff357dee0fcc7d5024369cf3b14963229b87e3cf",
     "constraint_overlays": [
@@ -41,7 +41,7 @@
       "expected_diff_sha256": "74c14d1e23b3054a7a4aeb13b53b04badf85cfced2a41b310996f0a63af3e6e1",
       "patches": [
         {
-          "path": "patches/aiter-dspark-v0271/0001-gfx1201-paged-mqa-stage1.patch",
+          "path": "patches/vllm_deepseekv4flash_v0.28/0001-gfx1201-paged-mqa-stage1.patch",
           "sha256": "74c14d1e23b3054a7a4aeb13b53b04badf85cfced2a41b310996f0a63af3e6e1"
         }
       ]
@@ -54,7 +54,7 @@
       "expected_diff_sha256": "0a1cdbe5bbf6c0298a92f4d827b3e9a99de7ba2714818d738eba6f0da22f6469",
       "patches": [
         {
-          "path": "patches/vllm-dspark-v0280/0001-r9700-production-stack.patch",
+          "path": "patches/vllm_deepseekv4flash_v0.28/0001-r9700-production-stack.patch",
           "sha256": "729e23c7c09be5e27fa48486e77d8190e360f8faff9c5c29c3be016242767e24"
         }
       ]

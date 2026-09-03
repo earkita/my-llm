@@ -52,7 +52,7 @@
     "schema_version": 1,
     "name": "glm53-flash-fastest-verified-q8-1m-dflash2",
     "backend": "llama-cpp",
-    "recipe": "llama-cpp-glm53-pr27754",
+    "recipe": "llamacpp_glm53flash_pr27754",
     "status": "production-ready",
     "description": "User-approved production GLM-5.3-Flash llama.cpp profile: fastest verified configuration with model-native 1M target context, symmetric Q8_0 KV, FA on, rebalanced 8-GPU layer split, ubatch 64, common-prefix prompt caching, and DFlash2 K7 with rolling 8K draft cache; prompt depth verified at 4K, 16K, and 32K",
     "required_model_family": "glm5next",

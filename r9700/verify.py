@@ -105,7 +105,11 @@ def verify_runtime(model_name: str, runtime_name: str) -> dict:
     if backend == "llama-cpp":
         binary = Path(installed["binary"])
         probe = subprocess.run(
-            [binary, "--version"], capture_output=True, text=True, check=False
+            [binary, "--version"],
+            capture_output=True,
+            text=True,
+            env=build_environment(runtime),
+            check=False,
         )
         if probe.returncode:
             raise ConfigurationError(

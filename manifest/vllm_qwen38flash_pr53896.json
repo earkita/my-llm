@@ -7,8 +7,8 @@
     "reference_gpu_count": 8
   },
   "environment": {
-    "venv": ".runtime/recipes/vllm-qwen38-flash-next-v0280-pr53896/venv",
-    "source_root": ".runtime/recipes/vllm-qwen38-flash-next-v0280-pr53896/src",
+    "venv": ".runtime/recipes/vllm_qwen38flash_pr53896/venv",
+    "source_root": ".runtime/recipes/vllm_qwen38flash_pr53896/src",
     "constraints": "constraints/rocm-7.14-py312.txt",
     "constraints_sha256": "085028ed6ad33bb4fc90087bff357dee0fcc7d5024369cf3b14963229b87e3cf",
     "constraint_overlays": [
@@ -53,31 +53,31 @@
       "apply_intent_to_add": true,
       "patches": [
         {
-          "path": "patches/vllm-qwen/0001-prefer-rocm-pytorch-on-mixed-host.patch",
+          "path": "patches/vllm_qwen38flash_pr53896/0001-prefer-rocm-pytorch-on-mixed-host.patch",
           "sha256": "b7f751809b81cee87a0aec361a0018a3d3e041f734ef1990ac56cbd84ac54653"
         },
         {
-          "path": "patches/vllm-qwen/0002-use-aiter-flash-attention-on-rdna4.patch",
+          "path": "patches/vllm_qwen38flash_pr53896/0002-use-aiter-flash-attention-on-rdna4.patch",
           "sha256": "f177d8e7016f8d9a11a77f5b043134dc0b2db1394ab7ca6db50fff7b20ea5b78"
         },
         {
-          "path": "patches/vllm-qwen/0003-restore-weight-skip-filters.patch",
+          "path": "patches/vllm_qwen38flash_pr53896/0003-restore-weight-skip-filters.patch",
           "sha256": "5535b7ad5dd6fb63a452fe8af30e0482d4f051cd177c842960865ed91ff64b2f"
         },
         {
-          "path": "patches/vllm-qwen/0004-support-fp8-ple-on-amd.patch",
+          "path": "patches/vllm_qwen38flash_pr53896/0004-support-fp8-ple-on-amd.patch",
           "sha256": "19e867226d3d379032ae0b8ea7df78a4119246905e217696452ef60ce46ead55"
         },
         {
-          "path": "patches/vllm-qwen/0007-use-amd-grouped-rmsnorm-for-ple.patch",
+          "path": "patches/vllm_qwen38flash_pr53896/0007-use-amd-grouped-rmsnorm-for-ple.patch",
           "sha256": "a0bac1e7bcdf62b35d94570f986e688d54daff2f0789c29906347d701480fd63"
         },
         {
-          "path": "patches/vllm-qwen/0008-route-qwen4-mtp-bf16-gemm-through-triton-on-rdna4.patch",
+          "path": "patches/vllm_qwen38flash_pr53896/0008-route-qwen4-mtp-bf16-gemm-through-triton-on-rdna4.patch",
           "sha256": "c181b64e8dfdee79955fdbf4756465c63be5ecb52254b5717b9b641cf15ea671"
         },
         {
-          "path": "patches/vllm-qwen/0009-route-qwen4-target-bf16-gemm-through-triton-on-rdna4.patch",
+          "path": "patches/vllm_qwen38flash_pr53896/0009-route-qwen4-target-bf16-gemm-through-triton-on-rdna4.patch",
           "sha256": "9e965c0d6286cbca85f87155be590c4e246db4ba335a3c20c65791796aa04f28"
         }
       ]

@@ -199,6 +199,7 @@ def install(
         "-G",
         spec["cmake"]["generator"],
         f"-DCMAKE_BUILD_TYPE={spec['cmake']['build_type']}",
+        f"-DCMAKE_HIP_COMPILER={rocm_home / 'llvm' / 'bin' / 'clang'}",
     ]
     cmake.extend(
         f"-D{key}={value}" for key, value in spec["cmake"]["options"].items()
@@ -304,6 +305,12 @@ def verify_install(recipe_name: str | None = None) -> dict[str, Any]:
 
 def environment(runtime: dict[str, Any]) -> dict[str, str]:
     env = base_environment(runtime)
+    recipe_name = runtime["recipe"]
+    binary = recipe_artifact_path(
+        recipe_name,
+        manifest(recipe_name)["binary"],
+    )
+    env["LD_LIBRARY_PATH"] = f"{binary.parent}:{env.get('LD_LIBRARY_PATH', '')}"
     env.update(
         {key: str(value) for key, value in runtime.get("environment", {}).items()}
     )

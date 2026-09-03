@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_on": "2026-09-01",
-  "source_repository": "/home/ea/ai/llm-runtime",
+  "source_repository": "llm-runtime (historical source only; not required)",
   "policy": "Only source profiles under profiles/runtime/production were selected; model, runtime and stack settings were flattened into one deployment file without extends.",
   "profiles": {
     "deepseek-v4-flash": {
@@ -10,7 +10,7 @@
       "source_runtime": "profiles/runtime/production/deepseek-v4-flash-vllm-v0280-6xr9700-tp1-pp6-dspark-k5-1m.json",
       "source_runtime_sha256": "46268b8c9fa49cd46469d0fb2d3ec8e38e535f6139c4f00fc94b18b3cb227c83",
       "target_profile": "profiles/production/deepseek-v4-flash.json",
-      "target_profile_sha256": "f5ba636d19649f2148a18994ed643825736fd542699486bf78b9b3c8a0865aa7",
+      "target_profile_sha256": "a9aef1495cd0fd3ee7a80070bf892d6b33ed9730e3954f0840538b52a51ea37b",
       "intentional_changes": [
         "default_directory points at the verified local /mnt/ai checkpoint",
         "embedded stack preset",
@@ -23,7 +23,7 @@
       "source_runtime": "profiles/runtime/production/glm53-flash-fastest-verified-q8-1m-dflash2.json",
       "source_runtime_sha256": "095c57afcdb6f9cc8a45152dd168b21a4fa0ae48c07cb15e379b3defce454754",
       "target_profile": "profiles/production/glm53-flash.json",
-      "target_profile_sha256": "75c9a8ca03afe41716012dcdb215f0be2735a823fba38c0e387015e4db835f74",
+      "target_profile_sha256": "56ca129bda8f8830aa6d0983fc1b21def6f878285631d2f884d88106625c49c9",
       "intentional_changes": [
         "DFlash2 identity is also embedded in model.auxiliary_artifacts",
         "embedded stack preset",
@@ -36,7 +36,7 @@
       "source_runtime": "profiles/runtime/production/qwen38-flash-next-fp8-8x-cache-safe-mtp2.json",
       "source_runtime_sha256": "22b4431b0c4ecfd74cb08b89ab815292bf4ce78ab2d0b71aab0ca446484f9f04",
       "target_profile": "profiles/production/qwen38-flash.json",
-      "target_profile_sha256": "aaccf078a292555ed0f94420cc96d59bd1be44e1f6425e85ebb160782f82e772",
+      "target_profile_sha256": "25487ffd43ff154c640244a7c7b7fb6a0b0c206627d0643c691b97c7f30eab23",
       "intentional_changes": [
         "embedded stack preset",
         "GPU BDF order updated for the post-relocation host topology captured on 2026-09-02",
@@ -45,8 +45,8 @@
     }
   },
   "recipes": [
-    "vllm-dspark-v0280",
-    "vllm-qwen38-flash-next-v0280-pr53896",
-    "llama-cpp-glm53-pr27754"
+    "vllm_deepseekv4flash_v0.28",
+    "vllm_qwen38flash_pr53896",
+    "llamacpp_glm53flash_pr27754"
   ]
 }

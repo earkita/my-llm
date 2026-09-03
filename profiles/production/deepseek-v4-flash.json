@@ -41,7 +41,7 @@
     "schema_version": 1,
     "name": "deepseek-v4-flash-vllm-v0280-6xr9700-tp1-pp6-dspark-k5-1m",
     "status": "production-ready",
-    "recipe": "vllm-dspark-v0280",
+    "recipe": "vllm_deepseekv4flash_v0.28",
     "description": "Production-ready exact-boundary full-1M single-session DeepSeek V4 Flash vLLM 0.28.0 runtime on six R9700 GPUs with TP1/PP6, DSpark K5, prefix caching, and an effective 252-token prefill chunk",
     "required_model_family": "deepseek_v4",
     "required_patches": [
