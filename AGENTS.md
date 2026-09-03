@@ -32,6 +32,20 @@ constants. Keep the control plane standard-library-first. Never use system
 `python3` or bare `pip`; use `uv` and `.venv/bin/python`. Preserve numeric
 prefixes in patch filenames because manifest order is significant.
 
+## Recipe and Patch Naming
+
+Recipe names use `backend_target_version`, for example
+`vllm_deepseekv4flash_v0.28`, `vllm_qwen38flash_pr53896`, and
+`llamacpp_glm53flash_pr27754`. Use lowercase ASCII letters, digits and
+underscores; a dot is allowed only in a version such as `v0.28`.
+
+The manifest filename must be `manifest/<recipe-name>.json`, and generated
+artifacts must live under `.runtime/recipes/<recipe-name>/`. Store every patch
+for a recipe, including patches for helper sources such as AITER, under
+`patches/<recipe-name>/`. Keep the ordered numeric prefix on every patch file.
+Do not embed absolute checkout paths in scripts or committed configuration;
+derive paths from the repository root or the script's own directory.
+
 ## Testing Guidelines
 
 Tests use `unittest`. Run `make check` before submitting. Every profile change
