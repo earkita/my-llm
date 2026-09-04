@@ -21,12 +21,14 @@ Select another complete preset instead of choosing its components separately:
 ./run stack start --preset qwen38-flash
 ```
 
-The default GLM preset selects the verified vLLM Quark/MXFP4 target-only stack
-with a 32K target context. Pass `--runtime-mode dflash2` to opt into the
-qualified experimental DFlash2 K=7 mode. Qwen selects the production-ready
-vLLM 0.28 cache-safe MTP K=2 alternative.
+The default GLM preset selects the verified vLLM Quark/MXFP4 stack with MRV2,
+TP8/EP8, DFlash2 K=7, BF16 KV and a 256K context. Prefix caching is disabled.
+`--runtime-mode dflash2` is a compatibility alias for that same runtime;
+`--runtime-mode target-only-32k` selects the qualified fallback. Qwen selects
+the production-ready vLLM 0.28 cache-safe MTP K=2 alternative.
 
-The script checks that LiteLLM is installed before changing service state. It
+The script checks that LiteLLM is installed and that every visible GPU has a
+PPT0 cap no higher than 285 W before changing service state. It
 starts the selected model backend first, waits for readiness, then starts and
 tests LiteLLM. It reuses
 healthy services instead of replacing them. If startup fails, it rolls back

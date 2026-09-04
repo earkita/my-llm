@@ -23,7 +23,7 @@ runtime_ready_timeout=900
 proxy_ready_timeout=120
 runtime_stop_timeout=180
 proxy_stop_timeout=30
-required_power_cap_w=270
+required_power_cap_w=285
 runtime_mode=
 dry_run=0
 

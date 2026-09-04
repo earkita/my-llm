@@ -14,7 +14,7 @@ python="$repo_root/.venv/bin/python"
 
 profile=glm53-flash
 ready_timeout=900
-required_power_cap_w=270
+required_power_cap_w=285
 dry_run=0
 extra=()
 unit=r9700-runtime.service

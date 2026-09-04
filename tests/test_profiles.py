@@ -291,33 +291,73 @@ class ProductionProfileTests(unittest.TestCase):
         ):
             start("deepseek-v4-flash", "qwen38-flash")
 
-    def test_glm_dflash_is_identity_bound_and_explicitly_opt_in(self) -> None:
+    def test_glm_dflash_is_identity_bound_and_enabled_by_default(self) -> None:
         profile = load_profile("glm53-flash")
         artifact = profile["model"]["auxiliary_artifacts"][0]
         self.assertEqual(artifact["repository"], "incoai/GLM-5.3-Flash-DFlash2")
         self.assertEqual(artifact["revision"][:7], "bf582e4")
-        self.assertNotIn("speculative_config", profile["runtime"])
 
-        runtime = activate_runtime_mode(
-            profile["model"], profile["runtime"], "dflash2"
-        )
-        self.assertEqual(
-            profile["runtime"]["experimental_modes"]["dflash2"]["status"],
-            "experimental-validated",
-        )
-        speculative = runtime["speculative_config"]
-        self.assertEqual(runtime["active_experimental_mode"], "dflash2")
+        default_runtime = profile["runtime"]
+        speculative = default_runtime["speculative_config"]
+        self.assertEqual(default_runtime["limits"]["max_model_len"], 262144)
+        self.assertEqual(default_runtime["cache"]["dtype"], "bfloat16")
         self.assertEqual(speculative["model_artifact"], "dflash2-drafter")
         self.assertEqual(speculative["method"], "dflash")
         # The checkpoint block size is eight: one anchor plus seven drafts.
         self.assertEqual(speculative["num_speculative_tokens"], 7)
         self.assertEqual(speculative["draft_tensor_parallel_size"], 8)
         self.assertEqual(speculative["attention_backend"], "TRITON_ATTN")
-        self.assertTrue(
-            {"0010", "0012", "0017", "0018"}.issubset(
-                profile["runtime"]["required_patches"]
-            )
+
+        runtime = activate_runtime_mode(
+            profile["model"], profile["runtime"], "dflash2"
         )
+        self.assertEqual(
+            profile["runtime"]["experimental_modes"]["dflash2"]["status"],
+            "compatibility-alias",
+        )
+        self.assertEqual(runtime["active_experimental_mode"], "dflash2")
+        self.assertEqual(runtime["speculative_config"], speculative)
+        self.assertEqual(
+            default_runtime["required_patches"][-4:],
+            ["0019", "0020", "0021", "0022"],
+        )
+        self.assertTrue(
+            {
+                "0010",
+                "0012",
+                "0017",
+                "0018",
+                "0020",
+                "0021",
+                "0022",
+            }.issubset(default_runtime["required_patches"])
+        )
+
+    def test_glm_long_context_safety_patches_cover_page_sizes_and_bounds(
+        self,
+    ) -> None:
+        kernel_pages = (
+            ROOT
+            / "patches/vllm_glm53flash_v0.28/"
+            "0021-advertise-glm-kpool-kernel-pages-issue54359.patch"
+        ).read_text()
+        self.assertIn(
+            "return [4 * page_size for page_size in PAGED_MQA_PAGE_SIZES]",
+            kernel_pages,
+        )
+        self.assertIn("def get_attn_backend(self):", kernel_pages)
+
+        slot_guards = (
+            ROOT
+            / "patches/vllm_glm53flash_v0.28/"
+            "0022-guard-slot-mapping-block-table-loads-pr54296.patch"
+        ).read_text()
+        self.assertEqual(
+            slot_guards.count("in_range = block_indices < block_table_stride"),
+            2,
+        )
+        self.assertIn("mask=mask & is_local & in_range", slot_guards)
+        self.assertIn("mask=is_local & in_range", slot_guards)
 
     def test_glm_embeds_k1_diagnostic_runtime_modes(self) -> None:
         dflash = load_runtime("glm53-flash", "dflash2-k1")
@@ -336,6 +376,33 @@ class ProductionProfileTests(unittest.TestCase):
                 "eagle_aux_hidden_state_layer_ids"
             ],
             [6, 15, 25, 34, 43],
+        )
+
+    def test_glm_embeds_isolated_long_context_modes(self) -> None:
+        target_only = load_runtime("glm53-flash", "target-only-32k")
+        self.assertIsNone(target_only["speculative_config"])
+
+        long_bf16 = load_runtime("glm53-flash", "long-context-512k-bf16")
+        self.assertEqual(long_bf16["parallel"]["tensor"], 8)
+        self.assertEqual(long_bf16["limits"]["max_model_len"], 524288)
+        self.assertEqual(long_bf16["limits"]["max_num_batched_tokens"], 1024)
+        self.assertEqual(long_bf16["limits"]["gpu_memory_utilization"], 0.97)
+        self.assertEqual(long_bf16["cache"]["dtype"], "bfloat16")
+        self.assertFalse(long_bf16["cache"]["prefix_cache"])
+        self.assertEqual(long_bf16["cache"]["cpu_offload_gb"], 0)
+        self.assertIsNone(long_bf16["speculative_config"])
+
+        long_fp8 = load_runtime("glm53-flash", "long-context-1m-fp8")
+        self.assertEqual(long_fp8["parallel"]["tensor"], 8)
+        self.assertEqual(long_fp8["limits"]["max_model_len"], 1048576)
+        self.assertEqual(long_fp8["limits"]["max_num_batched_tokens"], 512)
+        self.assertEqual(long_fp8["cache"]["dtype"], "fp8")
+        self.assertFalse(long_fp8["cache"]["prefix_cache"])
+        self.assertEqual(long_fp8["cache"]["cpu_offload_gb"], 0)
+        self.assertIsNone(long_fp8["speculative_config"])
+        self.assertEqual(
+            long_bf16["required_patches"][-4:],
+            ["0019", "0020", "0021", "0022"],
         )
 
     def test_vllm_speculative_model_resolves_from_identity_bound_artifact(self) -> None:
@@ -360,7 +427,12 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertFalse(runtime["cache"]["prefix_cache"])
         self.assertEqual(runtime["cache"]["cpu_offload_gb"], 0)
         self.assertEqual(runtime["parallel"]["tensor"], 8)
-        self.assertEqual(runtime["limits"]["max_model_len"], 32768)
+        self.assertEqual(runtime["limits"]["max_model_len"], 262144)
+        self.assertEqual(runtime["cache"]["dtype"], "bfloat16")
+        self.assertEqual(runtime["speculative_config"]["method"], "dflash")
+        self.assertEqual(
+            runtime["speculative_config"]["num_speculative_tokens"], 7
+        )
         self.assertEqual(runtime["environment"]["VLLM_USE_V2_MODEL_RUNNER"], "1")
         self.assertEqual(runtime["moe_backend"], "emulation")
         self.assertEqual(runtime["linear_backend"], "emulation")
@@ -481,7 +553,7 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertIn("--proxy-ready-timeout", command)
         self.assertIn("--dry-run", command)
 
-    def test_launcher_enables_dflash_only_with_explicit_flag(self) -> None:
+    def test_launcher_dflash_flag_selects_compatibility_alias(self) -> None:
         with (
             patch("r9700.launcher.managed_state", return_value=None),
             patch("r9700.launcher.subprocess.run") as run,

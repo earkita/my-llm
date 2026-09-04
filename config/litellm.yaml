@@ -43,7 +43,7 @@ model_list:
       api_base: os.environ/HOSTED_INFERENCE_API_BASE
       reasoning_effort: low
     model_info:
-      max_input_tokens: 32768
+      max_input_tokens: 262144
 
   - model_name: glm-5.3-flash-high
     litellm_params:
@@ -51,7 +51,7 @@ model_list:
       api_base: os.environ/HOSTED_INFERENCE_API_BASE
       reasoning_effort: high
     model_info:
-      max_input_tokens: 32768
+      max_input_tokens: 262144
 
   - model_name: glm-5.3-flash-max
     litellm_params:
@@ -59,7 +59,7 @@ model_list:
       api_base: os.environ/HOSTED_INFERENCE_API_BASE
       reasoning_effort: max
     model_info:
-      max_input_tokens: 32768
+      max_input_tokens: 262144
 
   - model_name: qwen3.8-flash-next-fp8
     litellm_params:

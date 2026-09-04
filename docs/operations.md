@@ -31,8 +31,8 @@ Dla istniejących wag:
 ./run model verify qwen38-flash
 ```
 
-`glm53-flash` przypina także model DFlash2, ale profil kwalifikacyjny uruchamia
-domyślnie wyłącznie target Quark/MXFP4. Plikiem draftera jest
+`glm53-flash` przypina target Quark/MXFP4 oraz domyślny drafter DFlash2 K7.
+Plikiem draftera jest
 `/mnt/ai/models/glm/GLM-5.3-Flash-DFlash2-HF-bf582e4/model.safetensors`.
 Download pobiera go automatycznie, a adopt i start wymagają poprawnego rozmiaru
 oraz SHA-256.
@@ -87,21 +87,27 @@ Bezpieczne zatrzymanie:
 skills/stop-r9700-runtime/scripts/stop-runtime.sh
 ```
 
-Eksperymentalny DFlash nie jest włączany przez zwykły start. Zweryfikowany K7
-oraz kontrolne tryby K1 uruchamia się jawnie:
+Zwykły start GLM uruchamia zweryfikowany profil MRV2, TP8/EP8, DFlash2 K7,
+BF16 KV i 256K. `dflash2` jest tylko zgodnościowym aliasem tego samego runtime.
+Target-only i K1 pozostają jawnymi trybami kontrolnymi:
 
 ```bash
-./run launcher start glm53-flash --runtime-mode dflash2-k1
+./run launcher start glm53-flash
 ./run launcher start glm53-flash --runtime-mode dflash2
+./run launcher start glm53-flash --runtime-mode target-only-32k
+./run launcher start glm53-flash --runtime-mode dflash2-k1
 ./run launcher start glm53-flash --runtime-mode extract-hidden-states-k1
 ```
 
-Po testach zatrzymaj usługę przed zmianą trybu. K7 przeszedł bramkę API i
-akceptuje drafty, ale pozostaje eksperymentalny do czasu scalenia poprawek
-upstream oraz testów pełnego kontekstu i współbieżności.
+Po testach zatrzymaj usługę przed zmianą trybu. K7 przeszedł bramkę API i pełny
+test graniczny `262016 + 128 = 262144`, włącznie z poprawnym decode i 111/111
+zaakceptowanymi draftami. Trybu `long-context-400k-dflash2` nie używaj do
+serwowania: ostatni test graniczny, wykonany przed `0021`/`0022`, zakończył
+się nielegalnym dostępem GPU i nie został jeszcze powtórzony na finalnym obrazie.
 
-Skrypt startowy wymaga poprawnego limitu mocy i wykonuje host preflight.
-Nie zastępuje działającej usługi. Stop nigdy nie eskaluje do SIGKILL.
+Skrypt startowy wymaga PPT0 najwyżej 285 W na wszystkich widocznych GPU i
+wykonuje host preflight. Niższy limit przechodzi kontrolę. Nie zastępuje
+działającej usługi. Stop nigdy nie eskaluje do SIGKILL.
 
 ## Test API i benchmark
 
@@ -114,9 +120,31 @@ skills/measure-r9700-model/scripts/test-and-benchmark.sh \
   --output-tokens 1024
 ```
 
-Dla jawnego trybu GLM dodaj `--runtime-mode dflash2`; helper przekaże tę samą
-tożsamość trybu do bramki API i benchmarku.
+Dla domyślnego GLM nie podawaj trybu. Pełną granicę skonfigurowanego kontekstu
+można sprawdzić bez ręcznego liczenia promptu:
+
+```bash
+skills/measure-r9700-model/scripts/test-and-benchmark.sh \
+  --profile glm53-flash \
+  --output-tokens 128 \
+  --full-context \
+  --concurrency 1 --repetitions 1 --warmup 0
+```
+
+Przy trybie innym niż domyślny dodaj odpowiadające mu `--runtime-mode`; helper
+przekaże tę samą tożsamość do bramki API i benchmarku.
 
 Wyniki trafiają do ignorowanego `logs/`. Test API najpierw sprawdza tożsamość
 zarządzanej usługi, `/health`, `/v1/models`, deklarowany kontekst i dokładne
 liczniki tokenów.
+
+## Diagnostyczny przebieg 400K
+
+400K pozostaje tylko trybem diagnostycznym. Pierwsza próba graniczna zbiegła
+się z fatalnym CPU/Data-Fabric MCE i resetem hosta. Powtórka z potwierdzonym
+limitem 285 W nie zresetowała hosta, ale odtworzyła `illegal memory access` na
+GPU; oba przebiegi poprzedzały `0021`/`0022`. Dedykowany zapis telemetryczny
+GPU osiągnął maksymalnie 255 W (30 W poniżej limitu),
+82°C edge (28°C poniżej progu 110°C), 106°C hotspot (4°C poniżej progu) i
+88°C pamięci (20°C poniżej progu 108°C). Nie był to udokumentowany thermal
+trip; profil 400K nadal nie ma kwalifikacji stabilności.

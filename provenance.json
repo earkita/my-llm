@@ -24,19 +24,22 @@
       "source_runtime_sha256": "c7e6e36fa93a5b8cb95b74fa96e4abdf2f0be51d",
       "upstream_runtime_commits": {
         "glm53_pr53906_merge": "98ed0856f31fa3aaf5e27464e2b4ef5a8ee6b2f5",
-        "rocm_sparse_verify_pr55239_head": "d608ced8445a21ec3bffa01b73a889e914aff2fd",
+        "rocm_sparse_verify_pr55239_patch_source": "d608ced8445a21ec3bffa01b73a889e914aff2fd",
+        "rocm_sparse_verify_pr55239_audit_head": "0f1d78db4495fed10384a2b048e70367e61d3dd1",
         "kpool_ring_pr55219_commit": "de63c84731cd719a6ab5c9e8d73289c9c96a7587",
-        "invalid_kpool_index_pr55201_head": "40bf4af864fb4e0fd3f84c5650ca9ba465c31ac8"
+        "packed_layout_pr55219_audit_head": "6712aa109b856d2fefd75a28084db358eb7f9e1b",
+        "invalid_kpool_index_pr55201_head": "40bf4af864fb4e0fd3f84c5650ca9ba465c31ac8",
+        "slot_mapping_guard_pr54296_head": "191f82d710493c9a02077d976d8cf0403ab8c96a"
       },
       "target_profile": "profiles/production/glm53-flash.json",
-      "target_profile_sha256": "3642fd4c9bab9cf27f3fd0b28349adad1d1796be93742dc5432c25cc9cc53f29",
+      "target_profile_sha256": "8c6e7ed479f2a8a04f110e8bdc167d14c342c7bd2d3e0cd35ab034efa131da12",
       "intentional_changes": [
         "replaced the llama.cpp GGUF deployment with the AMD Quark MXFP4 checkpoint",
         "pinned upstream main after the merged GLM-5.3 PR and retained the required MRV2 correctness fixes",
-        "kept identity-bound DFlash2 with seven draft tokens as an explicit validated experimental mode",
+        "promoted identity-bound DFlash2 with seven draft tokens to the default after an exact 262144-token boundary pass",
         "added K=1 DFlash and hidden-state extraction modes for MRV2 isolation",
         "materialized and contracted GLM mHC outputs for DFlash auxiliary hidden states",
-        "replaced the unsafe draft-target KV overlay with aligned pages and added focused fixes from vLLM PRs #55239, #55219 and #55201",
+        "replaced the unsafe draft-target KV overlay with aligned pages and added focused fixes from vLLM PRs #55239, #55219, #55201 and #54296 plus issues #55280 and #54359",
         "excluded PR #54163 after a controlled ablation showed an additional DFlash K=1 correctness regression with prefix caching disabled"
       ]
     },

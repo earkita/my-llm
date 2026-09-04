@@ -2,7 +2,7 @@
   "schema_version": 1,
   "name": "glm53-flash",
   "status": "production-ready",
-  "description": "GLM-5.3-Flash Quark MXFP4 MRV2 target on eight R9700 GPUs; validated DFlash2 K7 is an explicit experimental mode",
+  "description": "GLM-5.3-Flash Quark MXFP4 with DFlash2 K7 on eight R9700 GPUs; MRV2, TP8/EP8 and BF16 KV",
   "model": {
     "schema_version": 1,
     "name": "glm53-flash-quark-mxfp4",
@@ -58,10 +58,10 @@
   },
   "runtime": {
     "schema_version": 1,
-    "name": "glm53-flash-quark-mxfp4-mrv2-8xr9700-tp8-target-32k",
+    "name": "glm53-flash-quark-mxfp4-mrv2-8xr9700-tp8-dflash2-k7-bf16kv-256k",
     "status": "production-ready",
     "recipe": "vllm_glm53flash_v0.28",
-    "description": "Qualified GLM-5.3 Quark MXFP4 target-only runtime with MRV2, TP8/EP8, BF16 KV, 32K context, and explicit gfx1201 emulation fallbacks",
+    "description": "Default GLM-5.3 Quark MXFP4 runtime with DFlash2 K7, MRV2, TP8/EP8, BF16 KV, a qualified 256K context window, and explicit gfx1201 correctness fallbacks",
     "required_model_family": "glm5next",
     "required_patches": [
       "0001",
@@ -77,7 +77,11 @@
       "0015",
       "0016",
       "0017",
-      "0018"
+      "0018",
+      "0019",
+      "0020",
+      "0021",
+      "0022"
     ],
     "gpu_order": [
       0,
@@ -107,10 +111,10 @@
       "disable_custom_all_reduce": true
     },
     "limits": {
-      "max_model_len": 32768,
+      "max_model_len": 262144,
       "max_num_seqs": 1,
-      "max_num_batched_tokens": 2048,
-      "gpu_memory_utilization": 0.91
+      "max_num_batched_tokens": 512,
+      "gpu_memory_utilization": 0.97
     },
     "cache": {
       "dtype": "bfloat16",
@@ -144,11 +148,86 @@
     "attention_backend": "ROCM_AITER_MLA_SPARSE",
     "moe_backend": "emulation",
     "linear_backend": "emulation",
+    "speculative_config": {
+      "model_artifact": "dflash2-drafter",
+      "method": "dflash",
+      "num_speculative_tokens": 7,
+      "draft_tensor_parallel_size": 8,
+      "attention_backend": "TRITON_ATTN",
+      "enforce_eager": true
+    },
     "experimental_modes": {
+      "target-only-32k": {
+        "status": "qualified-fallback",
+        "runtime_name": "glm53-flash-quark-mxfp4-mrv2-8xr9700-tp8-target-bf16kv-32k",
+        "reason": "Qualified target-only fallback without speculative decoding.",
+        "runtime_overrides": {
+          "limits": {
+            "max_model_len": 32768,
+            "max_num_seqs": 1,
+            "max_num_batched_tokens": 2048,
+            "gpu_memory_utilization": 0.91
+          },
+          "speculative_config": null
+        }
+      },
+      "long-context-400k-dflash2": {
+        "status": "diagnostic-only",
+        "runtime_name": "glm53-flash-quark-mxfp4-mrv2-8xr9700-tp8-dflash2-k7-bf16kv-400k",
+        "reason": "Unqualified 400K DFlash2 diagnostic. The first boundary attempt coincided with a fatal CPU/Data-Fabric machine check and host reset; a repeat at a verified 285 W cap kept the host alive but reproduced illegal GPU memory accesses in the sparse-indexer path.",
+        "runtime_overrides": {
+          "limits": {
+            "max_model_len": 409600,
+            "max_num_seqs": 1,
+            "max_num_batched_tokens": 512,
+            "gpu_memory_utilization": 0.97
+          }
+        }
+      },
+      "long-context-512k-bf16": {
+        "status": "experimental-unvalidated",
+        "runtime_name": "glm53-flash-quark-mxfp4-mrv2-8xr9700-tp8-target-bf16kv-512k",
+        "reason": "Target-only capacity qualification at 512K using BF16 KV. A 1024-token scheduler chunk lowers peak activation memory while keeping CPU offload and prefix caching disabled.",
+        "runtime_overrides": {
+          "limits": {
+            "max_model_len": 524288,
+            "max_num_seqs": 1,
+            "max_num_batched_tokens": 1024,
+            "gpu_memory_utilization": 0.97
+          },
+          "cache": {
+            "dtype": "bfloat16",
+            "block_size": 16,
+            "prefix_cache": false,
+            "cpu_offload_gb": 0
+          },
+          "speculative_config": null
+        }
+      },
+      "long-context-1m-fp8": {
+        "status": "diagnostic-only",
+        "runtime_name": "glm53-flash-quark-mxfp4-mrv2-8xr9700-tp8-target-fp8kv-1m",
+        "reason": "Native 1M context capacity probe. FP8 sparse-MLA is not qualified on gfx1201 and currently falls through to an AITER kernel family built for gfx942/gfx950, so this mode must not be promoted without kernel and quality validation.",
+        "runtime_overrides": {
+          "limits": {
+            "max_model_len": 1048576,
+            "max_num_seqs": 1,
+            "max_num_batched_tokens": 512,
+            "gpu_memory_utilization": 0.99
+          },
+          "cache": {
+            "dtype": "fp8",
+            "block_size": 16,
+            "prefix_cache": false,
+            "cpu_offload_gb": 0
+          },
+          "speculative_config": null
+        }
+      },
       "dflash2": {
-        "status": "experimental-validated",
-        "runtime_name": "glm53-flash-quark-mxfp4-mrv2-8xr9700-tp8-dflash2-k7-32k",
-        "reason": "Validated on 8x gfx1201 with coherent API output and non-zero K7 acceptance after the aligned KV layout, Triton sparse verify, kpool ring and invalid-index fixes. Keep explicit until the upstream fixes merge and long-context, concurrency and deterministic losslessness are qualified.",
+        "status": "compatibility-alias",
+        "runtime_name": "glm53-flash-quark-mxfp4-mrv2-8xr9700-tp8-dflash2-k7-bf16kv-256k",
+        "reason": "Compatibility alias for callers that selected DFlash2 explicitly before it became the default.",
         "runtime_overrides": {
           "speculative_config": {
             "model_artifact": "dflash2-drafter",
@@ -165,6 +244,12 @@
         "runtime_name": "glm53-flash-quark-mxfp4-mrv2-8xr9700-tp8-dflash2-k1-32k",
         "reason": "Validated single-draft-token control for separating DFlash proposal quality from wider multi-token verification and rollback behavior; it is not the intended serving configuration.",
         "runtime_overrides": {
+          "limits": {
+            "max_model_len": 32768,
+            "max_num_seqs": 1,
+            "max_num_batched_tokens": 2048,
+            "gpu_memory_utilization": 0.91
+          },
           "speculative_config": {
             "model_artifact": "dflash2-drafter",
             "method": "dflash",
@@ -180,6 +265,12 @@
         "runtime_name": "glm53-flash-quark-mxfp4-mrv2-8xr9700-tp8-extract-hidden-states-k1-32k",
         "reason": "Auxiliary-state extraction plumbing control. MRV2 repeats the previous target token as the next draft, so this mode is not expected to achieve high acceptance.",
         "runtime_overrides": {
+          "limits": {
+            "max_model_len": 32768,
+            "max_num_seqs": 1,
+            "max_num_batched_tokens": 2048,
+            "gpu_memory_utilization": 0.91
+          },
           "speculative_config": {
             "method": "extract_hidden_states",
             "num_speculative_tokens": 1,
@@ -245,13 +336,13 @@
         "DISABLE_PROMPT_CACHING": "1",
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
         "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
-        "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "32768"
+        "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "262144"
       }
     }
   },
   "verification": {
-    "scope": "target-production-dflash-experimental",
-    "verified_context": 32768,
-    "notes": "Target-only MRV2 passed load, TP8 GPU use, prefill, decode and coherent OpenAI chat. DFlash2 uses Triton non-causal attention and K=7, but remains opt-in because MRV2 correctness/acceptance failed local A/B. The unrelated #54163 prefix-cache patch is excluded after it caused an additional K=1 token-zero regression while prefix caching was disabled."
+    "scope": "dflash2-default-capacity-qualification",
+    "verified_context": 262144,
+    "notes": "DFlash2 K7 is the default. After advertising the actual 128/256-token kpool kernel pages from issue #54359 and guarding slot-mapping loads as in PR #54296, an exact 262016-prompt + 128-output request completed with coherent output, 599.39 observed prefill tok/s, 23.84 decode tok/s, and 111/111 accepted drafts. Earlier 256K and 400K faults matched the old 768-vs-256 block-table thresholds exactly. Prefix caching remains disabled because PR #54163 caused a K=1 token-zero regression in local A/B testing."
   }
 }

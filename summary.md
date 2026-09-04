@@ -9,12 +9,11 @@ GLM-5.3 recipe now builds from an immutable snapshot of the official vLLM
 `main` after PR #53906 was merged, rather than from the contributor's
 `glm-release` branch.
 
-The target-only Quark/MXFP4 path remains the default production mode. DFlash2
-K7 is now functional on 8 x R9700: it loads, passes every OpenAI API gate,
-returns coherent text and accepts draft tokens. It remains an explicit
-experimental mode because three required upstream fixes are not merged and
-full-context, concurrent and deterministic-losslessness qualification is not
-complete.
+The default GLM path is now MRV2, TP8/EP8, DFlash2 K7, BF16 KV and a 262,144
+token context on 8 x R9700. It loads, passes every OpenAI API gate, returns
+coherent text and accepts drafts. An exact `262016 + 128` request qualified the
+full configured boundary at concurrency one. Target-only 32K remains an
+explicit fallback; 400K and higher-capacity modes remain diagnostic.
 
 ## Pinned GLM stack
 
@@ -26,7 +25,8 @@ complete.
   `c7e6e36fa93a5b8cb95b74fa96e4abdf2f0be51d`, containing the squash merge
   `98ed0856f31fa3aaf5e27464e2b4ef5a8ee6b2f5` of PR #53906;
 - runner/layout: MRV2 forced by `VLLM_USE_V2_MODEL_RUNNER=1`, TP8 + EP8,
-  BF16 KV, 32,768 context, no CPU offload and prefix cache disabled;
+  PP1, draft TP8, DFlash2 K7, BF16 KV, 262,144 context, no CPU offload and
+  prefix cache disabled;
 - target attention: `ROCM_AITER_MLA_SPARSE`; DFlash attention:
   `TRITON_ATTN` for the required non-causal path;
 - Quark uses the correctness-first emulation path on RDNA4; native AITER FP4
@@ -49,7 +49,7 @@ target MLA pages use incompatible physical strides. They also suppressed an
 upstream layout assertion. Those patches were removed rather than carried
 forward.
 
-The current image applies four focused corrections:
+The current image applies the following focused corrections:
 
 1. `0010` gives DFlash pages the target MLA physical block stride and aliases
    only matching global block IDs. Draft and target pages no longer overlap
@@ -63,10 +63,32 @@ The current image applies four focused corrections:
 4. `0018` is PR #55201: unwritten top-k pool IDs start at `-1`, and both the
    fallback and fused AMD/NVIDIA expansion paths reject IDs outside the number
    of completed pools.
+5. `0019` replaces the fixed `max_model_len * 40` indexer prefill workspace
+   with the exact scheduler bound `max_model_len * min(40, max_num_seqs)`,
+   which makes single-request long-context startup practical.
+6. `0020`, following issue #55280, aligns ROCm GLM kpool storage to
+   `index_kpool * 64`. With `index_kpool=4`, the hybrid allocator selects a
+   768-token attention block containing 192 compressed states.
+7. `0021` advertises the actual 128/256-token GLM kernel pages corresponding
+   to 32/64 compressed states. A 768-token storage block is consequently
+   represented by three 256-token virtual pages in the block table.
+8. `0022`, from PR #54296, guards block-table loads and returns `PAD_ID` for an
+   out-of-range virtual page. It is defense in depth, not a substitute for the
+   corrected geometry in `0021`.
+
+The old failure boundaries corroborated the geometry error. With a 768-token
+storage block treated as one table entry but addressed in 256-token kernel
+pages, the effective table ended at about 87,552 tokens for a 256K profile and
+136,704 for a 400K profile. The 134,000-token control stayed below the latter;
+the previous 262,016- and 409,000-token requests crossed their respective
+thresholds and faulted.
 
 The full draft PR #55219 is intentionally not included. Its generic packed
-layout refactor is larger than required and has no upstream ROCm/MTP end-to-end
-validation. PR #54163 and the experimental causal-convolution change from
+layout refactor is larger than required, changes code unrelated to the observed
+failure and has no upstream ROCm/MTP end-to-end validation. The focused
+`de63c847` ring behavior passes the local regression suite; carrying the rest
+would add unqualified patch surface without evidence that it fixes another
+local failure. PR #54163 and the experimental causal-convolution change from
 #52905 also remain excluded because controlled A/B tests reduced correctness or
 acceptance on this stack.
 
@@ -87,10 +109,23 @@ All captures below used the same frozen 20-token prompt, greedy sampling and
 | DFlash2 K1, two captures | 6/6 | 52/74 (70.3%) | 1.62-1.80 tokens/target step | coherent responses |
 | DFlash2 K7, three captures | 6/6 | 139/385 (36.1%) | 3.32-3.71 tokens/target step | coherent responses; all seven draft positions accepted |
 
-The final fresh K7 restart produced 46/119 accepted drafts (38.7%), a mean
-acceptance length of 3.71 and a coherent prime-number answer. The active log
-contains no runtime failure; all eight workers initialized, and `/health` and
-OpenAI endpoints return HTTP 200.
+The short K7 qualification restart produced 46/119 accepted drafts (38.7%), a
+mean acceptance length of 3.71 and a coherent prime-number answer. After the
+page-geometry fixes, a fresh 256K runtime initialized all eight workers and
+reported 421,649 tokens of GPU KV capacity. Its OpenAI API gate passed 6/6.
+
+The capacity run then completed exactly 262,016 prompt tokens plus 128 output
+tokens. It returned coherent output, reported exact total usage of 262,144 and
+accepted 111/111 drafts. This is the production context qualification; it does
+not imply concurrency-above-one or 400K stability.
+
+The final 256K telemetry stream contains 1,832 per-GPU samples. Its P95 values
+were 234 W socket power, 85°C edge, 103°C hotspot and 94°C memory; maxima were
+370 W, 87°C, 109°C and 106°C. Static PPT0 still reported 285 W on all eight
+cards before and after the run, although eight instantaneous power samples
+exceeded that value. The hotspot maximum was only 1°C below its slowdown
+threshold and memory was 2°C below its threshold, so this is a capacity and
+correctness qualification rather than a thermal soak.
 
 Exact token hashes can differ between identical seeded target-only restarts on
 this EP/emulation stack, including at the first token. Therefore cross-restart
@@ -100,7 +135,14 @@ and explicit acceptance counters are the current qualification evidence.
 
 ## Benchmarks
 
-The new DFlash measurement used 256 input tokens, 128 output tokens,
+The full-context qualification used concurrency 1, one measured repetition and
+no warm-up:
+
+| Runtime | Workload | TTFT | E2E | Observed prefill | Decode | Draft acceptance |
+|---|---:|---:|---:|---:|---:|---:|
+| GLM DFlash2 K7 256K | 262,016 + 128 | 437.137 s | 442.463 s | 599.39 tok/s | 23.84 tok/s | 111/111 |
+
+The earlier short DFlash measurement used 256 input tokens, 128 output tokens,
 concurrency 1, three measured repetitions and one warm-up:
 
 | Runtime | Mean TTFT | p95 TTFT | Mean E2E | p95 E2E | Observed prefill | Mean decode | Minimum decode | Aggregate output |
@@ -124,21 +166,21 @@ are regression checks, not capacity rankings.
 ## Runtime commands
 
 ```bash
-# default production path
+# default production path: MRV2, TP8/EP8, DFlash2 K7, BF16 KV, 256K
 ./run launcher start glm53-flash
 
-# validated but explicit DFlash2 K7 path
+# compatibility alias for the same DFlash2 K7 runtime
 ./run launcher start glm53-flash --runtime-mode dflash2
 
 # diagnostic controls
+./run launcher start glm53-flash --runtime-mode target-only-32k
 ./run launcher start glm53-flash --runtime-mode dflash2-k1
 ./run launcher start glm53-flash --runtime-mode extract-hidden-states-k1
 
-# validate and benchmark the already-running K7 identity
+# validate the configured 256K boundary of an already-running default runtime
 skills/measure-r9700-model/scripts/test-and-benchmark.sh \
-  --profile glm53-flash --runtime-mode dflash2 \
-  --prompt-tokens 256 --output-tokens 128 \
-  --concurrency 1 --repetitions 3 --warmup 1
+  --profile glm53-flash --output-tokens 128 --full-context \
+  --concurrency 1 --repetitions 1 --warmup 0
 ```
 
 LiteLLM is optional. Add `--with-litellm` only when a proxy endpoint or Claude
@@ -146,13 +188,24 @@ Code integration is wanted.
 
 ## Evidence and remaining limits
 
-- API artifacts are under `logs/validation/`; the benchmark is
-  `logs/benchmarks/glm53-flash-dflash2-k7-c1-256x128-main-c7e6.json`.
+- The full-boundary artifacts are
+  `logs/validation/api-glm53-flash-long-context-256k-dflash2-20260904T122236.json`
+  and
+  `logs/benchmarks/glm53-flash-long-context-256k-dflash2-c1-262016x128-20260904T122236.json`.
+  Generated logs are intentionally ignored by git.
 - Bounded DFlash captures are under `.runtime/diagnostics/glm-dflash/`.
   Generated state and logs are intentionally ignored by git.
-- GLM was qualified at a configured 32K limit, but a full 32K request was not
-  run in DFlash mode.
-- DFlash concurrency above one and prefix caching were not qualified.
+- GLM DFlash2 was qualified at its configured 256K boundary with concurrency
+  one. DFlash concurrency above one, 400K and prefix caching are not qualified.
+- Prefix caching remains disabled. PR #54163 caused a K1 token-zero regression
+  in the local A/B despite prefix reuse not being needed for the test.
+- The first 400K boundary attempt coincided with a fatal CPU/Data-Fabric MCE
+  and host reset. Its repeat at a verified 285 W cap kept the host alive but
+  ended in GPU `illegal memory access`. Both runs predate `0021`/`0022`; 400K
+  was not repeated on the final image. The dedicated GPU telemetry stream
+  peaked at 255 W, 82°C edge, 106°C hotspot and 88°C memory: margins of 30 W,
+  28°C, 4°C and 20°C to the configured cap/reported critical thresholds. This
+  is not evidence of a thermal trip, and the 400K mode remains diagnostic-only.
 - The official `c7e6e36` GPU kernel test file passes 29/30 invocations: 19/20
   randomized seeds and all 10 deterministic variants. The locally extended
   file passes 35/36; both fail only seed 9. `max diff 1` is the magnitude of
@@ -164,16 +217,19 @@ Code integration is wanted.
   reproduced against the otherwise clean official commit, so it is not
   introduced by the local ring or bounds patches and is retained as a strict
   cross-implementation FP8-oracle discrepancy rather than hidden.
-- PR #55239 and PR #55201 remain open; PR #55219 remains a draft. Until their
-  final upstream forms are known, K7 stays opt-in.
+- PR #55239 and PR #55201 remain open; PR #55219 remains a draft. Their focused
+  fixes are pinned in the recipe even though K7 is now the default.
 
 ## Upstream status at final audit
 
 - PR #53906 is merged into official vLLM main.
 - PR #54373, which fixes the DFlash RoPE configuration, is already in main.
-- PR #55239 (`d608ced8445a21ec3bffa01b73a889e914aff2fd`) is open.
-- PR #55219 (`d004ff11c7e4f2cb7dc040efb76f62291c5d3fb6`) is a draft; only the focused
-  ring behavior from `de63c84731cd719a6ab5c9e8d73289c9c96a7587` is ported.
+- PR #55239 is open; the recipe's focused backport comes from
+  `d608ced8445a21ec3bffa01b73a889e914aff2fd`, while its audited head is
+  `0f1d78db4495fed10384a2b048e70367e61d3dd1`.
+- PR #55219 is a draft at audited head
+  `6712aa109b856d2fefd75a28084db358eb7f9e1b`; only the focused ring behavior
+  from `de63c84731cd719a6ab5c9e8d73289c9c96a7587` is ported.
 - PR #55201 (`40bf4af864fb4e0fd3f84c5650ca9ba465c31ac8`) is open.
 - Issues #49559, #54928, #54451 and #53323 remain open. The current R9700
   result demonstrates a working local path but does not make those broader

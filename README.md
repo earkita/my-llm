@@ -10,7 +10,7 @@ dedykowanym magazynie modeli wskazanym przez profile produkcyjne.
 | Profil | Backend | GPU | Równoległość | Kontekst | Spekulacja |
 |---|---|---:|---|---:|---|
 | `deepseek-v4-flash` | vLLM 0.28 | 6 | TP1/PP6 | 1,048,576 | DSpark K5 |
-| `glm53-flash` | vLLM `main` `c7e6e36` po PR #53906 | 8 | TP8/EP8 | 32,768 (kwalifikacja) | target domyślnie; DFlash2 K7 jawnie |
+| `glm53-flash` | vLLM `main` `c7e6e36` po PR #53906 | 8 | TP8/EP8 | 262,144 | DFlash2 K7 domyślnie |
 | `qwen38-flash` | vLLM 0.28 | 8 | TP8/EP8 | 262,144 | MTP K2 |
 
 Każdy deployment jest jednym plikiem w `profiles/production/`. Plik zawiera
@@ -55,9 +55,13 @@ checkoutów.
 ./run install --profile glm53-flash
 ./run model verify glm53-flash
 
-# jawne tryby DFlash2; K7 jest zweryfikowany, ale nadal eksperymentalny
+# domyślnie: MRV2, TP8/EP8, DFlash2 K7, BF16 KV, 256K
+./run launcher start glm53-flash
+
+# zgodnościowy alias domyślnego trybu oraz diagnostyczne fallbacki
 ./run launcher start glm53-flash --runtime-mode dflash2-k1
 ./run launcher start glm53-flash --runtime-mode dflash2
+./run launcher start glm53-flash --runtime-mode target-only-32k
 
 skills/start-r9700-runtime/scripts/start-runtime.sh --profile glm53-flash
 ./run service status
@@ -67,8 +71,9 @@ skills/stop-r9700-runtime/scripts/stop-runtime.sh
 `./run launcher` otwiera prosty interaktywny wybór modeli. Te same operacje są
 dostępne jako podkomendy do skryptów i automatyzacji. `start` nigdy nie
 zastępuje działającego modelu; zmiana wymaga jawnego `switch` albo wcześniejszego
-`stop`. Start korzysta z trwałej jednostki użytkownika, sprawdza host i limit
-mocy GPU, a następnie czeka na gotowość API.
+`stop`. Start korzysta z trwałej jednostki użytkownika, sprawdza host oraz
+limit PPT0 nieprzekraczający 285 W na każdej widocznej karcie, a następnie
+czeka na gotowość API. Niższy limit jest akceptowany.
 
 Tryb bez flagi udostępnia bezpośrednie API modelu na porcie `8000`. Flaga
 `--with-litellm` uruchamia transakcyjnie cały stack: model, LiteLLM na porcie
@@ -96,12 +101,13 @@ checkpoint. GLM dodatkowo przypina i sprawdza rozmiar oraz SHA-256 draftera
 DFlash2. Serwis nie wystartuje, jeżeli którykolwiek wymagany artefakt ma inną
 tożsamość.
 
-Domyślny `glm53-flash` pozostaje stabilnym trybem target-only. Jawny tryb
-DFlash2 K7 przeszedł test API i realnie akceptuje drafty po poprawkach layoutu
-KV, wielotokenowej weryfikacji Triton i pierścienia kpool. Nadal nie jest
-domyślny, ponieważ trzy backportowane poprawki upstream nie zostały scalone, a
-pełny kontekst, współbieżność i deterministyczna losslessness wymagają dalszej
-kwalifikacji.
+Domyślny `glm53-flash` używa MRV2, TP8/EP8, DFlash2 K7, BF16 KV oraz kontekstu
+262,144 tokenów; prefix cache i CPU offload są wyłączone. Pełna próba
+`262016 + 128` zakończyła się spójną odpowiedzią, 599.39 tok/s obserwowanego
+prefill, 23.84 tok/s decode oraz 111/111 zaakceptowanych draftów. Poprawki
+`0020`-`0022` wyrównują strony kpool, zgłaszają rzeczywiste strony kernela
+128/256 tokenów i zabezpieczają odczyty block table. Tryb target-only 32K
+pozostaje jawnym fallbackiem; diagnostyczny 400K nie jest kwalifikowany.
 
 Szczegóły: [architektura](docs/architecture.md),
 [operacje](docs/operations.md), [dowody i ograniczenia](docs/verification.md).

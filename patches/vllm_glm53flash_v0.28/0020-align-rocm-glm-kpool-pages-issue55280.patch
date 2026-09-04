@@ -1,0 +1,28 @@
+diff --git a/vllm/platforms/rocm.py b/vllm/platforms/rocm.py
+--- a/vllm/platforms/rocm.py
++++ b/vllm/platforms/rocm.py
+@@ -547,6 +547,24 @@ class RocmPlatform(Platform):
+         with contextlib.suppress(ImportError):
+             import vllm._rocm_C  # noqa: F401
+ 
++    @classmethod
++    def _get_indexer_block_alignment(cls, vllm_config: "VllmConfig") -> int | None:
++        """Keep GLM kpool storage on native 64-entry paged-MQA pages.
++
++        The hybrid Mamba/attention aligner can otherwise choose an attention
++        block whose kpool-compressed storage is only divisible by 32. ROCm's
++        paged-MQA path is unsafe with that virtual split during speculative
++        decode, so round the attention block to ``index_kpool * 64``.
++        """
++        index_kpool = getattr(
++            vllm_config.model_config.hf_text_config, "index_kpool", None
++        )
++        if not index_kpool or index_kpool <= 1:
++            return None
++        from vllm.utils.deep_gemm import PAGED_MQA_PAGE_SIZES
++
++        return int(index_kpool) * max(PAGED_MQA_PAGE_SIZES)
++
+     @classmethod
+     def check_runner_kv_caches_multi_layer(cls) -> None:
+         pass

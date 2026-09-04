@@ -10,7 +10,7 @@ description: Start one self-contained my-llm production profile persistently thr
    `qwen38-flash`. Use `glm53-flash` when none is supplied.
 4. Check current state with `./run service status`. If a service is already running, report it and do not replace it unless the user explicitly asks to stop it first.
 5. Require the configured maximum PPT0 power cap before launching. The start
-   script defaults to at most 270 W on every visible GPU and fails closed if any
+   script defaults to at most 285 W on every visible GPU and fails closed if any
    card exceeds it, including after a GPU reset. A deliberately lower cap is
    accepted. It only reads `amd-smi`; it never invokes or
    bypasses `sudo`. On mismatch, stop and ask the user to run the exact

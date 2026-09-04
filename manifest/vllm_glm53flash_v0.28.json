@@ -61,11 +61,27 @@
       "rocm_sparse_verify_fix": "https://github.com/vllm-project/vllm/pull/55239",
       "glm_kpool_speculative_rollback_fix": "https://github.com/vllm-project/vllm/pull/55219",
       "glm_kpool_invalid_index_fix": "https://github.com/vllm-project/vllm/pull/55201",
+      "rocm_kpool_page_alignment_issue": "https://github.com/vllm-project/vllm/issues/55280",
+      "glm_kpool_kernel_page_geometry_issue": "https://github.com/vllm-project/vllm/issues/54359",
+      "slot_mapping_block_table_guard": "https://github.com/vllm-project/vllm/pull/54296",
       "glm_spec_verify_cross_platform_issue": "https://github.com/vllm-project/vllm-ascend/issues/15329",
-      "expected_diff_sha256": "3eee3853b7dd65f18dfa80c11f338d8bbfd161f3ac47d3ecdeb79adddbe4b2fb",
+      "expected_diff_sha256": "124adc650569d28c560848a7e14c10c85c5fec4ac7d61747ecf3fc219cdadca3",
       "full_index_diff": true,
       "apply_intent_to_add": true,
-      "accepted_previous_images": [],
+      "accepted_previous_images": [
+        {
+          "sha256": "3eee3853b7dd65f18dfa80c11f338d8bbfd161f3ac47d3ecdeb79adddbe4b2fb",
+          "patch_count": 14
+        },
+        {
+          "sha256": "83ee56979a0eb64b1c738a716f83b1956b79a8f80eb6ae0503f391061371ac12",
+          "patch_count": 15
+        },
+        {
+          "sha256": "fde6f7faccc0b31ada142cc79f8612cb4bff229e1a6fd2965876165e94dc4679",
+          "patch_count": 16
+        }
+      ],
       "patches": [
         {
           "path": "patches/vllm_glm53flash_v0.28/0001-quark-per-block-weight-scale.patch",
@@ -122,6 +138,22 @@
         {
           "path": "patches/vllm_glm53flash_v0.28/0018-reject-invalid-glm-kpool-indices-pr55201.patch",
           "sha256": "9501d106454ef8ea2e1dff5b91436cab13dabdb62d0ab1f19de4622e440de262"
+        },
+        {
+          "path": "patches/vllm_glm53flash_v0.28/0019-bound-indexer-prefill-workspace.patch",
+          "sha256": "cd709825e51d7eee367bff996a2117b72d27086e6da1e00af58cc96a7c0dc9bd"
+        },
+        {
+          "path": "patches/vllm_glm53flash_v0.28/0020-align-rocm-glm-kpool-pages-issue55280.patch",
+          "sha256": "ac4af78ae04dfcc6f09f65aa06001145ddbd7c817ec83a2e68a079c92c5e69d7"
+        },
+        {
+          "path": "patches/vllm_glm53flash_v0.28/0021-advertise-glm-kpool-kernel-pages-issue54359.patch",
+          "sha256": "722657d91eddfc63f59b0be5da05facd935911cc511d380694cfc37a342f39d5"
+        },
+        {
+          "path": "patches/vllm_glm53flash_v0.28/0022-guard-slot-mapping-block-table-loads-pr54296.patch",
+          "sha256": "4b062d39f6f76d902178f7394494c3ad43717d5e5ac1039b60365a49fbecc1cb"
         }
       ]
     },
