@@ -29,10 +29,12 @@
         "kpool_ring_pr55219_commit": "de63c84731cd719a6ab5c9e8d73289c9c96a7587",
         "packed_layout_pr55219_audit_head": "6712aa109b856d2fefd75a28084db358eb7f9e1b",
         "invalid_kpool_index_pr55201_head": "40bf4af864fb4e0fd3f84c5650ca9ba465c31ac8",
-        "slot_mapping_guard_pr54296_head": "191f82d710493c9a02077d976d8cf0403ab8c96a"
+        "slot_mapping_guard_pr54296_head": "191f82d710493c9a02077d976d8cf0403ab8c96a",
+        "fp8_indexer_workspace_pr55222_head": "8eda002d30e7380060859938709b1244449db7e1",
+        "aiter_sparse_mla_fp8_reference_pr3262_head": "ea42ba3bf0bc8bc1d94151081bc9fca7f8ac9d9d"
       },
       "target_profile": "profiles/production/glm53-flash.json",
-      "target_profile_sha256": "8c6e7ed479f2a8a04f110e8bdc167d14c342c7bd2d3e0cd35ab034efa131da12",
+      "target_profile_sha256": "f305047005426252a54cc0f7f4767fa6a4643fb2f9f001f2c052c4c82e55143e",
       "intentional_changes": [
         "replaced the llama.cpp GGUF deployment with the AMD Quark MXFP4 checkpoint",
         "pinned upstream main after the merged GLM-5.3 PR and retained the required MRV2 correctness fixes",
@@ -40,7 +42,9 @@
         "added K=1 DFlash and hidden-state extraction modes for MRV2 isolation",
         "materialized and contracted GLM mHC outputs for DFlash auxiliary hidden states",
         "replaced the unsafe draft-target KV overlay with aligned pages and added focused fixes from vLLM PRs #55239, #55219, #55201 and #54296 plus issues #55280 and #54359",
-        "excluded PR #54163 after a controlled ablation showed an additional DFlash K=1 correctness regression with prefix caching disabled"
+        "excluded PR #54163 after a controlled ablation showed an additional DFlash K=1 correctness regression with prefix caching disabled",
+        "added an RDNA4-only Triton E4M3FN sparse-MLA reader with explicit k_scale dequantization because the pinned AITER image has no gfx1201 MLA code object",
+        "right-sized GLM indexer prefill and decode-logits workspaces in four-token pooled states, following PR #55222 and the existing DeepSeek-V4 compressed-indexer contract"
       ]
     },
     "qwen38-flash": {

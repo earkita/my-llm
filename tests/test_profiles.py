@@ -307,6 +307,7 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(speculative["num_speculative_tokens"], 7)
         self.assertEqual(speculative["draft_tensor_parallel_size"], 8)
         self.assertEqual(speculative["attention_backend"], "TRITON_ATTN")
+        self.assertEqual(speculative["kv_cache_dtype"], "bfloat16")
 
         runtime = activate_runtime_mode(
             profile["model"], profile["runtime"], "dflash2"
@@ -318,8 +319,17 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(runtime["active_experimental_mode"], "dflash2")
         self.assertEqual(runtime["speculative_config"], speculative)
         self.assertEqual(
-            default_runtime["required_patches"][-4:],
-            ["0019", "0020", "0021", "0022"],
+            default_runtime["required_patches"][-8:],
+            [
+                "0019",
+                "0020",
+                "0021",
+                "0022",
+                "0023",
+                "0024",
+                "0025",
+                "0026",
+            ],
         )
         self.assertTrue(
             {
@@ -358,6 +368,25 @@ class ProductionProfileTests(unittest.TestCase):
         )
         self.assertIn("mask=mask & is_local & in_range", slot_guards)
         self.assertIn("mask=is_local & in_range", slot_guards)
+
+        fp8_sparse_mla = (
+            ROOT
+            / "patches/vllm_glm53flash_v0.28/"
+            "0025-rocm-triton-fp8-sparse-mla.patch"
+        ).read_text()
+        self.assertIn("standard_fp8_cache and fp8_triton_supported", fp8_sparse_mla)
+        self.assertIn("kv.to(tl.float32) * tl.load(kv_scale_ptr)", fp8_sparse_mla)
+        self.assertIn("q.dtype != torch.bfloat16", fp8_sparse_mla)
+
+        compressed_workspace = (
+            ROOT
+            / "patches/vllm_glm53flash_v0.28/"
+            "0026-compress-glm-indexer-decode-workspace.patch"
+        ).read_text()
+        self.assertIn(
+            "cdiv(vllm_config.model_config.max_model_len, self.index_kpool)",
+            compressed_workspace,
+        )
 
     def test_glm_embeds_k1_diagnostic_runtime_modes(self) -> None:
         dflash = load_runtime("glm53-flash", "dflash2-k1")
@@ -401,8 +430,37 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(long_fp8["cache"]["cpu_offload_gb"], 0)
         self.assertIsNone(long_fp8["speculative_config"])
         self.assertEqual(
-            long_bf16["required_patches"][-4:],
-            ["0019", "0020", "0021", "0022"],
+            long_fp8["environment"]["VLLM_TARGET_DEVICE"], "rocm"
+        )
+        self.assertEqual(
+            long_fp8["environment"]["VLLM_USE_V2_MODEL_RUNNER"], "1"
+        )
+
+        profile = load_profile("glm53-flash")
+        command = build_command(
+            profile["model"],
+            long_fp8,
+            Path("/models/glm"),
+            "127.0.0.1",
+            8000,
+        )
+        self.assertEqual(
+            command[command.index("--max-model-len") + 1], "1048576"
+        )
+        self.assertEqual(command[command.index("--kv-cache-dtype") + 1], "fp8")
+        self.assertNotIn("--speculative-config", command)
+        self.assertEqual(
+            long_bf16["required_patches"][-8:],
+            [
+                "0019",
+                "0020",
+                "0021",
+                "0022",
+                "0023",
+                "0024",
+                "0025",
+                "0026",
+            ],
         )
 
     def test_vllm_speculative_model_resolves_from_identity_bound_artifact(self) -> None:

@@ -64,8 +64,12 @@
       "rocm_kpool_page_alignment_issue": "https://github.com/vllm-project/vllm/issues/55280",
       "glm_kpool_kernel_page_geometry_issue": "https://github.com/vllm-project/vllm/issues/54359",
       "slot_mapping_block_table_guard": "https://github.com/vllm-project/vllm/pull/54296",
+      "glm_fp8_indexer_workspace_issue": "https://github.com/vllm-project/vllm/issues/55221",
+      "glm_fp8_indexer_workspace_fix": "https://github.com/vllm-project/vllm/pull/55222",
+      "aiter_sparse_mla_fp8_reference": "https://github.com/ROCm/aiter/pull/3262",
+      "aiter_gfx950_sparse_mla": "https://github.com/ROCm/aiter/pull/4919",
       "glm_spec_verify_cross_platform_issue": "https://github.com/vllm-project/vllm-ascend/issues/15329",
-      "expected_diff_sha256": "124adc650569d28c560848a7e14c10c85c5fec4ac7d61747ecf3fc219cdadca3",
+      "expected_diff_sha256": "bad1e56dccf512e2657f22d6d220f7072f3b870c93c37e57b6c650b15cbb8664",
       "full_index_diff": true,
       "apply_intent_to_add": true,
       "accepted_previous_images": [
@@ -80,6 +84,14 @@
         {
           "sha256": "fde6f7faccc0b31ada142cc79f8612cb4bff229e1a6fd2965876165e94dc4679",
           "patch_count": 16
+        },
+        {
+          "sha256": "124adc650569d28c560848a7e14c10c85c5fec4ac7d61747ecf3fc219cdadca3",
+          "patch_count": 18
+        },
+        {
+          "sha256": "99db2a68c0b6a8545275e34d81e8d02af89442a28ff0dab26bb2dd5e9db6eda9",
+          "patch_count": 20
         }
       ],
       "patches": [
@@ -154,6 +166,22 @@
         {
           "path": "patches/vllm_glm53flash_v0.28/0022-guard-slot-mapping-block-table-loads-pr54296.patch",
           "sha256": "4b062d39f6f76d902178f7394494c3ad43717d5e5ac1039b60365a49fbecc1cb"
+        },
+        {
+          "path": "patches/vllm_glm53flash_v0.28/0023-right-size-glm-indexer-workspace-pr55222.patch",
+          "sha256": "17af6a47ce9bf47ecd0281a8c043ebe935df35ed91b5951d4d5f26705556dd41"
+        },
+        {
+          "path": "patches/vllm_glm53flash_v0.28/0024-audit-fp8-mla-cache-runtime.patch",
+          "sha256": "19fd5f1f020aec92dfab103fcd72642fd4d14e1c12e2c801bf865562345e9ed9"
+        },
+        {
+          "path": "patches/vllm_glm53flash_v0.28/0025-rocm-triton-fp8-sparse-mla.patch",
+          "sha256": "0379444fc986868edaabe564f76f4cb502480b5d9c41a718ec91f4d36638b23d"
+        },
+        {
+          "path": "patches/vllm_glm53flash_v0.28/0026-compress-glm-indexer-decode-workspace.patch",
+          "sha256": "5571066dde7a37743f69df02a6e69b80ed95d0ef01e735ec8a913bcbd0b0e9ac"
         }
       ]
     },

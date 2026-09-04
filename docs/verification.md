@@ -31,7 +31,14 @@ Oprócz wcześniejszych poprawek DFlash/kpool bieżący obraz zawiera:
   poprawnie rozpisany na trzy wirtualne strony po 256 tokenów;
 - `0022`: guard z PR #54296, który nie pozwala slot-mappingowi czytać poza
   szerokością block table. To dodatkowa ochrona, a nie zamiennik poprawnej
-  geometrii z `0021`.
+  geometrii z `0021`;
+- `0023`: poprawka z PR #55222, która liczy prefill workspace indexera w
+  czterotokenowych stanach kpool zamiast w tokenach modelu;
+- `0024`: jawny audyt dtype, skali oraz fizycznych i logicznych alokacji cache;
+- `0025`: ograniczony do RDNA4 czytnik sparse MLA FP8 E4M3FN w Tritonie z
+  istniejącą skalą vLLM `k_scale`; przypięty AITER nie ma kodu MLA dla gfx1201;
+- `0026`: analogiczne przeliczenie decode-logits workspace indexera na stany
+  kpool.
 
 Źródło wcześniejszych awarii było deterministyczne. Niepodzielona tablica dla
 bloku storage 768 i kernela 256 kończyła się około 87,552 tokenów w profilu
@@ -76,6 +83,18 @@ po jednym warm-upie:
 Testy mapowania ringa przeszły 14/14 przypadków CPU i 10/10 wybranych testów
 kerneli na `gfx1201`. Osobny test GPU z PR #55201, obejmujący ujemne i dodatnie
 indeksy poza zakresem ukończonych pooli, przeszedł 1/1.
+
+Target-only `long-context-1m-fp8` przeszedł etap alokacji: wszystkie 62 shardy
+załadowały się na 8 GPU, MLA miał faktyczny backing FP8, silnik zgłosił
+1,187,115 tokenów pojemności przy granicy 1,048,576 i ukończył warm-up. Dla
+samego 1M latent MLA maleje z 11.00 GiB/GPU w BF16 do 5.50 GiB/GPU w FP8;
+spakowany indexer pozostaje 0.354 GiB/GPU. Mały tail kpool pozostał BF16.
+
+Nie jest to jeszcze kwalifikacja inference. Podczas startu wystąpiło 12
+poprawialnych `BadTLP` warstwy Data Link: 11 na torze do logicznego AMD GPU 5 i
+1 do GPU 7. Nie było błędu niekorygowalnego, GPU fault, resetu AMDGPU, MCE,
+EDAC ani OOM, a zatrzymanie było kontrolowane. API, porównanie jakości z BF16 i
+needle-in-haystack pozostają do wykonania po ustabilizowaniu PCIe.
 
 Pełny PR #55219 nie jest przeniesiony celowo. Profil bierze jego potrzebną
 semantykę 12-slotowego ringa z commitu `de63c847`, ale nie szeroki refactor

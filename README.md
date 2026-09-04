@@ -63,6 +63,9 @@ checkoutów.
 ./run launcher start glm53-flash --runtime-mode dflash2
 ./run launcher start glm53-flash --runtime-mode target-only-32k
 
+# eksperymentalnie: target-only, FP8 KV, pełny kontekst 1M
+./run launcher start glm53-flash --runtime-mode long-context-1m-fp8
+
 skills/start-r9700-runtime/scripts/start-runtime.sh --profile glm53-flash
 ./run service status
 skills/stop-r9700-runtime/scripts/stop-runtime.sh
@@ -108,6 +111,12 @@ prefill, 23.84 tok/s decode oraz 111/111 zaakceptowanych draftów. Poprawki
 `0020`-`0022` wyrównują strony kpool, zgłaszają rzeczywiste strony kernela
 128/256 tokenów i zabezpieczają odczyty block table. Tryb target-only 32K
 pozostaje jawnym fallbackiem; diagnostyczny 400K nie jest kwalifikowany.
+Patche `0023`-`0026` zmniejszają workspace indexera, raportują faktyczne
+alokacje cache i dodają dla gfx1201 czytnik sparse MLA FP8 oparty na Tritonie.
+Tryb `long-context-1m-fp8` zaalokował cache o pojemności 1,187,115 tokenów i
+ukończył warm-up, ale nie jest jeszcze kwalifikowany jakościowo: przed testem
+API został bezpiecznie zatrzymany po nowych poprawialnych błędach PCIe
+`BadTLP`.
 
 Szczegóły: [architektura](docs/architecture.md),
 [operacje](docs/operations.md), [dowody i ograniczenia](docs/verification.md).

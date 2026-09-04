@@ -97,6 +97,9 @@ Target-only i K1 pozostają jawnymi trybami kontrolnymi:
 ./run launcher start glm53-flash --runtime-mode target-only-32k
 ./run launcher start glm53-flash --runtime-mode dflash2-k1
 ./run launcher start glm53-flash --runtime-mode extract-hidden-states-k1
+
+# tylko diagnostyka: target-only, FP8 KV, 1M
+./run launcher start glm53-flash --runtime-mode long-context-1m-fp8
 ```
 
 Po testach zatrzymaj usługę przed zmianą trybu. K7 przeszedł bramkę API i pełny
@@ -104,6 +107,9 @@ test graniczny `262016 + 128 = 262144`, włącznie z poprawnym decode i 111/111
 zaakceptowanymi draftami. Trybu `long-context-400k-dflash2` nie używaj do
 serwowania: ostatni test graniczny, wykonany przed `0021`/`0022`, zakończył
 się nielegalnym dostępem GPU i nie został jeszcze powtórzony na finalnym obrazie.
+Tryb `long-context-1m-fp8` potwierdził alokację i warm-up dla 1M, ale także nie
+jest trybem serwowania: test API i jakości przerwano po poprawialnych błędach
+PCIe `BadTLP`. Nie uruchamiaj kolejnego etapu bez sprawdzenia nowych wpisów AER.
 
 Skrypt startowy wymaga PPT0 najwyżej 285 W na wszystkich widocznych GPU i
 wykonuje host preflight. Niższy limit przechodzi kontrolę. Nie zastępuje

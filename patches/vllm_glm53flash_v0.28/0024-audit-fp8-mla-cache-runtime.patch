@@ -1,0 +1,157 @@
+diff --git a/vllm/model_executor/layers/attention/mla_attention.py b/vllm/model_executor/layers/attention/mla_attention.py
+--- a/vllm/model_executor/layers/attention/mla_attention.py
++++ b/vllm/model_executor/layers/attention/mla_attention.py
+@@ -1280,6 +1280,43 @@ class MLAAttention(nn.Module, AttentionLayerBase):
+         if not should_load_quant_weights(quant_method):
+             set_default_quant_scales(self, register_buffer=False)
+ 
++        if is_quantized_kv_cache(self.kv_cache_dtype):
++            q_scale = float(self._q_scale_float)
++            k_scale = float(self._k_scale_float)
++            if not (
++                math.isfinite(q_scale)
++                and q_scale > 0.0
++                and math.isfinite(k_scale)
++                and k_scale > 0.0
++            ):
++                raise ValueError(
++                    "MLA FP8 KV cache requires finite positive q/k scales, "
++                    f"got q_scale={q_scale}, k_scale={k_scale}."
++                )
++            scale_source = (
++                "checkpoint" if should_load_quant_weights(quant_method) else "unit"
++            )
++            logger.info_once(
++                "MLA KV quantization active: dtype=%s backend=%s "
++                "q_scale=%g k_scale=%g scale_source=%s "
++                "q_scale_tensor=%s@%s k_scale_tensor=%s@%s",
++                self.kv_cache_dtype,
++                self.attn_backend.get_name(),
++                q_scale,
++                k_scale,
++                scale_source,
++                self._q_scale.dtype,
++                self._q_scale.device,
++                self._k_scale.dtype,
++                self._k_scale.device,
++            )
++            if scale_source == "unit":
++                logger.warning_once(
++                    "The checkpoint has no calibrated MLA KV scales; FP8 E4M3 "
++                    "uses explicit unit q/k scales. Validate output quality "
++                    "against BF16 before production use."
++                )
++
+     def get_attn_backend(self) -> type[AttentionBackend]:
+         return self.attn_backend
+ 
+diff --git a/vllm/models/glm5next/nvidia/attention.py b/vllm/models/glm5next/nvidia/attention.py
+--- a/vllm/models/glm5next/nvidia/attention.py
++++ b/vllm/models/glm5next/nvidia/attention.py
+@@ -304,6 +304,16 @@ class Indexer(nn.Module):
+         self.quant_block_size = 128  # TODO: get from config
+         self.topk_indices_buffer = topk_indices_buffer
+         self._wp_fp32: torch.Tensor | None = None
++        logger.info_once(
++            "GLM indexer cache quantization: container=uint8 value_dtype=%s "
++            "value_bytes=128 scale_dtype=float32 scale_bytes=4 "
++            "quant_block=%d scale_format=%s tokens_per_state=%d",
++            current_platform.fp8_dtype(),
++            self.quant_block_size,
++            self.scale_fmt,
++            self.index_kpool,
++            scope="global",
++        )
+ 
+         # NOTE: (zyongye) we use fp8 naive cache,
+         #       where we store value in fp8 and scale in fp32
+diff --git a/vllm/v1/worker/utils.py b/vllm/v1/worker/utils.py
+--- a/vllm/v1/worker/utils.py
++++ b/vllm/v1/worker/utils.py
+@@ -427,8 +427,21 @@ def allocate_kv_cache(
+     else:
+         buf_size = raw_size
+     buf = torch.zeros(buf_size, dtype=torch.int8, device=device)
++    logger.info_once(
++        "KV cache backing allocation: raw_bytes=%d allocated_bytes=%d "
++        "raw=%s allocated=%s blocks=%d layout=%s tensors=%d groups=%d",
++        raw_size,
++        buf_size,
++        format_gib(raw_size),
++        format_gib(buf_size),
++        kv_cache_config.num_blocks,
++        layout.name,
++        len(kv_cache_config.kv_cache_tensors),
++        len(kv_cache_config.kv_cache_groups),
++    )
+ 
+     kv_caches: dict[str, torch.Tensor] = {}
++    view_summaries: dict[tuple[Any, ...], dict[str, Any]] = {}
+     for tensor in kv_cache_config.kv_cache_tensors:
+         layer_name = tensor.layers[0]
+         group_id, group = next(
+@@ -455,7 +468,64 @@ def allocate_kv_cache(
+             tensor,
+             kernel_block_size=kernel_block_size,
+         )
++        logical_bytes = sum(view.numel() * view.element_size() for view in views)
++        signature = (
++            group_id,
++            type(spec).__name__,
++            str(views[0].dtype),
++            getattr(spec, "cache_dtype_str", None),
++            str(getattr(spec, "kv_quant_mode", None)),
++            str(spec.tokens_per_state),
++            spec.block_size,
++            kernel_block_size,
++            tuple(views[0].shape),
++            spec.page_size_bytes,
++            getattr(spec, "real_page_size_bytes", spec.page_size_bytes),
++        )
++        summary = view_summaries.setdefault(
++            signature,
++            {"layers": 0, "bytes": 0, "first_layer": layer_name},
++        )
++        summary["layers"] += len(views)
++        summary["bytes"] += logical_bytes
+         kv_caches.update(zip(tensor.layers, views))
++
++    for signature, summary in view_summaries.items():
++        (
++            group_id,
++            spec_name,
++            dtype,
++            cache_dtype,
++            quant_mode,
++            tokens_per_state,
++            manager_block,
++            kernel_block,
++            shape,
++            page_bytes,
++            real_page_bytes,
++        ) = signature
++        logger.info_once(
++            "KV cache logical view: group=%d spec=%s layers=%d first_layer=%s "
++            "dtype=%s cache_dtype=%s quant_mode=%s tokens_per_state=%s "
++            "manager_block=%d kernel_block=%s shape=%s page_bytes=%d "
++            "real_page_bytes=%d logical_addressed_bytes=%d (%s)",
++            group_id,
++            spec_name,
++            summary["layers"],
++            summary["first_layer"],
++            dtype,
++            cache_dtype,
++            quant_mode,
++            tokens_per_state,
++            manager_block,
++            kernel_block,
++            shape,
++            page_bytes,
++            real_page_bytes,
++            summary["bytes"],
++            format_gib(summary["bytes"]),
++            scope="global",
++        )
+     return kv_caches
+ 
+ 

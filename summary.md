@@ -15,6 +15,12 @@ coherent text and accepts drafts. An exact `262016 + 128` request qualified the
 full configured boundary at concurrency one. Target-only 32K remains an
 explicit fallback; 400K and higher-capacity modes remain diagnostic.
 
+An opt-in target-only FP8 mode now allocates the complete 1,048,576-token
+context without CPU offload. The engine completed model load, cache allocation
+and warm-up with a measured capacity of 1,187,115 tokens. This is a capacity
+result, not yet an inference qualification: the run was stopped before API
+readiness after new correctable PCIe `BadTLP` events appeared.
+
 ## Pinned GLM stack
 
 - hardware: 8 x AMD Radeon AI PRO R9700 32 GB (`gfx1201`), ROCm 7.14;
@@ -98,6 +104,69 @@ kernel tests passed 10/10; the deterministic K7 regression proves that 4- and
 The focused GPU regression added by PR #55201 was also run after freeing the
 serving GPUs and passed 1/1.
 
+## FP8 MLA 1M capacity probe
+
+The `long-context-1m-fp8` mode is MRV2, TP8, target-only, has no CPU offload or
+prefix caching, and requests `--kv-cache-dtype fp8 --max-model-len 1048576`.
+It uses the existing vLLM FP8 cache writer and scale tensors. On gfx1201, where
+the pinned AITER build has no compatible sparse-MLA code object, patch `0025`
+routes the rope-free reader through the existing Triton sparse path and applies
+the vLLM per-tensor `k_scale` before BF16 attention arithmetic. It does not
+introduce another FP8 representation.
+
+The checkpoint does not contain calibrated MLA KV scales. The runtime therefore
+used explicit finite FP32 `q_scale=1` and `k_scale=1`, and logged that fact. The
+representation and kernel path are valid, but the unit scales make a BF16
+quality comparison mandatory before this mode can be promoted.
+
+Measured startup evidence:
+
+| Target-only runtime | Model load / GPU | Peak activation / GPU | Allocated cache / GPU | Reported token capacity | Configured boundary |
+|---|---:|---:|---:|---:|---:|
+| BF16 KV baseline | 21.24 GiB | 1.82 GiB | 5.88 GiB | 538,269 | 524,288 |
+| FP8 KV probe | 21.23 GiB | 1.76 GiB | 6.67 GiB | 1,187,115 | 1,048,576 |
+
+The rows use different requested GPU utilization (`0.97` and `0.99`), so the
+allocated GiB values are not themselves the compression ratio. At exactly 1M
+tokens, the 11-layer 512-element MLA latent cache is 11.00 GiB/GPU in BF16 and
+5.50 GiB/GPU in FP8. The already-quantized four-token indexer occupies another
+0.354 GiB/GPU in either mode. This reduces those context-proportional cache
+elements by 48.4%, from 11.354 GiB to 5.854 GiB before the small tail and page
+rounding. The measured usable token capacity increased by 2.21x after the FP8
+conversion and indexer workspace corrections.
+
+Runtime allocation audit confirmed:
+
+- target MLA latent: `torch.uint8` backing, `cache_dtype=fp8`,
+  `quant_mode=1`; 6.27 GiB logical allocation at the reported 1.19M-token
+  capacity;
+- indexer/kpool: existing packed E4M3 values plus FP32 UE8M0 scale,
+  `torch.uint8`; 0.40 GiB at the allocated capacity and one state per four
+  tokens;
+- kpool tail: BF16, 0.02 GiB. It holds the small incomplete four-token pooling
+  tail consumed by the existing writer, so converting it would save little and
+  would require changing that contract;
+- recurrent/Mamba state views: INT8, not BF16. Their logged logical views share
+  the hybrid backing allocation and must not be added to the physical 6.67 GiB;
+- DFlash draft cache: absent from this target-only probe. DFlash modes retain an
+  explicit BF16 draft cache instead of accidentally inheriting target FP8.
+
+All 62 target shards loaded on all eight workers, the physical cache allocation
+succeeded, and full engine initialization/warm-up completed. During that same
+startup the kernel recorded 12 correctable PCIe Data-Link `BadTLP` events: 11
+on the switch path to logical AMD GPU 5 (`c1:00.0` -> `c3:00.0`) and one on the
+path to logical AMD GPU 7 (`e1:00.0` -> `e3:00.0`). There were no uncorrectable
+AER events, GPU faults, AMDGPU resets, MCE/EDAC reports or OOM kills. Both links
+returned to Gen5 x16, but the runtime was deliberately stopped with SIGTERM at
+the safety gate. Consequently no OpenAI request, cache read/write end-to-end
+comparison, NaN/Inf check or long-context retrieval test has yet passed.
+
+After the PCIe path is stable, qualification must proceed on this same mode at
+32K, 128K, 256K, 512K, 768K and 1M, with identical deterministic BF16/FP8
+prompts, output-quality and finite-value checks, a needle retrieval at each long
+boundary, and an AER check after every stage. DFlash2 remains out of this gate
+until target-only FP8 passes.
+
 ## Functional evidence
 
 All captures below used the same frozen 20-token prompt, greedy sampling and
@@ -176,6 +245,9 @@ are regression checks, not capacity rankings.
 ./run launcher start glm53-flash --runtime-mode target-only-32k
 ./run launcher start glm53-flash --runtime-mode dflash2-k1
 ./run launcher start glm53-flash --runtime-mode extract-hidden-states-k1
+
+# diagnostic 1M target-only FP8 capacity/correctness mode
+./run launcher start glm53-flash --runtime-mode long-context-1m-fp8
 
 # validate the configured 256K boundary of an already-running default runtime
 skills/measure-r9700-model/scripts/test-and-benchmark.sh \

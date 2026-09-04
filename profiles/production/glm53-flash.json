@@ -81,7 +81,11 @@
       "0019",
       "0020",
       "0021",
-      "0022"
+      "0022",
+      "0023",
+      "0024",
+      "0025",
+      "0026"
     ],
     "gpu_order": [
       0,
@@ -154,6 +158,7 @@
       "num_speculative_tokens": 7,
       "draft_tensor_parallel_size": 8,
       "attention_backend": "TRITON_ATTN",
+      "kv_cache_dtype": "bfloat16",
       "enforce_eager": true
     },
     "experimental_modes": {
@@ -207,7 +212,7 @@
       "long-context-1m-fp8": {
         "status": "diagnostic-only",
         "runtime_name": "glm53-flash-quark-mxfp4-mrv2-8xr9700-tp8-target-fp8kv-1m",
-        "reason": "Native 1M context capacity probe. FP8 sparse-MLA is not qualified on gfx1201 and currently falls through to an AITER kernel family built for gfx942/gfx950, so this mode must not be promoted without kernel and quality validation.",
+        "reason": "Native 1M target-only capacity and correctness probe. The RDNA4 Triton E4M3FN read path is kernel-tested with explicit k_scale dequantization, but end-to-end inference and long-context quality remain unqualified.",
         "runtime_overrides": {
           "limits": {
             "max_model_len": 1048576,
@@ -235,6 +240,7 @@
             "num_speculative_tokens": 7,
             "draft_tensor_parallel_size": 8,
             "attention_backend": "TRITON_ATTN",
+            "kv_cache_dtype": "bfloat16",
             "enforce_eager": true
           }
         }
@@ -256,6 +262,7 @@
             "num_speculative_tokens": 1,
             "draft_tensor_parallel_size": 8,
             "attention_backend": "TRITON_ATTN",
+            "kv_cache_dtype": "bfloat16",
             "enforce_eager": true
           }
         }
