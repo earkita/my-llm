@@ -161,6 +161,17 @@ returned to Gen5 x16, but the runtime was deliberately stopped with SIGTERM at
 the safety gate. Consequently no OpenAI request, cache read/write end-to-end
 comparison, NaN/Inf check or long-context retrieval test has yet passed.
 
+A staged 32K retry at 21:07 used the same 1M FP8 runtime and was prepared for
+exactly 32,640 input plus 128 output tokens. Before the request could be sent,
+startup added 11 correctable `BadTLP` events: ten on the switch path to logical
+AMD GPU 5 and one on a newly affected path to logical AMD GPU 6
+(`c4:00.0` -> `c6:00.0`). The model again loaded all shards, allocated the
+6.67 GiB/GPU cache and completed warm-up, but the safety monitor caused an
+immediate graceful stop. There were again zero uncorrectable AER events, GPU
+faults, resets, MCE/EDAC errors or OOMs, and no AER events appeared after the
+service became inactive. Therefore the 32K inference gate is recorded as not
+executed, not as passed or failed.
+
 After the PCIe path is stable, qualification must proceed on this same mode at
 32K, 128K, 256K, 512K, 768K and 1M, with identical deterministic BF16/FP8
 prompts, output-quality and finite-value checks, a needle retrieval at each long

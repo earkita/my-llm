@@ -96,6 +96,12 @@ poprawialnych `BadTLP` warstwy Data Link: 11 na torze do logicznego AMD GPU 5 i
 EDAC ani OOM, a zatrzymanie było kontrolowane. API, porównanie jakości z BF16 i
 needle-in-haystack pozostają do wykonania po ustabilizowaniu PCIe.
 
+Powtórka przygotowana dla dokładnego żądania `32640 + 128 = 32768` również nie
+dotarła do API. Podczas startu przybyło 10 poprawialnych `BadTLP` na torze GPU 5
+i jeden na nowym torze GPU 6. Silnik ponownie ukończył alokację i warm-up, po
+czym został łagodnie zatrzymany. Wynik bramki inference 32K to „niewykonana”, a
+nie „nieudana odpowiedź modelu”.
+
 Pełny PR #55219 nie jest przeniesiony celowo. Profil bierze jego potrzebną
 semantykę 12-slotowego ringa z commitu `de63c847`, ale nie szeroki refactor
 generic packed layout, który pozostaje draftem, nie ma end-to-end walidacji
