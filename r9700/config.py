@@ -9,6 +9,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 PRODUCTION_PROFILE_ROOT = ROOT / "profiles" / "production"
+DEVELOPMENT_PROFILE_ROOT = ROOT / "profiles" / "dev"
 DEFAULT_PROFILE = "glm53-flash"
 DEFAULT_MODEL_PROFILE = DEFAULT_PROFILE
 DEFAULT_RUNTIME_PROFILE = DEFAULT_PROFILE
@@ -130,11 +131,12 @@ def _validate_model(profile: dict[str, Any], path: Path) -> None:
 
 
 def load_profile(name_or_path: str) -> dict[str, Any]:
-    """Load one self-contained production deployment.
+    """Load one self-contained deployment.
 
     A deployment owns its model, runtime, and coding-stack settings. Inheritance
     is deliberately rejected so that one reviewed file is the complete launch
-    contract.
+    contract. Development profiles are accepted only through an explicit path
+    below ``profiles/dev``; name-based discovery remains production-only.
     """
     path = _profile_path(name_or_path)
     profile = load_json(path)
@@ -146,8 +148,12 @@ def load_profile(name_or_path: str) -> dict[str, Any]:
     missing = [key for key in required if key not in profile]
     if missing:
         raise ConfigurationError(f"deployment profile is missing {missing}: {path}")
-    if profile.get("status") != "production-ready":
-        raise ConfigurationError(f"deployment is not production-ready: {path}")
+    is_development = path.is_relative_to(DEVELOPMENT_PROFILE_ROOT)
+    expected_status = "development" if is_development else "production-ready"
+    if profile.get("status") != expected_status:
+        raise ConfigurationError(
+            f"deployment status must be {expected_status!r}: {path}"
+        )
     if profile.get("name") != path.stem:
         raise ConfigurationError(
             f"deployment name must match its filename: {profile.get('name')} != {path.stem}"

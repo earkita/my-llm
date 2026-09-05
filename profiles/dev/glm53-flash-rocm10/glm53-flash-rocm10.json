@@ -1,0 +1,262 @@
+{
+  "schema_version": 1,
+  "name": "glm53-flash-rocm10",
+  "status": "development",
+  "description": "Development GLM-5.3-Flash Quark MXFP4 qualification on the isolated ROCm 10 wheel SDK and eight R9700 GPUs",
+  "model": {
+    "schema_version": 1,
+    "name": "glm53-flash-quark-mxfp4",
+    "family": "glm5next",
+    "format": "safetensors",
+    "repository": "amd/GLM-5.3-Flash-Quark-MXFP4",
+    "revision": "b5688f25491202978c19c4d036eef579f61bbe07",
+    "source_profile_sha256": "5619c5424b7bd30e8ae81d921861c0f10b5265f67360a94734118c6f8e8d185f",
+    "default_directory": "/mnt/ai/models/glm/GLM-5.3-Flash-Quark-MXFP4",
+    "served_name": "glm-5.3-flash-quark-mxfp4",
+    "expected_shards": 62,
+    "index_file": "model.safetensors.index.json",
+    "checkpoint_weight_bytes": 185066521464,
+    "required_files": [
+      "README.md",
+      "chat_template.jinja",
+      "config.json",
+      "generation_config.json",
+      "model.safetensors.index.json",
+      "processor_config.json",
+      "tokenizer.json",
+      "tokenizer_config.json"
+    ],
+    "allow_patterns": [
+      "*.json",
+      "*.safetensors",
+      "chat_template.jinja",
+      "README.md"
+    ],
+    "supports_dspark": false,
+    "supports_mtp": true,
+    "supports_dflash": true,
+    "auxiliary_artifacts": [
+      {
+        "name": "dflash2-drafter",
+        "repository": "incoai/GLM-5.3-Flash-DFlash2",
+        "revision": "bf582e4eacc1810f76656d1811693ff6c6737d2a",
+        "filename": "model.safetensors",
+        "path": "/mnt/ai/models/glm/GLM-5.3-Flash-DFlash2-HF-bf582e4/model.safetensors",
+        "size_bytes": 2342169800,
+        "sha256": "b038e1d9d1e7833fa3880c2c0135ba9b673013f03da1b29fb831931584759dac"
+      },
+      {
+        "name": "dflash2-config",
+        "repository": "incoai/GLM-5.3-Flash-DFlash2",
+        "revision": "bf582e4eacc1810f76656d1811693ff6c6737d2a",
+        "filename": "config.json",
+        "path": "/mnt/ai/models/glm/GLM-5.3-Flash-DFlash2-HF-bf582e4/config.json",
+        "size_bytes": 1273,
+        "sha256": "c4aeac0101196a6e26705b34c45230bcd0c7c68ee2d2d1efdb242087f3712573"
+      }
+    ],
+    "vllm": {
+      "tokenizer_mode": "auto",
+      "tool_call_parser": "glm47",
+      "reasoning_parser": "glm45",
+      "quantization": "quark",
+      "enable_auto_tool_choice": true,
+      "trust_remote_code": false,
+      "language_model_only": true
+    }
+  },
+  "runtime": {
+    "schema_version": 1,
+    "name": "glm53-flash-quark-mxfp4-rocm10-mrv2-8xr9700-tp8-target-bf16kv-32k",
+    "status": "development",
+    "recipe": "vllm_glm53flashrocm10_v0.29",
+    "description": "ROCm 10 qualification baseline: target-only MRV2, TP8/EP8, BF16 KV and 32K context; speculative modes are explicit opt-ins",
+    "required_model_family": "glm5next",
+    "required_patches": [
+      "0001",
+      "0002",
+      "0003",
+      "0004",
+      "0005",
+      "0006",
+      "0007",
+      "0008",
+      "0009",
+      "0010",
+      "0011",
+      "0012",
+      "0013",
+      "0014",
+      "0015",
+      "0016",
+      "0017"
+    ],
+    "gpu_order": [
+      0,
+      1,
+      2,
+      3,
+      7,
+      4,
+      5,
+      6
+    ],
+    "gpu_bdfs": [
+      "0000:e3:00.0",
+      "0000:c3:00.0",
+      "0000:c6:00.0",
+      "0000:03:00.0",
+      "0000:23:00.0",
+      "0000:06:00.0",
+      "0000:09:00.0",
+      "0000:0c:00.0"
+    ],
+    "parallel": {
+      "tensor": 8,
+      "pipeline": 1,
+      "data": 1,
+      "enable_expert_parallel": true,
+      "disable_custom_all_reduce": true
+    },
+    "limits": {
+      "max_model_len": 32768,
+      "max_num_seqs": 1,
+      "max_num_batched_tokens": 2048,
+      "gpu_memory_utilization": 0.91
+    },
+    "cache": {
+      "dtype": "bfloat16",
+      "block_size": 16,
+      "prefix_cache": false,
+      "cpu_offload_gb": 0
+    },
+    "scheduler": {
+      "async": false,
+      "enforce_eager": true
+    },
+    "multimodal": {
+      "language_model_only": true
+    },
+    "loading": {
+      "format": "safetensors",
+      "max_parallel_workers": 1
+    },
+    "transport": {
+      "p2p_disable": 0,
+      "shm_disable": 1,
+      "socket_ifname": "lo",
+      "runtime_connect": 1,
+      "hsa_legacy_ipc": 0
+    },
+    "shutdown": {
+      "request_timeout_seconds": 0,
+      "worker_timeout_seconds": 60,
+      "process_grace_seconds": 120
+    },
+    "attention_backend": "ROCM_AITER_MLA_SPARSE",
+    "moe_backend": "emulation",
+    "linear_backend": "emulation",
+    "speculative_config": null,
+    "experimental_modes": {
+      "native-mtp-k1": {
+        "status": "qualified-development",
+        "runtime_name": "glm53-flash-quark-mxfp4-rocm10-mrv2-8xr9700-tp8-mtp-k1-bf16kv-32k",
+        "reason": "Stage 2 native one-layer MTP sanity check after the target-only baseline passes.",
+        "runtime_overrides": {
+          "moe_backend": "auto",
+          "speculative_config": {
+            "method": "mtp",
+            "num_speculative_tokens": 1
+          }
+        }
+      },
+      "dflash2-k1": {
+        "status": "qualified-development",
+        "runtime_name": "glm53-flash-quark-mxfp4-rocm10-mrv2-8xr9700-tp8-dflash2-k1-bf16kv-32k",
+        "reason": "Stage 3 DFlash2 plumbing and single-token proposal sanity check.",
+        "runtime_overrides": {
+          "speculative_config": {
+            "model_artifact": "dflash2-drafter",
+            "method": "dflash",
+            "num_speculative_tokens": 1,
+            "draft_tensor_parallel_size": 8,
+            "attention_backend": "TRITON_ATTN",
+            "kv_cache_dtype": "bfloat16",
+            "enforce_eager": true
+          }
+        }
+      },
+      "dflash2-k7": {
+        "status": "qualified-development",
+        "runtime_name": "glm53-flash-quark-mxfp4-rocm10-mrv2-8xr9700-tp8-dflash2-k7-bf16kv-32k",
+        "reason": "Stage 3 intended DFlash2 width after K1 correctness passes.",
+        "runtime_overrides": {
+          "speculative_config": {
+            "model_artifact": "dflash2-drafter",
+            "method": "dflash",
+            "num_speculative_tokens": 7,
+            "draft_tensor_parallel_size": 8,
+            "attention_backend": "TRITON_ATTN",
+            "kv_cache_dtype": "bfloat16",
+            "enforce_eager": true
+          }
+        }
+      }
+    },
+    "environment": {
+      "VLLM_TARGET_DEVICE": "rocm",
+      "VLLM_USE_V2_MODEL_RUNNER": "1",
+      "VLLM_ROCM_USE_AITER": "1",
+      "VLLM_ROCM_USE_AITER_FP8BMM": "0",
+      "VLLM_ROCM_USE_AITER_FP4BMM": "0",
+      "VLLM_ROCM_USE_AITER_FP4_ASM_GEMM": "0",
+      "VLLM_DISABLE_PYNCCL": "1",
+      "VLLM_KV_CACHE_LAYOUT": "LBHNC",
+      "SAFETENSORS_FAST_GPU": "1",
+      "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+      "ROCBLAS_USE_HIPBLASLT": "0"
+    },
+    "hardware_topology": {
+      "captured_on": "2026-09-05",
+      "motherboard": "ASUS Pro WS WRX90E-SAGE SE",
+      "note": "Eight gfx1201 R9700 devices in the measured fast-first order. NVIDIA remains the display adapter and is excluded by explicit ROCm platform selection."
+    }
+  },
+  "stack": {
+    "description": "Development GLM-5.3 Flash ROCm 10 qualification stack",
+    "litellm_aliases": [
+      "glm-5.3-flash-low",
+      "glm-5.3-flash-high",
+      "glm-5.3-flash-max"
+    ],
+    "claude_settings": {
+      "apiKeyHelper": "bash -c 'exec \"${MY_LLM_REPO_ROOT:-$HOME/ai/my-llm}/scripts/claude-litellm-key.sh\"'",
+      "permissions": {
+        "defaultMode": "acceptEdits",
+        "allow": [
+          "Read",
+          "Bash"
+        ]
+      },
+      "env": {
+        "ANTHROPIC_BASE_URL": "http://127.0.0.1:4000",
+        "ANTHROPIC_MODEL": "glm-5.3-flash-high",
+        "ANTHROPIC_SMALL_FAST_MODEL": "glm-5.3-flash-low",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-5.3-flash-low",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.3-flash-high",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.3-flash-max",
+        "DISABLE_PROMPT_CACHING": "1",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+        "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
+        "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "32768"
+      }
+    }
+  },
+  "verification": {
+    "scope": "rocm10-development-qualification",
+    "verified_context": 32768,
+    "verified_on": "2026-09-05",
+    "best_runtime_mode": "dflash2-k7",
+    "notes": "Target-only, native MTP K1, DFlash2 K1, and DFlash2 K7 passed API correctness and 3x 4096-input/128-output qualification. This remains a development profile pending explicit promotion approval."
+  }
+}

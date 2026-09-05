@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Sat, 5 Sep 2026 13:59:17 +0200
+Subject: [PATCH 14/16] fix: compress the GLM indexer decode workspace
+
+---
+ vllm/models/glm5next/nvidia/attention.py | 17 ++++++++++++++++-
+ 1 file changed, 16 insertions(+), 1 deletion(-)
+
+diff --git a/vllm/models/glm5next/nvidia/attention.py b/vllm/models/glm5next/nvidia/attention.py
+index 85f71856..02ce43ff 100644
+--- a/vllm/models/glm5next/nvidia/attention.py
++++ b/vllm/models/glm5next/nvidia/attention.py
+@@ -326,7 +326,12 @@ class Indexer(nn.Module):
+             cache_config=cache_config,
+             index_kpool=self.index_kpool,
+         )
+-        self.max_model_len = vllm_config.model_config.max_model_len
++        # The indexer sees one compressed state per index_kpool model tokens.
++        # Size its logits/workspace in those states, matching DeepSeek-V4's
++        # compressed indexer and avoiding four empty columns on GLM-5.3.
++        self.max_model_len = (
++            cdiv(vllm_config.model_config.max_model_len, self.index_kpool)
++        )
+         self.prefix = prefix
+         from vllm.v1.attention.backends.mla.indexer import get_max_prefill_buffer_size
+ 
+@@ -336,6 +341,16 @@ class Indexer(nn.Module):
+         self.max_total_seq_len = (
+             get_max_prefill_buffer_size(vllm_config) // self.index_kpool
+         )
++        logger.info_once(
++            "GLM indexer workspace sizing: model_tokens=%d pooled_states=%d "
++            "prefill_tokens=%d prefill_pooled_states=%d index_kpool=%d",
++            vllm_config.model_config.max_model_len,
++            self.max_model_len,
++            get_max_prefill_buffer_size(vllm_config),
++            self.max_total_seq_len,
++            self.index_kpool,
++            scope="global",
++        )
+         self.indexer_op = SparseAttnIndexerKpool(
+             self.k_cache,
+             self.quant_block_size,

@@ -41,7 +41,7 @@ def _common_profile(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--profile",
         default=DEFAULT_PROFILE,
-        help="self-contained profile from profiles/production",
+        help="production profile name or explicit self-contained profile path",
     )
 
 

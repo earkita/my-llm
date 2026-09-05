@@ -18,7 +18,11 @@ from r9700.config import (
     load_profile,
     load_runtime,
 )
-from r9700.install import _make_venv_entrypoints_relocatable, install
+from r9700.install import (
+    _amdsmi_install_requirement,
+    _make_venv_entrypoints_relocatable,
+    install,
+)
 from r9700.manifest import (
     recipe_artifact_path,
     recipe_names,
@@ -69,6 +73,19 @@ class ProductionProfileTests(unittest.TestCase):
             self.assertIn("$(realpath -- \"$0\")", content)
             self.assertNotIn("/some/other/checkout", content)
 
+    def test_amdsmi_can_be_installed_from_the_pinned_rocm_sdk(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            rocm_home = Path(temporary)
+            source = rocm_home / "share" / "amd_smi"
+            source.mkdir(parents=True)
+            (source / "pyproject.toml").write_text("[build-system]\n")
+            self.assertEqual(
+                _amdsmi_install_requirement(
+                    {"amdsmi_from_rocm_sdk": True}, rocm_home=str(rocm_home)
+                ),
+                str(source),
+            )
+
     def test_repository_contains_exactly_three_flat_profiles(self) -> None:
         root = ROOT / "profiles" / "production"
         self.assertEqual(
@@ -93,6 +110,20 @@ class ProductionProfileTests(unittest.TestCase):
                     profile["stack"]["claude_settings"], dict
                 )
 
+    def test_development_profile_requires_an_explicit_path(self) -> None:
+        path = (
+            ROOT
+            / "profiles/dev/glm53-flash-rocm10/glm53-flash-rocm10.json"
+        )
+        profile = load_profile(str(path))
+        self.assertEqual(profile["status"], "development")
+        self.assertEqual(
+            profile["runtime"]["recipe"],
+            "vllm_glm53flashrocm10_v0.29",
+        )
+        with self.assertRaisesRegex(ConfigurationError, "configuration file is absent"):
+            load_profile("glm53-flash-rocm10")
+
     def test_profile_loader_rejects_inheritance_at_any_depth(self) -> None:
         path = ROOT / "tests" / "invalid-flat-profile.json"
         source = json.loads(
@@ -111,6 +142,7 @@ class ProductionProfileTests(unittest.TestCase):
         expected = {
             "vllm_deepseekv4flash_v0.28",
             "vllm_glm53flash_v0.29",
+            "vllm_glm53flashrocm10_v0.29",
             "vllm_qwen38flash_pr53896",
         }
         self.assertEqual(set(recipe_names()), expected)
@@ -417,6 +449,24 @@ class ProductionProfileTests(unittest.TestCase):
             ],
             [6, 15, 25, 34, 43],
         )
+
+    def test_rocm10_glm_stages_are_explicit_and_start_target_only(self) -> None:
+        path = str(
+            ROOT
+            / "profiles/dev/glm53-flash-rocm10/glm53-flash-rocm10.json"
+        )
+        baseline = load_runtime(path)
+        self.assertIsNone(baseline["speculative_config"])
+        self.assertEqual(baseline["limits"]["max_model_len"], 32768)
+        self.assertEqual(baseline["cache"]["dtype"], "bfloat16")
+
+        mtp = load_runtime(path, "native-mtp-k1")
+        self.assertEqual(mtp["speculative_config"]["method"], "mtp")
+        self.assertEqual(mtp["speculative_config"]["num_speculative_tokens"], 1)
+
+        dflash = load_runtime(path, "dflash2-k7")
+        self.assertEqual(dflash["speculative_config"]["method"], "dflash")
+        self.assertEqual(dflash["speculative_config"]["num_speculative_tokens"], 7)
 
     def test_glm_embeds_isolated_long_context_modes(self) -> None:
         target_only = load_runtime("glm53-flash", "target-only-32k")

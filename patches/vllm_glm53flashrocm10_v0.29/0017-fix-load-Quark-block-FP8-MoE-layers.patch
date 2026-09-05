@@ -1,0 +1,208 @@
+diff --git a/vllm/model_executor/layers/quantization/quark/quark_moe.py b/vllm/model_executor/layers/quantization/quark/quark_moe.py
+--- a/vllm/model_executor/layers/quantization/quark/quark_moe.py
++++ b/vllm/model_executor/layers/quantization/quark/quark_moe.py
+@@ -66,8 +66,10 @@
+ from vllm.model_executor.layers.quantization.utils.quant_utils import (
+     GroupShape,
+     QuantKey,
++    kFp8Dynamic128Sym,
+     kFp8DynamicTensorSym,
+     kFp8DynamicTokenSym,
++    kFp8Static128BlockSym,
+     kFp8StaticChannelSym,
+     kFp8StaticTensorSym,
+     kInt4W4A8StaticChannelSym,
+@@ -227,11 +229,13 @@
+ 
+ class QuarkW8A8Fp8MoEMethod(QuarkMoEMethod):
+     supported_activation_quant_keys = [
++        kFp8Dynamic128Sym,
+         kFp8StaticTensorSym,
+         kFp8DynamicTensorSym,
+         kFp8DynamicTokenSym,
+     ]
+     supported_weight_quant_keys = [
++        kFp8Static128BlockSym,
+         kFp8StaticChannelSym,
+         kFp8StaticTensorSym,
+     ]
+@@ -244,14 +248,20 @@
+     ):
+         super().__init__(moe, weight_quant_key, activation_quant_key)
+         self.weight_dtype = "fp8"
+-        self.weight_qscheme = (
+-            "per_channel" if weight_quant_key == kFp8StaticChannelSym else "per_tensor"
+-        )
+-        self.input_qscheme = (
+-            "per_channel"
+-            if activation_quant_key == kFp8DynamicTokenSym
+-            else "per_tensor"
+-        )
++        self.block_quant = weight_quant_key == kFp8Static128BlockSym
++        self.weight_block_size = [128, 128] if self.block_quant else None
++        if self.block_quant:
++            self.weight_qscheme = "per_block"
++        elif weight_quant_key == kFp8StaticChannelSym:
++            self.weight_qscheme = "per_channel"
++        else:
++            self.weight_qscheme = "per_tensor"
++        if activation_quant_key == kFp8Dynamic128Sym:
++            self.input_qscheme = "per_group"
++        elif activation_quant_key == kFp8DynamicTokenSym:
++            self.input_qscheme = "per_channel"
++        else:
++            self.input_qscheme = "per_tensor"
+         self.static_input_scales = activation_quant_key == kFp8StaticTensorSym
+         per_tensor = (
+             self.weight_qscheme == "per_tensor" and self.input_qscheme == "per_tensor"
+@@ -259,13 +269,18 @@
+         per_channel = (
+             self.weight_qscheme == "per_channel" and self.input_qscheme == "per_channel"
+         )
++        per_block = self.block_quant and activation_quant_key == kFp8Dynamic128Sym
+         self.act_quant_group_shape = (
+-            GroupShape.PER_TOKEN if per_channel else GroupShape.PER_TENSOR
++            GroupShape(1, 128)
++            if per_block
++            else GroupShape.PER_TOKEN
++            if per_channel
++            else GroupShape.PER_TENSOR
+         )
+-        if not (per_tensor or per_channel):
++        if not (per_tensor or per_channel or per_block):
+             raise ValueError(
+-                "For FP8 Fused MoE layers, only per-tensor and per-channel "
+-                "scales for weights and activations are supported. Found "
++                "For FP8 Fused MoE layers, only per-tensor, per-channel, and "
++                "128x128 block scales are supported. Found "
+                 f"{self.weight_qscheme}, {self.input_qscheme}"
+             )  # noqa E501
+ 
+@@ -290,9 +305,25 @@
+     ):
+         layer.num_experts = num_experts
+         layer.orig_dtype = params_dtype
+-        layer.weight_block_size = None
++        layer.weight_block_size = self.weight_block_size
+         params_dtype = torch.float8_e4m3fn
+ 
++        if self.block_quant:
++            assert self.weight_block_size is not None
++            block_n, block_k = self.weight_block_size
++            if intermediate_size_per_partition % block_n != 0:
++                raise ValueError(
++                    "The output_size of gate's and up's weight = "
++                    f"{intermediate_size_per_partition} is not divisible by "
++                    f"weight quantization block_n = {block_n}."
++                )
++            if self.moe.tp_size > 1 and intermediate_size_per_partition % block_k != 0:
++                raise ValueError(
++                    "The input_size of down's weight = "
++                    f"{intermediate_size_per_partition} is not divisible by "
++                    f"weight quantization block_k = {block_k}."
++                )
++
+         # WEIGHTS
+         w13_weight = torch.nn.Parameter(
+             torch.zeros(
+@@ -368,6 +399,35 @@
+             )
+             set_weight_attrs(w13_weight_scale, extra_weight_attrs)
+             set_weight_attrs(w2_weight_scale, extra_weight_attrs)
++        elif self.block_quant:
++            assert self.weight_block_size is not None
++            block_n, block_k = self.weight_block_size
++            w13_weight_scale = torch.nn.Parameter(
++                torch.ones(
++                    num_experts,
++                    self.moe.w13_num_shards
++                    * ((intermediate_size_per_partition + block_n - 1) // block_n),
++                    (hidden_size + block_k - 1) // block_k,
++                    dtype=torch.float32,
++                ),
++                requires_grad=False,
++            )
++            layer.register_parameter("w13_weight_scale", w13_weight_scale)
++            w2_weight_scale = torch.nn.Parameter(
++                torch.ones(
++                    num_experts,
++                    (hidden_size + block_n - 1) // block_n,
++                    (intermediate_size_per_partition + block_k - 1) // block_k,
++                    dtype=torch.float32,
++                ),
++                requires_grad=False,
++            )
++            layer.register_parameter("w2_weight_scale", w2_weight_scale)
++            extra_weight_attrs.update(
++                {"quant_method": FusedMoeWeightScaleSupported.BLOCK.value}
++            )
++            set_weight_attrs(w13_weight_scale, extra_weight_attrs)
++            set_weight_attrs(w2_weight_scale, extra_weight_attrs)
+ 
+         # INPUT_SCALES
+         if self.static_input_scales:
+@@ -550,7 +610,9 @@
+             w2_bias=getattr(layer, "w2_bias", None),
+             per_act_token_quant=self.input_qscheme == "per_channel",
+             per_out_ch_quant=self.weight_qscheme == "per_channel",
++            block_shape=self.weight_block_size,
+             swiglu_limit=getattr(layer, "swiglu_limit", None),
++            layer=layer,
+         )
+ 
+     def apply(
+diff --git a/tests/quantization/test_quark.py b/tests/quantization/test_quark.py
+--- a/tests/quantization/test_quark.py
++++ b/tests/quantization/test_quark.py
+@@ -48,6 +48,7 @@
+ from vllm.model_executor.layers.quantization.quark.quark_moe import (  # noqa: E501
+     QuarkMoEMethod,
+     QuarkW4A8Fp8MoEMethod,
++    QuarkW8A8Fp8MoEMethod,
+     QuarkW8A8Int8MoEMethod,
+ )
+ from vllm.model_executor.layers.quantization.quark.schemes import QuarkScheme
+@@ -974,6 +975,42 @@
+         assert isinstance(method, case.dispatch_cls)
+ 
+ 
++def test_quark_fp8_block_moe_dispatch_and_weight_shapes(
++    monkeypatch, default_vllm_config
++):
++    case = next(c for c in QTENSOR_CONFIGS if c.name == "fp8_w8a8_dynamic_block_fp32")
++    config = _make_qtensor_config(case.weight, case.input_tensors)
++
++    class TestRoutedExperts(RoutedExperts):
++        def __init__(self):
++            torch.nn.Module.__init__(self)
++            self.moe_config = _make_test_moe_config()
++
++    monkeypatch.setattr(
++        "vllm.model_executor.layers.quantization.quark.quark_moe."
++        "select_fp8_moe_backend",
++        lambda *args, **kwargs: (object(), object()),
++    )
++
++    layer = TestRoutedExperts()
++    method = config.get_quant_method(layer, "experts")
++
++    assert isinstance(method, QuarkW8A8Fp8MoEMethod)
++    assert method.weight_block_size == [128, 128]
++    method.create_weights(
++        layer,
++        num_experts=4,
++        hidden_size=4096,
++        intermediate_size_per_partition=256,
++        params_dtype=torch.bfloat16,
++    )
++    assert layer.weight_block_size == [128, 128]
++    assert layer.w13_weight_scale.shape == (4, 4, 32)
++    assert layer.w2_weight_scale.shape == (4, 32, 2)
++    assert layer.w13_weight_scale.quant_method == "block"
++    assert layer.w2_weight_scale.quant_method == "block"
++
++
+ @pytest.mark.parametrize("kv_cache_dtype", ["auto", "fp8"])
+ def test_quark_fp8_w_per_tensor_a_per_tensor(
+     kv_cache_dtype: str, monkeypatch, dist_init, workspace_init
+

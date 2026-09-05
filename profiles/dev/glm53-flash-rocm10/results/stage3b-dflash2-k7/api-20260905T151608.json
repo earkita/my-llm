@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "started_at": "2026-09-05T15:16:08.675487+02:00",
+  "finished_at": "2026-09-05T15:16:12.034702+02:00",
+  "url": "http://127.0.0.1:8000",
+  "model": "glm53-flash-quark-mxfp4",
+  "runtime": "glm53-flash-quark-mxfp4-rocm10-mrv2-8xr9700-tp8-dflash2-k7-bf16kv-32k",
+  "runtime_mode": "dflash2-k7",
+  "checks": {
+    "managed_identity": true,
+    "health": true,
+    "served_model": true,
+    "max_model_len": true,
+    "literal_chat": true,
+    "exact_usage": true
+  },
+  "passed": true,
+  "elapsed_seconds": 3.3528341100000034,
+  "detail": "content='serwer dzia\u0142a' finish_reason='stop'",
+  "usage": {
+    "prompt_tokens": 47,
+    "total_tokens": 73,
+    "completion_tokens": 26,
+    "prompt_tokens_details": null,
+    "completion_tokens_details": {
+      "reasoning_tokens": 21
+    }
+  },
+  "response": {
+    "id": "chatcmpl-aafa77abe18a09fa",
+    "object": "chat.completion",
+    "created": 1788614168,
+    "model": "glm-5.3-flash-quark-mxfp4",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "serwer dzia\u0142a",
+          "refusal": null,
+          "annotations": null,
+          "audio": null,
+          "function_call": null,
+          "reasoning": "User says \"serwer dzia\u0142a\" (server works). Instruction: return only the text given by user."
+        },
+        "logprobs": null,
+        "finish_reason": "stop",
+        "stop_reason": 154827,
+        "token_ids": null,
+        "routed_experts": null
+      }
+    ],
+    "service_tier": null,
+    "system_fingerprint": "vllm-0.1.dev1+g7fbd44cbe.d20260905-tp8-ep-1d3b1a41",
+    "usage": {
+      "prompt_tokens": 47,
+      "total_tokens": 73,
+      "completion_tokens": 26,
+      "prompt_tokens_details": null,
+      "completion_tokens_details": {
+        "reasoning_tokens": 21
+      }
+    },
+    "prompt_logprobs": null,
+    "prompt_token_ids": null,
+    "prompt_text": null,
+    "kv_transfer_params": null,
+    "ec_transfer_params": null,
+    "metrics": null
+  }
+}

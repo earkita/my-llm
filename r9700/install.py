@@ -103,8 +103,21 @@ def _torch_install_requirements(environment: dict[str, Any], arch: str) -> list[
     return sdk_requirements
 
 
-def _amdsmi_install_requirement(environment: dict[str, Any]) -> str:
-    """Return the pinned AMD SMI requirement, optionally from an exact wheel."""
+def _amdsmi_install_requirement(
+    environment: dict[str, Any], *, rocm_home: str | None = None
+) -> str:
+    """Return the pinned AMD SMI requirement from PyPI, a wheel, or the SDK."""
+    if environment.get("amdsmi_from_rocm_sdk"):
+        if rocm_home is None:
+            raise ConfigurationError(
+                "amdsmi_from_rocm_sdk requires an initialized ROCm SDK"
+            )
+        source = Path(rocm_home) / "share" / "amd_smi"
+        if not (source / "pyproject.toml").is_file():
+            raise ConfigurationError(
+                f"ROCm SDK does not contain the AMD SMI Python package: {source}"
+            )
+        return str(source)
     if url := environment.get("amdsmi_url"):
         digest = environment.get("amdsmi_sha256")
         if not digest:
@@ -492,7 +505,7 @@ def _install_vllm(
             *pip,
             "install",
             *constraint_args,
-            _amdsmi_install_requirement(environment),
+            _amdsmi_install_requirement(environment, rocm_home=rocm_home),
             f"huggingface_hub[hf_xet]=={environment['huggingface_hub_version']}",
             "tblib==3.1.0",
         ],
