@@ -111,7 +111,7 @@ class ProductionProfileTests(unittest.TestCase):
     def test_only_required_recipes_and_assets_are_present(self) -> None:
         expected = {
             "vllm_deepseekv4flash_v0.28",
-            "vllm_glm53flash_v0.28",
+            "vllm_glm53flash_v0.29",
             "vllm_qwen38flash_pr53896",
         }
         self.assertEqual(set(recipe_names()), expected)
@@ -152,12 +152,12 @@ class ProductionProfileTests(unittest.TestCase):
     def test_glm_uses_an_isolated_repo_local_vllm_recipe(self) -> None:
         runtime = load_profile("glm53-flash")["runtime"]
         manifest = json.loads(
-            (ROOT / "manifest/vllm_glm53flash_v0.28.json").read_text()
+            (ROOT / "manifest/vllm_glm53flash_v0.29.json").read_text()
         )
-        self.assertEqual(runtime["recipe"], "vllm_glm53flash_v0.28")
+        self.assertEqual(runtime["recipe"], "vllm_glm53flash_v0.29")
         self.assertEqual(
             manifest["environment"]["venv"],
-            ".runtime/recipes/vllm_glm53flash_v0.28/venv",
+            ".runtime/recipes/vllm_glm53flash_v0.29/venv",
         )
         self.assertEqual(
             manifest["sources"]["vllm"]["repository"],
@@ -165,7 +165,7 @@ class ProductionProfileTests(unittest.TestCase):
         )
         self.assertEqual(
             manifest["sources"]["vllm"]["commit"],
-            "c7e6e36fa93a5b8cb95b74fa96e4abdf2f0be51d",
+            "6cbb3c154ef1449d2b3c9131a237f36faa695734",
         )
         self.assertEqual(runtime["environment"]["VLLM_USE_V2_MODEL_RUNNER"], "1")
 
@@ -319,7 +319,7 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(runtime["active_experimental_mode"], "dflash2")
         self.assertEqual(runtime["speculative_config"], speculative)
         self.assertEqual(
-            default_runtime["required_patches"][-8:],
+            default_runtime["required_patches"][-10:],
             [
                 "0019",
                 "0020",
@@ -329,6 +329,8 @@ class ProductionProfileTests(unittest.TestCase):
                 "0024",
                 "0025",
                 "0026",
+                "0027",
+                "0028",
             ],
         )
         self.assertTrue(
@@ -348,7 +350,7 @@ class ProductionProfileTests(unittest.TestCase):
     ) -> None:
         kernel_pages = (
             ROOT
-            / "patches/vllm_glm53flash_v0.28/"
+            / "patches/vllm_glm53flash_v0.29/"
             "0021-advertise-glm-kpool-kernel-pages-issue54359.patch"
         ).read_text()
         self.assertIn(
@@ -359,7 +361,7 @@ class ProductionProfileTests(unittest.TestCase):
 
         slot_guards = (
             ROOT
-            / "patches/vllm_glm53flash_v0.28/"
+            / "patches/vllm_glm53flash_v0.29/"
             "0022-guard-slot-mapping-block-table-loads-pr54296.patch"
         ).read_text()
         self.assertEqual(
@@ -371,7 +373,7 @@ class ProductionProfileTests(unittest.TestCase):
 
         fp8_sparse_mla = (
             ROOT
-            / "patches/vllm_glm53flash_v0.28/"
+            / "patches/vllm_glm53flash_v0.29/"
             "0025-rocm-triton-fp8-sparse-mla.patch"
         ).read_text()
         self.assertIn("standard_fp8_cache and fp8_triton_supported", fp8_sparse_mla)
@@ -380,13 +382,32 @@ class ProductionProfileTests(unittest.TestCase):
 
         compressed_workspace = (
             ROOT
-            / "patches/vllm_glm53flash_v0.28/"
+            / "patches/vllm_glm53flash_v0.29/"
             "0026-compress-glm-indexer-decode-workspace.patch"
         ).read_text()
         self.assertIn(
             "cdiv(vllm_config.model_config.max_model_len, self.index_kpool)",
             compressed_workspace,
         )
+
+        sharded_dflash_projection = (
+            ROOT
+            / "patches/vllm_glm53flash_v0.29/"
+            "0027-shard-dflash-aux-projection.patch"
+        ).read_text()
+        self.assertIn("self.fc = RowParallelLinear(", sharded_dflash_projection)
+        self.assertIn("input_is_parallel=False", sharded_dflash_projection)
+        self.assertIn("reduce_results=True", sharded_dflash_projection)
+
+        staged_ocp_mx = (
+            ROOT
+            / "patches/vllm_glm53flash_v0.29/"
+            "0028-stage-ocp-mx-expert-dequantization.patch"
+        ).read_text()
+        self.assertIn("def _prepare_w1_for_gemm(", staged_ocp_mx)
+        self.assertIn("def _prepare_w2_for_gemm(", staged_ocp_mx)
+        self.assertIn("del w1_gemm", staged_ocp_mx)
+        self.assertIn("w2_gemm = self._prepare_w2_for_gemm", staged_ocp_mx)
 
     def test_glm_embeds_k1_diagnostic_runtime_modes(self) -> None:
         dflash = load_runtime("glm53-flash", "dflash2-k1")
@@ -449,8 +470,56 @@ class ProductionProfileTests(unittest.TestCase):
         )
         self.assertEqual(command[command.index("--kv-cache-dtype") + 1], "fp8")
         self.assertNotIn("--speculative-config", command)
+
+        combined = load_runtime(
+            "glm53-flash", "long-context-1m-fp8-dflash2"
+        )
+        self.assertEqual(combined["parallel"]["tensor"], 8)
+        self.assertEqual(combined["limits"]["max_model_len"], 1048576)
+        self.assertEqual(combined["limits"]["max_num_seqs"], 1)
+        self.assertEqual(combined["limits"]["max_num_batched_tokens"], 512)
+        self.assertEqual(combined["limits"]["gpu_memory_utilization"], 0.995)
+        self.assertEqual(combined["limits"]["kv_cache_memory_bytes"], 6591622400)
+        self.assertEqual(combined["cache"]["dtype"], "fp8")
+        self.assertFalse(combined["cache"]["prefix_cache"])
+        self.assertEqual(combined["cache"]["cpu_offload_gb"], 0)
+        combined_spec = combined["speculative_config"]
+        self.assertEqual(combined_spec["method"], "dflash")
+        self.assertEqual(combined_spec["num_speculative_tokens"], 7)
+        self.assertEqual(combined_spec["draft_tensor_parallel_size"], 8)
+        self.assertEqual(combined_spec["attention_backend"], "TRITON_ATTN")
+        self.assertEqual(combined_spec["kv_cache_dtype"], "fp8")
+
+        combined_command = build_command(
+            profile["model"],
+            combined,
+            Path("/models/glm"),
+            "127.0.0.1",
+            8000,
+        )
         self.assertEqual(
-            long_bf16["required_patches"][-8:],
+            combined_command[combined_command.index("--max-model-len") + 1],
+            "1048576",
+        )
+        self.assertEqual(
+            combined_command[combined_command.index("--kv-cache-dtype") + 1],
+            "fp8",
+        )
+        self.assertEqual(
+            combined_command[
+                combined_command.index("--kv-cache-memory-bytes") + 1
+            ],
+            "6591622400",
+        )
+        combined_cli_spec = json.loads(
+            combined_command[
+                combined_command.index("--speculative-config") + 1
+            ]
+        )
+        self.assertEqual(combined_cli_spec["kv_cache_dtype"], "fp8")
+        self.assertEqual(combined_cli_spec["attention_backend"], "TRITON_ATTN")
+        self.assertEqual(
+            long_bf16["required_patches"][-10:],
             [
                 "0019",
                 "0020",
@@ -460,6 +529,8 @@ class ProductionProfileTests(unittest.TestCase):
                 "0024",
                 "0025",
                 "0026",
+                "0027",
+                "0028",
             ],
         )
 

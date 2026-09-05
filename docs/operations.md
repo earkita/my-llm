@@ -87,9 +87,11 @@ Bezpieczne zatrzymanie:
 skills/stop-r9700-runtime/scripts/stop-runtime.sh
 ```
 
-Zwykły start GLM uruchamia zweryfikowany profil MRV2, TP8/EP8, DFlash2 K7,
-BF16 KV i 256K. `dflash2` jest tylko zgodnościowym aliasem tego samego runtime.
-Target-only i K1 pozostają jawnymi trybami kontrolnymi:
+Zwykły start GLM uruchamia bieżący profil MRV2, TP8/EP8, DFlash2 K7, BF16 KV i
+256K. `dflash2` jest tylko zgodnościowym aliasem tego samego runtime. Obraz
+`6cbb3c154` ma świeżą kwalifikację krótkiego K7, ale jego pełną granicę 256K
+trzeba ponownie sprawdzić. Target-only i K1 pozostają jawnymi trybami
+kontrolnymi:
 
 ```bash
 ./run launcher start glm53-flash
@@ -100,11 +102,16 @@ Target-only i K1 pozostają jawnymi trybami kontrolnymi:
 
 # tylko diagnostyka: target-only, FP8 KV, 1M
 ./run launcher start glm53-flash --runtime-mode long-context-1m-fp8
+
+# tylko diagnostyka: DFlash2 K7, target/draft FP8 KV, 1M
+./run launcher start glm53-flash --runtime-mode long-context-1m-fp8-dflash2
 ```
 
-Po testach zatrzymaj usługę przed zmianą trybu. K7 przeszedł bramkę API i pełny
-test graniczny `262016 + 128 = 262144`, włącznie z poprawnym decode i 111/111
-zaakceptowanymi draftami. Trybu `long-context-400k-dflash2` nie używaj do
+Po testach zatrzymaj usługę przed zmianą trybu. Na bieżącym `6cbb3c154` K7
+przeszedł krótką bramkę API i zaakceptował 115/133 tokenów. Pełny test
+graniczny `262016 + 128 = 262144`, poprawny decode i 111/111 zaakceptowanych
+draftów dotyczą wcześniejszego obrazu `c7e6e36`. Trybu
+`long-context-400k-dflash2` nie używaj do
 serwowania: ostatni test graniczny, wykonany przed `0021`/`0022`, zakończył
 się nielegalnym dostępem GPU i nie został jeszcze powtórzony na finalnym obrazie.
 Tryb `long-context-1m-fp8` potwierdził alokację i warm-up dla 1M, ale także nie

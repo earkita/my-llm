@@ -1,0 +1,30 @@
+diff --git a/vllm/model_executor/models/qwen3_dflash.py b/vllm/model_executor/models/qwen3_dflash.py
+--- a/vllm/model_executor/models/qwen3_dflash.py
++++ b/vllm/model_executor/models/qwen3_dflash.py
+@@ -21,6 +21,5 @@ from vllm.model_executor.layers.layernorm import RMSNorm
+ from vllm.model_executor.layers.linear import (
+     QKVParallelLinear,
+-    ReplicatedLinear,
+     RowParallelLinear,
+ )
+ from vllm.model_executor.layers.logits_processor import LogitsProcessor
+@@ -433,12 +432,18 @@ class DFlashQwen3Model(nn.Module):
+             ]
+         )
+         if self.use_aux_hidden_state:
+-            self.fc = ReplicatedLinear(
++            # The target provides the complete concatenated auxiliary state on
++            # every rank. Shard this large projection across TP ranks and sum
++            # the partial products instead of replicating its 160 MiB BF16
++            # weight on every GPU (20 MiB/rank at TP=8 for GLM-5.3 DFlash2).
++            self.fc = RowParallelLinear(
+                 input_size=_get_dflash_fc_input_size(
+                     vllm_config,
+                 ),
+                 output_size=self.config.hidden_size,
+                 bias=False,
++                input_is_parallel=False,
++                reduce_results=True,
+                 params_dtype=vllm_config.model_config.dtype,
+                 quant_config=self.quant_config,
+                 prefix=maybe_prefix(prefix, "fc"),

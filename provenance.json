@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_on": "2026-09-04",
+  "generated_on": "2026-09-05",
   "source_repository": "llm-runtime (historical source only; not required)",
   "policy": "Only source profiles under profiles/runtime/production were selected; model, runtime and stack settings were flattened into one deployment file without extends.",
   "profiles": {
@@ -20,10 +20,13 @@
     "glm53-flash": {
       "source_model": "https://huggingface.co/amd/GLM-5.3-Flash-Quark-MXFP4",
       "source_model_sha256": "b5688f25491202978c19c4d036eef579f61bbe07",
-      "source_runtime": "https://github.com/vllm-project/vllm/commit/c7e6e36fa93a5b8cb95b74fa96e4abdf2f0be51d",
-      "source_runtime_sha256": "c7e6e36fa93a5b8cb95b74fa96e4abdf2f0be51d",
+      "source_runtime": "https://github.com/vllm-project/vllm/commit/6cbb3c154ef1449d2b3c9131a237f36faa695734",
+      "source_runtime_sha256": "6cbb3c154ef1449d2b3c9131a237f36faa695734",
       "upstream_runtime_commits": {
         "glm53_pr53906_merge": "98ed0856f31fa3aaf5e27464e2b4ef5a8ee6b2f5",
+        "mrv2_draft_attention_backend_pr54826_merge": "25240513856e9aca9b07e9381f2a4513b6954bd8",
+        "dflash_sliding_window_aot_pr54374_merge": "5093e4844a75f279d1921d7e34ccd23d68529f27",
+        "resumed_spec_decode_padding_pr55126_merge": "a26b71d868772eaf31706208fbd7260c601d7566",
         "rocm_sparse_verify_pr55239_patch_source": "d608ced8445a21ec3bffa01b73a889e914aff2fd",
         "rocm_sparse_verify_pr55239_audit_head": "0f1d78db4495fed10384a2b048e70367e61d3dd1",
         "kpool_ring_pr55219_commit": "de63c84731cd719a6ab5c9e8d73289c9c96a7587",
@@ -34,17 +37,19 @@
         "aiter_sparse_mla_fp8_reference_pr3262_head": "ea42ba3bf0bc8bc1d94151081bc9fca7f8ac9d9d"
       },
       "target_profile": "profiles/production/glm53-flash.json",
-      "target_profile_sha256": "f305047005426252a54cc0f7f4767fa6a4643fb2f9f001f2c052c4c82e55143e",
+      "target_profile_sha256": "50443568a33638c88f19eb097fc5423cbd73f14a1a861de9109bee577db248c6",
       "intentional_changes": [
         "replaced the llama.cpp GGUF deployment with the AMD Quark MXFP4 checkpoint",
-        "pinned upstream main after the merged GLM-5.3 PR and retained the required MRV2 correctness fixes",
+        "pinned upstream main at 6cbb3c154 after the merged GLM-5.3 and DFlash MRV2 fixes, while retaining the still-required Quark, Eagle3, sparse-verify, kpool and FP8 patches",
         "promoted identity-bound DFlash2 with seven draft tokens to the default after an exact 262144-token boundary pass",
         "added K=1 DFlash and hidden-state extraction modes for MRV2 isolation",
         "materialized and contracted GLM mHC outputs for DFlash auxiliary hidden states",
         "replaced the unsafe draft-target KV overlay with aligned pages and added focused fixes from vLLM PRs #55239, #55219, #55201 and #54296 plus issues #55280 and #54359",
         "excluded PR #54163 after a controlled ablation showed an additional DFlash K=1 correctness regression with prefix caching disabled",
         "added an RDNA4-only Triton E4M3FN sparse-MLA reader with explicit k_scale dequantization because the pinned AITER image has no gfx1201 MLA code object",
-        "right-sized GLM indexer prefill and decode-logits workspaces in four-token pooled states, following PR #55222 and the existing DeepSeek-V4 compressed-indexer contract"
+        "right-sized GLM indexer prefill and decode-logits workspaces in four-token pooled states, following PR #55222 and the existing DeepSeek-V4 compressed-indexer contract",
+        "sharded the DFlash auxiliary projection across TP8 and staged OCP-MX expert dequantization to reduce per-GPU and transient VRAM",
+        "added an explicitly diagnostic combined 1M mode with FP8 target and draft KV cache plus DFlash2 K7"
       ]
     },
     "qwen38-flash": {
@@ -64,6 +69,6 @@
   "recipes": [
     "vllm_deepseekv4flash_v0.28",
     "vllm_qwen38flash_pr53896",
-    "vllm_glm53flash_v0.28"
+    "vllm_glm53flash_v0.29"
   ]
 }

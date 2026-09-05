@@ -10,7 +10,7 @@ dedykowanym magazynie modeli wskazanym przez profile produkcyjne.
 | Profil | Backend | GPU | Równoległość | Kontekst | Spekulacja |
 |---|---|---:|---|---:|---|
 | `deepseek-v4-flash` | vLLM 0.28 | 6 | TP1/PP6 | 1,048,576 | DSpark K5 |
-| `glm53-flash` | vLLM `main` `c7e6e36` po PR #53906 | 8 | TP8/EP8 | 262,144 | DFlash2 K7 domyślnie |
+| `glm53-flash` | vLLM `main` `6cbb3c1` po PR #53906/#54826/#54374 | 8 | TP8/EP8 | 262,144 | DFlash2 K7 domyślnie |
 | `qwen38-flash` | vLLM 0.28 | 8 | TP8/EP8 | 262,144 | MTP K2 |
 
 Każdy deployment jest jednym plikiem w `profiles/production/`. Plik zawiera
@@ -66,6 +66,9 @@ checkoutów.
 # eksperymentalnie: target-only, FP8 KV, pełny kontekst 1M
 ./run launcher start glm53-flash --runtime-mode long-context-1m-fp8
 
+# eksperymentalnie: DFlash2 K7 oraz target/draft FP8 KV, pełny kontekst 1M
+./run launcher start glm53-flash --runtime-mode long-context-1m-fp8-dflash2
+
 skills/start-r9700-runtime/scripts/start-runtime.sh --profile glm53-flash
 ./run service status
 skills/stop-r9700-runtime/scripts/stop-runtime.sh
@@ -106,17 +109,24 @@ tożsamość.
 
 Domyślny `glm53-flash` używa MRV2, TP8/EP8, DFlash2 K7, BF16 KV oraz kontekstu
 262,144 tokenów; prefix cache i CPU offload są wyłączone. Pełna próba
-`262016 + 128` zakończyła się spójną odpowiedzią, 599.39 tok/s obserwowanego
-prefill, 23.84 tok/s decode oraz 111/111 zaakceptowanych draftów. Poprawki
+`262016 + 128` na wcześniejszym obrazie `c7e6e36` zakończyła się spójną
+odpowiedzią, 599.39 tok/s obserwowanego prefill, 23.84 tok/s decode oraz 111/111
+zaakceptowanych draftów. Bieżący obraz `6cbb3c154` przeszedł świeże bramki API
+dla target-only 32K, DFlash2 K1 i krótkiego K7; K7 uzyskał 21.66 tok/s decode
+oraz 115/133 zaakceptowanych tokenów. Granicę 256K trzeba na nim sprawdzić
+ponownie. Poprawki
 `0020`-`0022` wyrównują strony kpool, zgłaszają rzeczywiste strony kernela
 128/256 tokenów i zabezpieczają odczyty block table. Tryb target-only 32K
 pozostaje jawnym fallbackiem; diagnostyczny 400K nie jest kwalifikowany.
 Patche `0023`-`0026` zmniejszają workspace indexera, raportują faktyczne
 alokacje cache i dodają dla gfx1201 czytnik sparse MLA FP8 oparty na Tritonie.
+`0027` shardlessuje projekcję auxiliary DFlash po TP8, a `0028` etapuje
+dekwantyzację ekspertów OCP-MX, ograniczając szczyt pamięci przy emulacji.
 Tryb `long-context-1m-fp8` zaalokował cache o pojemności 1,187,115 tokenów i
 ukończył warm-up, ale nie jest jeszcze kwalifikowany jakościowo: przed testem
 API został bezpiecznie zatrzymany po nowych poprawialnych błędach PCIe
-`BadTLP`.
+`BadTLP`. Wariant `long-context-1m-fp8-dflash2` łączy FP8 targetu i draftera,
+ale pozostaje niezweryfikowanym trybem diagnostycznym.
 
 Szczegóły: [architektura](docs/architecture.md),
 [operacje](docs/operations.md), [dowody i ograniczenia](docs/verification.md).

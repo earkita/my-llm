@@ -14,12 +14,23 @@ prefill 1,858.35 tok/s i decode 24.48 tok/s.
 ## GLM-5.3-Flash Quark/MXFP4
 
 Target `amd/GLM-5.3-Flash-Quark-MXFP4` zawiera 62 shardy safetensors i
-185,066,521,464 bajty tensorów. Przetestowany build używa oficjalnego vLLM
-`main` `c7e6e36fa93a5b8cb95b74fa96e4abdf2f0be51d`, już po scaleniu PR #53906,
-oraz wymusza MRV2. Domyślna konfiguracja to TP8/EP8, PP1, DFlash2 K7 z draft
+185,066,521,464 bajty tensorów. Aktualna receptura przypina oficjalny vLLM
+`main` `6cbb3c154ef1449d2b3c9131a237f36faa695734`, po scaleniu PR #53906 oraz
+poprawek DFlash #54826 i #54374, i wymusza MRV2. Domyślna konfiguracja to
+TP8/EP8, PP1, DFlash2 K7 z draft
 TP8, BF16 KV, 262,144 tokeny, `gpu_memory_utilization=0.97`, concurrency 1,
 bez CPU offload i bez prefix cache. Target używa `ROCM_AITER_MLA_SPARSE`, a
 niekauzalny draft `TRITON_ATTN`.
+
+Po migracji nowy obraz `6cbb3c154ef1` przeszedł build, importy, skupione testy
+CPU oraz świeże testy GPU/API `target-only-32k`, DFlash2 K1 32K i krótki K7 w
+konfiguracji 256K. Wszystkie sześć bramek API i tożsamości przeszło w każdym
+trybie, a odpowiedzi były poprawne. Target-only osiągnął 213,07 tok/s prefill i
+3,93 tok/s decode; K1 osiągnął 7,10 tok/s decode i zaakceptował 68/70 tokenów;
+K7 osiągnął 21,66 tok/s decode i zaakceptował 115/133 tokenów. Nie pojawiły się
+nowe błędy AER, MCE ani GPU fault. Pełny wynik graniczny 256K poniżej wykonano
+jednak na wcześniejszym pinie `c7e6e36fa93a`; nie należy przypisywać go nowemu
+buildowi, dopóki nie przejdzie ponownego testu `262016 + 128`.
 
 Oprócz wcześniejszych poprawek DFlash/kpool bieżący obraz zawiera:
 
@@ -39,6 +50,10 @@ Oprócz wcześniejszych poprawek DFlash/kpool bieżący obraz zawiera:
   istniejącą skalą vLLM `k_scale`; przypięty AITER nie ma kodu MLA dla gfx1201;
 - `0026`: analogiczne przeliczenie decode-logits workspace indexera na stany
   kpool.
+- `0027`: podział projekcji auxiliary DFlash po TP8 zamiast pełnej repliki na
+  każdym GPU;
+- `0028`: etapowa dekwantyzacja wag ekspertów OCP-MX, ograniczająca chwilowy
+  pik VRAM w emulacyjnym backendzie MoE.
 
 Źródło wcześniejszych awarii było deterministyczne. Niepodzielona tablica dla
 bloku storage 768 i kernela 256 kończyła się około 87,552 tokenów w profilu
@@ -134,10 +149,13 @@ TTFT do 2.74 s. Przy 64K MTP2 zaakceptował 696 z 700 draftów i osiągnął
 
 ## Ograniczenia
 
+- Nowy obraz `6cbb3c154ef1` przeszedł krótkie testy target-only, DFlash K1 i
+  DFlash K7; jego pełna granica 256K nadal oczekuje ponownego testu.
 - Krótkie benchmarki są testem regresji, nie testem przepustowości pod dużym
   współbieżnym obciążeniem.
-- GLM ma zweryfikowaną pełną granicę 256K przy concurrency 1; 400K, 512K,
-  1M oraz concurrency > 1 nie są zakwalifikowane do serwowania.
+- Wcześniejszy obraz GLM `c7e6e36` ma zweryfikowaną pełną granicę 256K przy
+  concurrency 1; 400K, 512K, 1M oraz concurrency > 1 nie są zakwalifikowane do
+  serwowania, a nowy obraz wymaga powtórzenia testu 256K.
 - Prefix cache i natywne FP4BMM pozostają wyłączone; na `gfx1201` poprawność ma
   pierwszeństwo przed tuningiem.
 - Oficjalny plik testów kernela z `c7e6e36` przechodzi 29/30 wywołań: 19/20

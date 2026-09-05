@@ -1,25 +1,31 @@
 # Production profiles and GLM-5.3 qualification summary
 
-Date: 2026-09-04 (Europe/Warsaw)
+Date: 2026-09-05 (Europe/Warsaw)
 
 ## Outcome
 
 The repository still contains exactly three flat production profiles. The
-GLM-5.3 recipe now builds from an immutable snapshot of the official vLLM
-`main` after PR #53906 was merged, rather than from the contributor's
-`glm-release` branch.
+GLM-5.3 recipe now targets the immutable official vLLM `main` snapshot
+`6cbb3c154ef1`, after PR #53906 and the merged DFlash fixes #54826 and #54374,
+rather than the contributor's `glm-release` branch or a floating branch.
 
-The default GLM path is now MRV2, TP8/EP8, DFlash2 K7, BF16 KV and a 262,144
-token context on 8 x R9700. It loads, passes every OpenAI API gate, returns
-coherent text and accepts drafts. An exact `262016 + 128` request qualified the
-full configured boundary at concurrency one. Target-only 32K remains an
-explicit fallback; 400K and higher-capacity modes remain diagnostic.
+The configured default GLM path is MRV2, TP8/EP8, DFlash2 K7, BF16 KV and a
+262,144-token context on 8 x R9700. The previous image loaded, passed every
+OpenAI API gate, returned coherent text, accepted drafts and completed an exact
+`262016 + 128` request at concurrency one. The new `6cbb3c154ef1` image has
+passed build, import, focused CPU tests and fresh GPU/API gates for target-only
+32K, DFlash K1 32K and short K7 in the 256K configuration. K1 accepted 68/70
+draft tokens and K7 accepted 115/133. The full 256K boundary still requires a
+fresh run on the new image. Target-only 32K remains an explicit fallback; 400K
+and higher-capacity modes remain diagnostic.
 
 An opt-in target-only FP8 mode now allocates the complete 1,048,576-token
 context without CPU offload. The engine completed model load, cache allocation
 and warm-up with a measured capacity of 1,187,115 tokens. This is a capacity
 result, not yet an inference qualification: the run was stopped before API
-readiness after new correctable PCIe `BadTLP` events appeared.
+readiness after new correctable PCIe `BadTLP` events appeared. A separate
+diagnostic mode combines 1M target and draft FP8 KV with DFlash2 K7, but has
+not yet been qualified.
 
 ## Pinned GLM stack
 
@@ -27,9 +33,10 @@ readiness after new correctable PCIe `BadTLP` events appeared.
 - target: `amd/GLM-5.3-Flash-Quark-MXFP4` revision
   `b5688f25491202978c19c4d036eef579f61bbe07`;
 - target data: 62 safetensors shards and 185,066,521,464 tensor bytes;
-- vLLM: official `vllm-project/vllm` main snapshot
-  `c7e6e36fa93a5b8cb95b74fa96e4abdf2f0be51d`, containing the squash merge
-  `98ed0856f31fa3aaf5e27464e2b4ef5a8ee6b2f5` of PR #53906;
+- vLLM recipe target: official `vllm-project/vllm` main snapshot
+  `6cbb3c154ef1449d2b3c9131a237f36faa695734`, containing the squash merge
+  `98ed0856f31fa3aaf5e27464e2b4ef5a8ee6b2f5` of PR #53906 and merged DFlash
+  fixes #54826 (`25240513856e`) and #54374 (`5093e4844a75`);
 - runner/layout: MRV2 forced by `VLLM_USE_V2_MODEL_RUNNER=1`, TP8 + EP8,
   PP1, draft TP8, DFlash2 K7, BF16 KV, 262,144 context, no CPU offload and
   prefix cache disabled;
@@ -41,10 +48,11 @@ readiness after new correctable PCIe `BadTLP` events appeared.
   `bf582e4eacc1810f76656d1811693ff6c6737d2a`, SHA-256
   `b038e1d9d1e7833fa3880c2c0135ba9b673013f03da1b29fb831931584759dac`.
 
-During the final audit, upstream main advanced to
-`bc2ee480738d7dcc558262a0c6d81956b515b050` by two performance commits that do
-not address GLM/DFlash correctness. The tested `c7e6e36` snapshot is retained
-so the committed recipe exactly matches the built and qualified image.
+Except for the explicitly dated 2026-09-05 rows, the performance and capacity
+results below were measured on the previous `c7e6e36fa93a` image. They remain
+historical comparison evidence and a local ignored-runtime fallback, but the
+deleted old recipe is no longer reproducible from the committed manifests.
+They do not qualify the 256K boundary on the new `6cbb3c154ef1` recipe.
 
 ## DFlash2 root cause and fixes
 
@@ -236,6 +244,9 @@ apples-to-apples comparison with the DFlash row.
 
 | Profile/runtime | Date | Mean TTFT | Mean E2E | Observed prefill | Mean decode |
 |---|---|---:|---:|---:|---:|
+| GLM DFlash2 K7, `6cbb3c154ef1` short smoke | 2026-09-05 | 0.620 s | 6.484 s | 412.98 tok/s | 21.66 tok/s |
+| GLM DFlash2 K1, `6cbb3c154ef1` short smoke | 2026-09-05 | 1.269 s | 19.159 s | 201.67 tok/s | 7.10 tok/s |
+| GLM Quark target-only, `6cbb3c154ef1` smoke | 2026-09-05 | 1.201 s | 17.221 s | 213.07 tok/s | 3.93 tok/s |
 | GLM Quark target-only | 2026-09-03 | 0.574 s | 17.399 s | 445.74 tok/s | 3.74 tok/s |
 | Qwen3.8 Flash-Next MTP K2 | 2026-09-02 | 0.347 s | 2.715 s | 738.41 tok/s | 26.76 tok/s |
 | DeepSeek V4 Flash DSpark K5 | 2026-09-02 | 0.585 s | 2.569 s | 437.49 tok/s | 31.76 tok/s |
@@ -260,6 +271,9 @@ are regression checks, not capacity rankings.
 # diagnostic 1M target-only FP8 capacity/correctness mode
 ./run launcher start glm53-flash --runtime-mode long-context-1m-fp8
 
+# diagnostic 1M DFlash2 K7 with target and draft FP8 KV
+./run launcher start glm53-flash --runtime-mode long-context-1m-fp8-dflash2
+
 # validate the configured 256K boundary of an already-running default runtime
 skills/measure-r9700-model/scripts/test-and-benchmark.sh \
   --profile glm53-flash --output-tokens 128 --full-context \
@@ -271,6 +285,18 @@ Code integration is wanted.
 
 ## Evidence and remaining limits
 
+- The fresh `6cbb3c154ef1` target-only smoke artifacts are
+  `logs/validation/api-glm53-flash-target-only-32k-20260905T033545.json` and
+  `logs/benchmarks/glm53-flash-target-only-32k-c1-256x64-20260905T033545.json`.
+  All six API/identity checks passed; the response was coherent, all eight TP
+  workers loaded, and no new AER, MCE or AMDGPU errors appeared during the run.
+- Fresh DFlash artifacts for the same image are
+  `logs/validation/api-glm53-flash-dflash2-k1-20260905T034131.json`,
+  `logs/benchmarks/glm53-flash-dflash2-k1-c1-256x128-20260905T034131.json`,
+  `logs/validation/api-glm53-flash-dflash2-20260905T034455.json` and
+  `logs/benchmarks/glm53-flash-dflash2-c1-256x128-20260905T034455.json`.
+  K1 accepted 68/70 drafts; K7 accepted 115/133. These qualify the short
+  DFlash paths, not the 256K boundary.
 - The full-boundary artifacts are
   `logs/validation/api-glm53-flash-long-context-256k-dflash2-20260904T122236.json`
   and
@@ -278,8 +304,9 @@ Code integration is wanted.
   Generated logs are intentionally ignored by git.
 - Bounded DFlash captures are under `.runtime/diagnostics/glm-dflash/`.
   Generated state and logs are intentionally ignored by git.
-- GLM DFlash2 was qualified at its configured 256K boundary with concurrency
-  one. DFlash concurrency above one, 400K and prefix caching are not qualified.
+- The previous `c7e6e36` image was qualified at its configured 256K boundary
+  with concurrency one. The new image's 256K boundary, DFlash concurrency
+  above one, 400K and prefix caching are not qualified.
 - Prefix caching remains disabled. PR #54163 caused a K1 token-zero regression
   in the local A/B despite prefix reuse not being needed for the test.
 - The first 400K boundary attempt coincided with a fatal CPU/Data-Fabric MCE
@@ -300,8 +327,9 @@ Code integration is wanted.
   reproduced against the otherwise clean official commit, so it is not
   introduced by the local ring or bounds patches and is retained as a strict
   cross-implementation FP8-oracle discrepancy rather than hidden.
-- PR #55239 and PR #55201 remain open; PR #55219 remains a draft. Their focused
-  fixes are pinned in the recipe even though K7 is now the default.
+- PR #55239 remains open, PR #55219 remains a draft, and PR #55201 was closed
+  without merge. Their focused fixes are pinned in the recipe even though K7
+  is now the default.
 
 ## Upstream status at final audit
 
@@ -313,7 +341,8 @@ Code integration is wanted.
 - PR #55219 is a draft at audited head
   `6712aa109b856d2fefd75a28084db358eb7f9e1b`; only the focused ring behavior
   from `de63c84731cd719a6ab5c9e8d73289c9c96a7587` is ported.
-- PR #55201 (`40bf4af864fb4e0fd3f84c5650ca9ba465c31ac8`) is open.
+- PR #55201 (`40bf4af864fb4e0fd3f84c5650ca9ba465c31ac8`) was closed
+  without merge, so its focused invalid-index guard remains local.
 - Issues #49559, #54928, #54451 and #53323 remain open. The current R9700
   result demonstrates a working local path but does not make those broader
   upstream reports resolved.

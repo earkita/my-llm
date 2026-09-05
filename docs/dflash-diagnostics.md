@@ -120,11 +120,12 @@ L2 norm, maximum magnitude and at most 64 deterministically selected scalar
 values. Enabling the trace introduces GPU synchronization and is therefore not
 a performance benchmark mode.
 
-## Qualified result on R9700
+## Qualification evidence on R9700
 
 The production default is MRV2, TP8/EP8, DFlash2 K7, BF16 KV and a 262,144
 token context. Prefix caching is disabled. The explicit `target-only-32k` mode
-is the fallback:
+is the fallback. The full-boundary evidence in the following list was collected
+on the previous `c7e6e36` image:
 
 - two K1 captures accepted 52/74 draft tokens (61.5-80.0% per capture) and
   returned coherent text;
@@ -137,6 +138,11 @@ is the fallback:
 - the exact full-context run used 262,016 prompt plus 128 output tokens,
   measured 599.39 tok/s observed prefill and 23.84 tok/s decode, returned
   coherent output and accepted 111/111 drafts.
+
+The current `6cbb3c154` image separately passed fresh API gates for target-only
+32K, DFlash K1 and short K7. K1 accepted 68/70 draft tokens and measured
+7.10 tok/s decode; K7 accepted 115/133 and measured 21.66 tok/s decode. The
+full 256K boundary has not yet been repeated on this image.
 
 The correction is the combination of aligned DFlash/MLA cache pages (`0010`),
 the PR #55239 Triton multi-token verify path (`0012`), the focused PR #55219
@@ -158,8 +164,9 @@ entire draft PR also carries a broader generic packed-layout refactor without
 GLM/MTP ROCm end-to-end evidence; importing it would enlarge the patch surface
 without addressing a failing local test.
 
-K7 is now the default after the full 256K pass. Concurrency above one and 400K
-remain unqualified. The 400K replay at a verified 285 W cap kept the host alive
+K7 remains the default based on the previous image's full 256K pass and the new
+image's short K7 smoke. Concurrency above one, the new image's 256K boundary
+and 400K remain unqualified. The 400K replay at a verified 285 W cap kept the host alive
 but ended with GPU `illegal memory access`; it predates `0021`/`0022` and was
 not repeated on the final image. The dedicated GPU telemetry stream observed
 maxima of 255 W, 82°C edge, 106°C hotspot and 88°C memory. Prefix cache remains
