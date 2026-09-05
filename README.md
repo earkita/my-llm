@@ -58,9 +58,8 @@ checkoutów.
 # domyślnie: MRV2, TP8/EP8, DFlash2 K7, BF16 KV, 256K
 ./run launcher start glm53-flash
 
-# zgodnościowy alias domyślnego trybu oraz diagnostyczne fallbacki
+# diagnostyczne fallbacki
 ./run launcher start glm53-flash --runtime-mode dflash2-k1
-./run launcher start glm53-flash --runtime-mode dflash2
 ./run launcher start glm53-flash --runtime-mode target-only-32k
 
 # eksperymentalnie: target-only, FP8 KV, pełny kontekst 1M

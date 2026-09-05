@@ -260,9 +260,6 @@ are regression checks, not capacity rankings.
 # default production path: MRV2, TP8/EP8, DFlash2 K7, BF16 KV, 256K
 ./run launcher start glm53-flash
 
-# compatibility alias for the same DFlash2 K7 runtime
-./run launcher start glm53-flash --runtime-mode dflash2
-
 # diagnostic controls
 ./run launcher start glm53-flash --runtime-mode target-only-32k
 ./run launcher start glm53-flash --runtime-mode dflash2-k1

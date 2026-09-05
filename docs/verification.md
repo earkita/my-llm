@@ -167,5 +167,4 @@ TTFT do 2.74 s. Przy 64K MTP2 zaakceptował 696 z 700 draftów i osiągnął
   taila, a produkcyjne writery prefill i decode były bitowo zgodne dla wszystkich
   751 zapisanych wektorów. Seed 9 odtwarza się również na czystym oficjalnym
   commicie, więc nie pochodzi z naszych patchy ringa ani bounds-checku.
-- DFlash2 K7 jest domyślny; `--runtime-mode dflash2` jest zgodnościowym aliasem,
-  a `target-only-32k` pozostaje fallbackiem.
+- DFlash2 K7 jest domyślny, a `target-only-32k` pozostaje fallbackiem.

@@ -37,7 +37,7 @@
         "aiter_sparse_mla_fp8_reference_pr3262_head": "ea42ba3bf0bc8bc1d94151081bc9fca7f8ac9d9d"
       },
       "target_profile": "profiles/production/glm53-flash.json",
-      "target_profile_sha256": "50443568a33638c88f19eb097fc5423cbd73f14a1a861de9109bee577db248c6",
+      "target_profile_sha256": "01707d55a963e08ce462aebb44517b5b87076b595ab68dcdc0d344b10b37c3d4",
       "intentional_changes": [
         "replaced the llama.cpp GGUF deployment with the AMD Quark MXFP4 checkpoint",
         "pinned upstream main at 6cbb3c154 after the merged GLM-5.3 and DFlash MRV2 fixes, while retaining the still-required Quark, Eagle3, sparse-verify, kpool and FP8 patches",

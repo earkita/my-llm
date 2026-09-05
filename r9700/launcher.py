@@ -78,18 +78,7 @@ def _state_matches_target(
 def _desired_runtime(
     profile: dict[str, Any],
     runtime_mode: str | None,
-    experimental_dflash2: bool,
 ) -> tuple[str | None, dict[str, Any]]:
-    if runtime_mode and experimental_dflash2:
-        raise ConfigurationError(
-            "choose --runtime-mode or --experimental-dflash2, not both"
-        )
-    if experimental_dflash2:
-        if profile["name"] != "glm53-flash":
-            raise ConfigurationError(
-                "--experimental-dflash2 is available only for glm53-flash"
-            )
-        runtime_mode = "dflash2"
     runtime = profile["runtime"]
     if runtime_mode:
         runtime = activate_runtime_mode(profile["model"], runtime, runtime_mode)
@@ -185,14 +174,11 @@ def start(
     ready_timeout: int = 900,
     proxy_ready_timeout: int = 120,
     with_litellm: bool = False,
-    experimental_dflash2: bool = False,
     runtime_mode: str | None = None,
     dry_run: bool = False,
 ) -> None:
     name, profile = _target(profile_name)
-    runtime_mode, desired_runtime = _desired_runtime(
-        profile, runtime_mode, experimental_dflash2
-    )
+    runtime_mode, desired_runtime = _desired_runtime(profile, runtime_mode)
     state = _running_state()
     proxy_state = _proxy_running_state()
     matches_running = bool(
@@ -291,14 +277,11 @@ def switch(
     stop_timeout: int | None = None,
     proxy_stop_timeout: int | None = None,
     with_litellm: bool = False,
-    experimental_dflash2: bool = False,
     runtime_mode: str | None = None,
     dry_run: bool = False,
 ) -> None:
     name, profile = _target(profile_name)
-    runtime_mode, desired_runtime = _desired_runtime(
-        profile, runtime_mode, experimental_dflash2
-    )
+    runtime_mode, desired_runtime = _desired_runtime(profile, runtime_mode)
     if with_litellm:
         if host or port is not None:
             raise ConfigurationError(

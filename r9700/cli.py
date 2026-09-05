@@ -57,11 +57,6 @@ def _launcher_start_options(parser: argparse.ArgumentParser) -> None:
         help="start and verify the LiteLLM proxy after the model",
     )
     parser.add_argument(
-        "--experimental-dflash2",
-        action="store_true",
-        help="opt into the validated but still experimental GLM DFlash2 K7 mode",
-    )
-    parser.add_argument(
         "--runtime-mode",
         help="select another explicit diagnostic mode embedded in the profile",
     )
@@ -420,7 +415,6 @@ def main(argv: list[str] | None = None) -> int:
                     ready_timeout=args.ready_timeout,
                     proxy_ready_timeout=args.proxy_ready_timeout,
                     with_litellm=args.with_litellm,
-                    experimental_dflash2=args.experimental_dflash2,
                     runtime_mode=args.runtime_mode,
                     dry_run=args.dry_run,
                 )
@@ -434,7 +428,6 @@ def main(argv: list[str] | None = None) -> int:
                     stop_timeout=args.stop_timeout,
                     proxy_stop_timeout=args.proxy_stop_timeout,
                     with_litellm=args.with_litellm,
-                    experimental_dflash2=args.experimental_dflash2,
                     runtime_mode=args.runtime_mode,
                     dry_run=args.dry_run,
                 )

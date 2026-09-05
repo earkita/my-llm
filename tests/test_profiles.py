@@ -15,7 +15,6 @@ from r9700.backends.vllm import environment as vllm_environment
 from r9700.config import (
     ConfigurationError,
     ROOT,
-    activate_runtime_mode,
     load_profile,
     load_runtime,
 )
@@ -309,15 +308,6 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(speculative["attention_backend"], "TRITON_ATTN")
         self.assertEqual(speculative["kv_cache_dtype"], "bfloat16")
 
-        runtime = activate_runtime_mode(
-            profile["model"], profile["runtime"], "dflash2"
-        )
-        self.assertEqual(
-            profile["runtime"]["experimental_modes"]["dflash2"]["status"],
-            "compatibility-alias",
-        )
-        self.assertEqual(runtime["active_experimental_mode"], "dflash2")
-        self.assertEqual(runtime["speculative_config"], speculative)
         self.assertEqual(
             default_runtime["required_patches"][-10:],
             [
@@ -536,9 +526,7 @@ class ProductionProfileTests(unittest.TestCase):
 
     def test_vllm_speculative_model_resolves_from_identity_bound_artifact(self) -> None:
         profile = load_profile("glm53-flash")
-        runtime = activate_runtime_mode(
-            profile["model"], profile["runtime"], "dflash2"
-        )
+        runtime = profile["runtime"]
         command = build_command(
             profile["model"], runtime, Path("/models/glm"), "127.0.0.1", 8000
         )
@@ -682,25 +670,6 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertIn("--proxy-ready-timeout", command)
         self.assertIn("--dry-run", command)
 
-    def test_launcher_dflash_flag_selects_compatibility_alias(self) -> None:
-        with (
-            patch("r9700.launcher.managed_state", return_value=None),
-            patch("r9700.launcher.subprocess.run") as run,
-        ):
-            run.return_value.returncode = 0
-            launcher.start("glm53-flash", dry_run=True)
-            launcher.start(
-                "glm53-flash",
-                experimental_dflash2=True,
-                dry_run=True,
-            )
-
-        default_command = run.call_args_list[0].args[0]
-        experimental_command = run.call_args_list[1].args[0]
-        self.assertNotIn("--runtime-mode", default_command)
-        mode_index = experimental_command.index("--runtime-mode")
-        self.assertEqual(experimental_command[mode_index + 1], "dflash2")
-
     def test_launcher_accepts_a_generic_embedded_diagnostic_mode(self) -> None:
         with (
             patch("r9700.launcher.managed_state", return_value=None),
@@ -718,16 +687,6 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(
             command[mode_index + 1], "extract-hidden-states-k1"
         )
-
-    def test_launcher_rejects_dflash_for_another_profile(self) -> None:
-        with self.assertRaisesRegex(
-            ConfigurationError, "available only for glm53-flash"
-        ):
-            launcher.start(
-                "qwen38-flash",
-                experimental_dflash2=True,
-                dry_run=True,
-            )
 
     def test_launcher_waits_before_adding_litellm_to_active_model(self) -> None:
         state = {

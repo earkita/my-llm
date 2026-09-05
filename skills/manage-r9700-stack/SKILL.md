@@ -23,7 +23,6 @@ Select another complete preset instead of choosing its components separately:
 
 The default GLM preset selects the verified vLLM Quark/MXFP4 stack with MRV2,
 TP8/EP8, DFlash2 K=7, BF16 KV and a 256K context. Prefix caching is disabled.
-`--runtime-mode dflash2` is a compatibility alias for that same runtime;
 `--runtime-mode target-only-32k` selects the qualified fallback. Qwen selects
 the production-ready vLLM 0.28 cache-safe MTP K=2 alternative.
 

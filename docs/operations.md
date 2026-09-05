@@ -88,14 +88,13 @@ skills/stop-r9700-runtime/scripts/stop-runtime.sh
 ```
 
 Zwykły start GLM uruchamia bieżący profil MRV2, TP8/EP8, DFlash2 K7, BF16 KV i
-256K. `dflash2` jest tylko zgodnościowym aliasem tego samego runtime. Obraz
+256K. Obraz
 `6cbb3c154` ma świeżą kwalifikację krótkiego K7, ale jego pełną granicę 256K
 trzeba ponownie sprawdzić. Target-only i K1 pozostają jawnymi trybami
 kontrolnymi:
 
 ```bash
 ./run launcher start glm53-flash
-./run launcher start glm53-flash --runtime-mode dflash2
 ./run launcher start glm53-flash --runtime-mode target-only-32k
 ./run launcher start glm53-flash --runtime-mode dflash2-k1
 ./run launcher start glm53-flash --runtime-mode extract-hidden-states-k1

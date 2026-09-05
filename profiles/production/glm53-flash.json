@@ -269,22 +269,6 @@
           }
         }
       },
-      "dflash2": {
-        "status": "compatibility-alias",
-        "runtime_name": "glm53-flash-quark-mxfp4-mrv2-8xr9700-tp8-dflash2-k7-bf16kv-256k",
-        "reason": "Compatibility alias for callers that selected DFlash2 explicitly before it became the default.",
-        "runtime_overrides": {
-          "speculative_config": {
-            "model_artifact": "dflash2-drafter",
-            "method": "dflash",
-            "num_speculative_tokens": 7,
-            "draft_tensor_parallel_size": 8,
-            "attention_backend": "TRITON_ATTN",
-            "kv_cache_dtype": "bfloat16",
-            "enforce_eager": true
-          }
-        }
-      },
       "dflash2-k1": {
         "status": "diagnostic-only",
         "runtime_name": "glm53-flash-quark-mxfp4-mrv2-8xr9700-tp8-dflash2-k1-32k",
