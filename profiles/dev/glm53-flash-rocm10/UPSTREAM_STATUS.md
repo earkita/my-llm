@@ -94,11 +94,10 @@ supported by vLLM's generic block-FP8 fused-MoE path.
 - Old bounded-diagnostic patches remain excluded because they do not affect
   runtime correctness.
 
-## Remaining blockers
+## Production status and remaining scope
 
-There is no known blocker for the qualified 32K development scope. Promotion
-is intentionally blocked on explicit user approval, not on a runtime failure.
-An exact DFlash2 K7 BF16 KV 256K boundary request was subsequently qualified.
-The 17-patch upstream delta remains maintenance debt, and contexts beyond
-256K, FP8 KV, higher concurrency, and longer thermal soak tests are not
-qualified by this result.
+The qualified DFlash2 K7 BF16 KV 256K runtime was promoted to
+`profiles/production/glm53-flash-rocm.json` after explicit approval. The
+17-patch upstream delta remains maintenance debt, and contexts beyond 256K,
+FP8 KV, higher concurrency, and longer thermal soak tests are not qualified by
+this result.

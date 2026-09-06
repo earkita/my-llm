@@ -7,7 +7,7 @@ description: Start or stop the complete local R9700 inference stack in dependenc
 
 Run from the repository containing this skill.
 
-Start the default `glm53-flash` preset. It binds the model, runtime, LiteLLM
+Start the default `glm53-flash-rocm` preset. It binds the model, runtime, LiteLLM
 routing and Claude Code settings as one tested selection:
 
 ```bash
@@ -42,7 +42,7 @@ Stop the complete stack in reverse dependency order:
 Preview either operation without changing service state:
 
 ```bash
-skills/manage-r9700-stack/scripts/manage-stack.sh start --preset glm53-flash --dry-run
+skills/manage-r9700-stack/scripts/manage-stack.sh start --preset glm53-flash-rocm --dry-run
 skills/manage-r9700-stack/scripts/manage-stack.sh stop --dry-run
 ```
 

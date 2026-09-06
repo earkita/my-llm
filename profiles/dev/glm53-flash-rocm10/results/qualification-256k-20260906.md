@@ -2,8 +2,8 @@
 
 Result: the development ROCm 10 recipe started DFlash2 K7 with a 256K BF16
 KV context and completed exact 32K and 256K input-plus-output boundary
-requests. This mode copies the relevant limits from the qualified ROCm 7.14
-production reference without changing the conservative 32K default.
+requests. This qualified configuration was later promoted as the
+`glm53-flash-rocm` production default.
 
 ## Configuration
 
@@ -67,5 +67,6 @@ before both measurements.
 - Live runtime log:
   `logs/runtime/vllm-glm53-flash-quark-mxfp4-rocm10-mrv2-8xr9700-tp8-dflash2-k7-bf16kv-256k-20260906T025146.log`
 
-The runtime log has no final digest here because the explicitly requested
-256K service remains active after qualification.
+The runtime log has no final digest in this historical capture because the
+service was still active when the report was written. It was subsequently
+stopped cleanly.

@@ -10,10 +10,10 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 PRODUCTION_PROFILE_ROOT = ROOT / "profiles" / "production"
 DEVELOPMENT_PROFILE_ROOT = ROOT / "profiles" / "dev"
-DEFAULT_PROFILE = "glm53-flash"
+DEFAULT_PROFILE = "glm53-flash-rocm"
 DEFAULT_MODEL_PROFILE = DEFAULT_PROFILE
 DEFAULT_RUNTIME_PROFILE = DEFAULT_PROFILE
-DEFAULT_STACK_PRESET = "glm53-flash"
+DEFAULT_STACK_PRESET = "glm53-flash-rocm"
 
 
 class ConfigurationError(RuntimeError):

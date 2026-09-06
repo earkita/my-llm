@@ -26,7 +26,7 @@ mkdir -p .runtime/diagnostics/glm-dflash
 Start the explicit target-only fallback, then capture its baseline:
 
 ```bash
-./run launcher start glm53-flash --runtime-mode target-only-32k
+./run launcher start glm53-flash-rocm --runtime-mode target-only-32k
 .venv/bin/python scripts/dflash_diagnostics.py capture \
   --case .runtime/diagnostics/glm-dflash/case.json \
   --label target \
@@ -40,7 +40,7 @@ command with a different label and output path:
 
 ```bash
 ./run launcher stop
-./run launcher start glm53-flash
+./run launcher start glm53-flash-rocm
 .venv/bin/python scripts/dflash_diagnostics.py capture \
   --case .runtime/diagnostics/glm-dflash/case.json \
   --label dflash-k7 \
@@ -91,7 +91,7 @@ Then explicitly start the DFlash runtime and run exactly one capture. Remove
 the variables after stopping it:
 
 ```bash
-./run launcher start glm53-flash --runtime-mode dflash2-k1
+./run launcher start glm53-flash-rocm --runtime-mode dflash2-k1
 ```
 
 After the capture, stop the runtime and remove the variables:
@@ -122,52 +122,28 @@ a performance benchmark mode.
 
 ## Qualification evidence on R9700
 
-The production default is MRV2, TP8/EP8, DFlash2 K7, BF16 KV and a 262,144
-token context. Prefix caching is disabled. The explicit `target-only-32k` mode
-is the fallback. The full-boundary evidence in the following list was collected
-on the previous `c7e6e36` image:
+The production default `glm53-flash-rocm` uses ROCm 10, MRV2, TP8/EP8,
+DFlash2 K7, BF16 KV and a 262,144-token context. Prefix caching is disabled.
+The explicit `target-only-32k`, `native-mtp-k1`, `dflash2-k1` and
+`dflash2-k7` modes preserve the qualified 32K control configurations.
 
-- two K1 captures accepted 52/74 draft tokens (61.5-80.0% per capture) and
-  returned coherent text;
-- three K7 captures accepted 139/385 draft tokens (33.1-38.7% per capture),
-  with accepted tokens at every one of the seven draft positions;
-- the final fresh K7 start passed all six API checks and produced 46/119
-  accepted drafts, mean acceptance length 3.71;
-- a 256-input/128-output benchmark measured 23.63 tok/s mean decode and
-  21.65 tok/s minimum decode at concurrency one.
-- the exact full-context run used 262,016 prompt plus 128 output tokens,
-  measured 599.39 tok/s observed prefill and 23.84 tok/s decode, returned
-  coherent output and accepted 111/111 drafts.
+At 32K configured context, every mode passed API correctness followed by three
+4096-input/128-output measurements. DFlash2 K7 measured 868.34 observed
+prefill tok/s, 26.213 mean decode tok/s and accepted 465/504 draft tokens
+(92.26%). The exact full-context run used 262,016 prompt plus 128 output
+tokens, measured 606.78 tok/s observed prefill and 26.99 tok/s decode, returned
+coherent output and accepted 111/111 drafts.
 
-The current `6cbb3c154` image separately passed fresh API gates for target-only
-32K, DFlash K1 and short K7. K1 accepted 68/70 draft tokens and measured
-7.10 tok/s decode; K7 accepted 115/133 and measured 21.66 tok/s decode. The
-full 256K boundary has not yet been repeated on this image.
+The 256K startup allocated about 5.8 GiB KV cache per GPU and exposed 480,827
+KV tokens. During the boundary request the maximum sampled hotspot was 91°C;
+all ECC counters remained zero and the inspected application and kernel logs
+contained no OOM, illegal memory access, GPU reset, HSA/amdgpu error, AER or
+machine-check event.
 
-The correction is the combination of aligned DFlash/MLA cache pages (`0010`),
-the PR #55239 Triton multi-token verify path (`0012`), the focused PR #55219
-kpool rollback ring (`0017`), PR #55201 invalid-pool rejection (`0018`), the
-bounded indexer workspace (`0019`), ROCm kpool alignment (`0020`), the correct
-128/256-token kernel-page advertisement (`0021`) and guarded block-table loads
-from PR #54296 (`0022`). The old overlay patches, #54163 and the experimental
-#52905 causal-convolution change are intentionally excluded.
-
-The `0021` page geometry is essential: a 768-token storage block contains
-three 256-token kernel pages. Before the block table represented that split,
-the effective table ended around 87,552 tokens for the 256K profile and
-136,704 for 400K. Those thresholds explain why a 134K control passed under the
-400K configuration while the earlier full-boundary requests faulted. `0022`
-also masks out-of-range loads, but does not replace the corrected geometry.
-
-Only the ring behavior from PR #55219 commit `de63c847` is backported. The
-entire draft PR also carries a broader generic packed-layout refactor without
-GLM/MTP ROCm end-to-end evidence; importing it would enlarge the patch surface
-without addressing a failing local test.
-
-K7 remains the default based on the previous image's full 256K pass and the new
-image's short K7 smoke. Concurrency above one, the new image's 256K boundary
-and 400K remain unqualified. The 400K replay at a verified 285 W cap kept the host alive
-but ended with GPU `illegal memory access`; it predates `0021`/`0022` and was
-not repeated on the final image. The dedicated GPU telemetry stream observed
-maxima of 255 W, 82°C edge, 106°C hotspot and 88°C memory. Prefix cache remains
-off because #54163 caused a K1 token-zero regression in local A/B testing.
+The ROCm 10 recipe carries 17 ordered vLLM patches. Its cache-page geometry,
+slot guards, bounded indexer workspaces, sharded DFlash projection and staged
+OCP-MX dequantization are covered by focused repository tests and by the 32K
+and 256K runtime gates. Detailed identities, measurements and artifact hashes
+are recorded in
+`profiles/dev/glm53-flash-rocm10/results/qualification-20260905.md` and
+`profiles/dev/glm53-flash-rocm10/results/qualification-256k-20260906.md`.

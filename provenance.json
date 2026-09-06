@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_on": "2026-09-05",
+  "generated_on": "2026-09-06",
   "source_repository": "llm-runtime (historical source only; not required)",
   "policy": "Only source profiles under profiles/runtime/production were selected; model, runtime and stack settings were flattened into one deployment file without extends.",
   "profiles": {
@@ -22,10 +22,24 @@
       "source_model_sha256": "b5688f25491202978c19c4d036eef579f61bbe07",
       "source_runtime": "https://github.com/vllm-project/vllm/commit/6cbb3c154ef1449d2b3c9131a237f36faa695734",
       "source_runtime_sha256": "6cbb3c154ef1449d2b3c9131a237f36faa695734",
+      "target_profile": "profiles/production/glm53-flash.json",
+      "target_profile_sha256": "01707d55a963e08ce462aebb44517b5b87076b595ab68dcdc0d344b10b37c3d4",
+      "intentional_changes": [
+        "preserved the qualified ROCm 7.14 GLM deployment as an independent production profile",
+        "retained DFlash2 K7 with BF16 KV and the 262144-token default context",
+        "retained its explicit diagnostic long-context and MRV2 isolation modes"
+      ]
+    },
+    "glm53-flash-rocm": {
+      "source_model": "https://huggingface.co/amd/GLM-5.3-Flash-Quark-MXFP4",
+      "source_model_sha256": "b5688f25491202978c19c4d036eef579f61bbe07",
+      "source_runtime": "https://github.com/vllm-project/vllm/commit/7fbd44cbe0a90b9c8fd3a94a0f0401ac4b1bc719",
+      "source_runtime_sha256": "7fbd44cbe0a90b9c8fd3a94a0f0401ac4b1bc719",
       "upstream_runtime_commits": {
         "glm53_pr53906_merge": "98ed0856f31fa3aaf5e27464e2b4ef5a8ee6b2f5",
         "mrv2_draft_attention_backend_pr54826_merge": "25240513856e9aca9b07e9381f2a4513b6954bd8",
         "dflash_sliding_window_aot_pr54374_merge": "5093e4844a75f279d1921d7e34ccd23d68529f27",
+        "dflash_glm53_pr55423_patch_source": "374e367e2b87ee65332b03468b76dc4c40e69519",
         "resumed_spec_decode_padding_pr55126_merge": "a26b71d868772eaf31706208fbd7260c601d7566",
         "rocm_sparse_verify_pr55239_patch_source": "d608ced8445a21ec3bffa01b73a889e914aff2fd",
         "rocm_sparse_verify_pr55239_audit_head": "0f1d78db4495fed10384a2b048e70367e61d3dd1",
@@ -36,20 +50,15 @@
         "fp8_indexer_workspace_pr55222_head": "8eda002d30e7380060859938709b1244449db7e1",
         "aiter_sparse_mla_fp8_reference_pr3262_head": "ea42ba3bf0bc8bc1d94151081bc9fca7f8ac9d9d"
       },
-      "target_profile": "profiles/production/glm53-flash.json",
-      "target_profile_sha256": "01707d55a963e08ce462aebb44517b5b87076b595ab68dcdc0d344b10b37c3d4",
+      "target_profile": "profiles/production/glm53-flash-rocm.json",
+      "target_profile_sha256": "6d868364ba38ebbabff2de009e4c9a90d0306dded1a7ec77d7cce3668ff7aa6b",
       "intentional_changes": [
         "replaced the llama.cpp GGUF deployment with the AMD Quark MXFP4 checkpoint",
-        "pinned upstream main at 6cbb3c154 after the merged GLM-5.3 and DFlash MRV2 fixes, while retaining the still-required Quark, Eagle3, sparse-verify, kpool and FP8 patches",
-        "promoted identity-bound DFlash2 with seven draft tokens to the default after an exact 262144-token boundary pass",
-        "added K=1 DFlash and hidden-state extraction modes for MRV2 isolation",
-        "materialized and contracted GLM mHC outputs for DFlash auxiliary hidden states",
-        "replaced the unsafe draft-target KV overlay with aligned pages and added focused fixes from vLLM PRs #55239, #55219, #55201 and #54296 plus issues #55280 and #54359",
-        "excluded PR #54163 after a controlled ablation showed an additional DFlash K=1 correctness regression with prefix caching disabled",
-        "added an RDNA4-only Triton E4M3FN sparse-MLA reader with explicit k_scale dequantization because the pinned AITER image has no gfx1201 MLA code object",
-        "right-sized GLM indexer prefill and decode-logits workspaces in four-token pooled states, following PR #55222 and the existing DeepSeek-V4 compressed-indexer contract",
-        "sharded the DFlash auxiliary projection across TP8 and staged OCP-MX expert dequantization to reduce per-GPU and transient VRAM",
-        "added an explicitly diagnostic combined 1M mode with FP8 target and draft KV cache plus DFlash2 K7"
+        "migrated the isolated native recipe to ROCm SDK 10.0.0, PyTorch 2.13.0+rocm10.0.0, AITER v0.1.21 and vLLM main 7fbd44cbe",
+        "kept only the 17 ordered vLLM patches still required by the selected ROCm 10 sources and qualified BF16 KV path",
+        "promoted identity-bound DFlash2 K7 with BF16 KV and 262144 tokens to the default after exact 32K and 256K boundary passes",
+        "retained target-only, native MTP K1, DFlash2 K1 and DFlash2 K7 as explicit qualified 32K control modes",
+        "kept the ROCm 7.14 deployment as a separate production profile"
       ]
     },
     "qwen38-flash": {
@@ -69,6 +78,7 @@
   "recipes": [
     "vllm_deepseekv4flash_v0.28",
     "vllm_qwen38flash_pr53896",
-    "vllm_glm53flash_v0.29"
+    "vllm_glm53flash_v0.29",
+    "vllm_glm53flashrocm10_v0.29"
   ]
 }

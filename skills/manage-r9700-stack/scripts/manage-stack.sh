@@ -18,7 +18,7 @@ profiles_dir="$repo_root/profiles/production"
 claude_settings="$repo_root/.claude/settings.local.json"
 runtime_state="$repo_root/.runtime/service.json"
 
-preset=glm53-flash
+preset=glm53-flash-rocm
 runtime_ready_timeout=900
 proxy_ready_timeout=120
 runtime_stop_timeout=180
@@ -75,7 +75,7 @@ import sys
 
 for path in sorted(pathlib.Path(sys.argv[1]).glob("*.json")):
     profile = json.loads(path.read_text(encoding="utf-8"))
-    marker = " (default)" if profile["name"] == "glm53-flash" else ""
+    marker = " (default)" if profile["name"] == "glm53-flash-rocm" else ""
     print(
         f"{profile['name']}{marker}\t{profile['status']}\t"
         f"{profile['description']}"

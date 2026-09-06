@@ -2,7 +2,7 @@
 
 Result: all four staged gates passed at 32K configured context on eight R9700
 GPUs. DFlash2 K7 is the best qualified mode. The service was stopped cleanly
-after testing; this report does not promote the profile to production.
+after testing. The qualified recipe was later promoted as `glm53-flash-rocm`.
 
 ## Tested identity
 
@@ -104,7 +104,7 @@ MTP and DFlash qualification.
 
 ```bash
 skills/start-r9700-runtime/scripts/start-runtime.sh \
-  --profile profiles/dev/glm53-flash-rocm10/glm53-flash-rocm10.json \
+  --profile glm53-flash-rocm \
   --runtime-mode dflash2-k7
 ```
 

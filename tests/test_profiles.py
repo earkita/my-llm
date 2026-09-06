@@ -34,11 +34,19 @@ from r9700.models import verify_model
 from r9700.service import start
 
 
-PROFILE_NAMES = (
+REQUIRED_PROFILE_NAMES = {
     "deepseek-v4-flash",
     "glm53-flash",
+    "glm53-flash-rocm",
     "qwen38-flash",
+}
+PROFILE_NAMES = tuple(
+    sorted(
+        path.stem
+        for path in (ROOT / "profiles" / "production").glob("*.json")
+    )
 )
+GLM_PROFILE = "glm53-flash-rocm"
 
 
 class ProductionProfileTests(unittest.TestCase):
@@ -86,11 +94,12 @@ class ProductionProfileTests(unittest.TestCase):
                 str(source),
             )
 
-    def test_repository_contains_exactly_three_flat_profiles(self) -> None:
+    def test_repository_contains_expected_flat_profiles(self) -> None:
         root = ROOT / "profiles" / "production"
-        self.assertEqual(
-            [path.stem for path in sorted(root.glob("*.json"))],
-            list(PROFILE_NAMES),
+        self.assertTrue(
+            REQUIRED_PROFILE_NAMES.issubset(
+                {path.stem for path in root.glob("*.json")}
+            )
         )
         self.assertFalse((ROOT / "profiles" / "models").exists())
         self.assertFalse((ROOT / "profiles" / "runtime").exists())
@@ -110,24 +119,15 @@ class ProductionProfileTests(unittest.TestCase):
                     profile["stack"]["claude_settings"], dict
                 )
 
-    def test_development_profile_requires_an_explicit_path(self) -> None:
-        path = (
-            ROOT
-            / "profiles/dev/glm53-flash-rocm10/glm53-flash-rocm10.json"
-        )
-        profile = load_profile(str(path))
-        self.assertEqual(profile["status"], "development")
-        self.assertEqual(
-            profile["runtime"]["recipe"],
-            "vllm_glm53flashrocm10_v0.29",
-        )
-        with self.assertRaisesRegex(ConfigurationError, "configuration file is absent"):
-            load_profile("glm53-flash-rocm10")
-
     def test_profile_loader_rejects_inheritance_at_any_depth(self) -> None:
         path = ROOT / "tests" / "invalid-flat-profile.json"
         source = json.loads(
-            (ROOT / "profiles" / "production" / "glm53-flash.json").read_text()
+            (
+                ROOT
+                / "profiles"
+                / "production"
+                / "glm53-flash-rocm.json"
+            ).read_text()
         )
         source["name"] = path.stem
         source["stack"]["claude_settings"]["extends"] = "forbidden.json"
@@ -181,14 +181,14 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(present, referenced)
 
     def test_glm_uses_an_isolated_repo_local_vllm_recipe(self) -> None:
-        runtime = load_profile("glm53-flash")["runtime"]
+        runtime = load_profile(GLM_PROFILE)["runtime"]
         manifest = json.loads(
-            (ROOT / "manifest/vllm_glm53flash_v0.29.json").read_text()
+            (ROOT / "manifest/vllm_glm53flashrocm10_v0.29.json").read_text()
         )
-        self.assertEqual(runtime["recipe"], "vllm_glm53flash_v0.29")
+        self.assertEqual(runtime["recipe"], "vllm_glm53flashrocm10_v0.29")
         self.assertEqual(
             manifest["environment"]["venv"],
-            ".runtime/recipes/vllm_glm53flash_v0.29/venv",
+            ".runtime/recipes/vllm_glm53flashrocm10_v0.29/venv",
         )
         self.assertEqual(
             manifest["sources"]["vllm"]["repository"],
@@ -196,7 +196,7 @@ class ProductionProfileTests(unittest.TestCase):
         )
         self.assertEqual(
             manifest["sources"]["vllm"]["commit"],
-            "6cbb3c154ef1449d2b3c9131a237f36faa695734",
+            "7fbd44cbe0a90b9c8fd3a94a0f0401ac4b1bc719",
         )
         self.assertEqual(runtime["environment"]["VLLM_USE_V2_MODEL_RUNNER"], "1")
 
@@ -256,7 +256,7 @@ class ProductionProfileTests(unittest.TestCase):
     def test_commands_resolve_from_one_profile(self) -> None:
         expectations = {
             "deepseek-v4-flash": ("vllm", "--pipeline-parallel-size", "6"),
-            "glm53-flash": ("vllm", "--quantization", "quark"),
+            GLM_PROFILE: ("vllm", "--quantization", "quark"),
             "qwen38-flash": ("vllm", "--tensor-parallel-size", "8"),
         }
         for name, expected in expectations.items():
@@ -323,7 +323,7 @@ class ProductionProfileTests(unittest.TestCase):
             start("deepseek-v4-flash", "qwen38-flash")
 
     def test_glm_dflash_is_identity_bound_and_enabled_by_default(self) -> None:
-        profile = load_profile("glm53-flash")
+        profile = load_profile(GLM_PROFILE)
         artifact = profile["model"]["auxiliary_artifacts"][0]
         self.assertEqual(artifact["repository"], "incoai/GLM-5.3-Flash-DFlash2")
         self.assertEqual(artifact["revision"][:7], "bf582e4")
@@ -343,27 +343,33 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(
             default_runtime["required_patches"][-10:],
             [
-                "0019",
-                "0020",
-                "0021",
-                "0022",
-                "0023",
-                "0024",
-                "0025",
-                "0026",
-                "0027",
-                "0028",
+                "0008",
+                "0009",
+                "0010",
+                "0011",
+                "0012",
+                "0013",
+                "0014",
+                "0015",
+                "0016",
+                "0017",
             ],
         )
         self.assertTrue(
             {
+                "0003",
+                "0005",
+                "0006",
+                "0007",
+                "0008",
                 "0010",
+                "0011",
                 "0012",
+                "0013",
+                "0014",
+                "0015",
+                "0016",
                 "0017",
-                "0018",
-                "0020",
-                "0021",
-                "0022",
             }.issubset(default_runtime["required_patches"])
         )
 
@@ -372,8 +378,8 @@ class ProductionProfileTests(unittest.TestCase):
     ) -> None:
         kernel_pages = (
             ROOT
-            / "patches/vllm_glm53flash_v0.29/"
-            "0021-advertise-glm-kpool-kernel-pages-issue54359.patch"
+            / "patches/vllm_glm53flashrocm10_v0.29/"
+            "0011-fix-advertise-actual-GLM-kpool-kernel-page-sizes.patch"
         ).read_text()
         self.assertIn(
             "return [4 * page_size for page_size in PAGED_MQA_PAGE_SIZES]",
@@ -383,8 +389,8 @@ class ProductionProfileTests(unittest.TestCase):
 
         slot_guards = (
             ROOT
-            / "patches/vllm_glm53flash_v0.29/"
-            "0022-guard-slot-mapping-block-table-loads-pr54296.patch"
+            / "patches/vllm_glm53flashrocm10_v0.29/"
+            "0012-fix-guard-block-table-loads-in-slot-mapping.patch"
         ).read_text()
         self.assertEqual(
             slot_guards.count("in_range = block_indices < block_table_stride"),
@@ -393,19 +399,10 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertIn("mask=mask & is_local & in_range", slot_guards)
         self.assertIn("mask=is_local & in_range", slot_guards)
 
-        fp8_sparse_mla = (
-            ROOT
-            / "patches/vllm_glm53flash_v0.29/"
-            "0025-rocm-triton-fp8-sparse-mla.patch"
-        ).read_text()
-        self.assertIn("standard_fp8_cache and fp8_triton_supported", fp8_sparse_mla)
-        self.assertIn("kv.to(tl.float32) * tl.load(kv_scale_ptr)", fp8_sparse_mla)
-        self.assertIn("q.dtype != torch.bfloat16", fp8_sparse_mla)
-
         compressed_workspace = (
             ROOT
-            / "patches/vllm_glm53flash_v0.29/"
-            "0026-compress-glm-indexer-decode-workspace.patch"
+            / "patches/vllm_glm53flashrocm10_v0.29/"
+            "0014-fix-compress-the-GLM-indexer-decode-workspace.patch"
         ).read_text()
         self.assertIn(
             "cdiv(vllm_config.model_config.max_model_len, self.index_kpool)",
@@ -414,8 +411,8 @@ class ProductionProfileTests(unittest.TestCase):
 
         sharded_dflash_projection = (
             ROOT
-            / "patches/vllm_glm53flash_v0.29/"
-            "0027-shard-dflash-aux-projection.patch"
+            / "patches/vllm_glm53flashrocm10_v0.29/"
+            "0015-fix-shard-the-DFlash-auxiliary-projection.patch"
         ).read_text()
         self.assertIn("self.fc = RowParallelLinear(", sharded_dflash_projection)
         self.assertIn("input_is_parallel=False", sharded_dflash_projection)
@@ -423,8 +420,8 @@ class ProductionProfileTests(unittest.TestCase):
 
         staged_ocp_mx = (
             ROOT
-            / "patches/vllm_glm53flash_v0.29/"
-            "0028-stage-ocp-mx-expert-dequantization.patch"
+            / "patches/vllm_glm53flashrocm10_v0.29/"
+            "0016-fix-stage-OCP-MX-expert-dequantization.patch"
         ).read_text()
         self.assertIn("def _prepare_w1_for_gemm(", staged_ocp_mx)
         self.assertIn("def _prepare_w2_for_gemm(", staged_ocp_mx)
@@ -432,49 +429,40 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertIn("w2_gemm = self._prepare_w2_for_gemm", staged_ocp_mx)
 
     def test_glm_embeds_k1_diagnostic_runtime_modes(self) -> None:
-        dflash = load_runtime("glm53-flash", "dflash2-k1")
+        dflash = load_runtime(GLM_PROFILE, "dflash2-k1")
         self.assertEqual(dflash["active_experimental_mode"], "dflash2-k1")
         self.assertEqual(
             dflash["speculative_config"]["num_speculative_tokens"], 1
         )
         self.assertEqual(dflash["speculative_config"]["method"], "dflash")
 
-        extractor = load_runtime("glm53-flash", "extract-hidden-states-k1")
-        speculative = extractor["speculative_config"]
-        self.assertEqual(speculative["method"], "extract_hidden_states")
-        self.assertEqual(speculative["draft_sample_method"], "greedy")
-        self.assertEqual(
-            speculative["draft_model_config"]["hf_config"][
-                "eagle_aux_hidden_state_layer_ids"
-            ],
-            [6, 15, 25, 34, 43],
-        )
+        mtp = load_runtime(GLM_PROFILE, "native-mtp-k1")
+        self.assertEqual(mtp["active_experimental_mode"], "native-mtp-k1")
+        self.assertEqual(mtp["speculative_config"]["method"], "mtp")
+        self.assertEqual(mtp["speculative_config"]["num_speculative_tokens"], 1)
 
-    def test_rocm10_glm_stages_are_explicit_and_start_target_only(self) -> None:
-        path = str(
-            ROOT
-            / "profiles/dev/glm53-flash-rocm10/glm53-flash-rocm10.json"
-        )
+    def test_rocm10_glm_defaults_to_dflash_256k_with_32k_fallbacks(self) -> None:
+        path = GLM_PROFILE
         baseline = load_runtime(path)
-        self.assertIsNone(baseline["speculative_config"])
-        self.assertEqual(baseline["limits"]["max_model_len"], 32768)
+        self.assertEqual(baseline["speculative_config"]["method"], "dflash")
+        self.assertEqual(baseline["speculative_config"]["num_speculative_tokens"], 7)
+        self.assertEqual(baseline["limits"]["max_model_len"], 262144)
         self.assertEqual(baseline["cache"]["dtype"], "bfloat16")
+
+        target = load_runtime(path, "target-only-32k")
+        self.assertIsNone(target["speculative_config"])
+        self.assertEqual(target["limits"]["max_model_len"], 32768)
 
         mtp = load_runtime(path, "native-mtp-k1")
         self.assertEqual(mtp["speculative_config"]["method"], "mtp")
         self.assertEqual(mtp["speculative_config"]["num_speculative_tokens"], 1)
+        self.assertEqual(mtp["limits"]["max_model_len"], 32768)
 
         dflash = load_runtime(path, "dflash2-k7")
         self.assertEqual(dflash["speculative_config"]["method"], "dflash")
         self.assertEqual(dflash["speculative_config"]["num_speculative_tokens"], 7)
-
-        dflash_256k = load_runtime(path, "dflash2-k7-256k")
-        self.assertEqual(dflash_256k["limits"]["max_model_len"], 262144)
-        self.assertEqual(dflash_256k["limits"]["max_num_batched_tokens"], 512)
-        self.assertEqual(dflash_256k["limits"]["gpu_memory_utilization"], 0.97)
-        self.assertEqual(
-            dflash_256k["speculative_config"]["num_speculative_tokens"], 7
-        )
+        self.assertEqual(dflash["limits"]["max_model_len"], 32768)
+        self.assertNotIn("dflash2-k7-256k", baseline["experimental_modes"])
 
     def test_glm_embeds_isolated_long_context_modes(self) -> None:
         target_only = load_runtime("glm53-flash", "target-only-32k")
@@ -583,7 +571,7 @@ class ProductionProfileTests(unittest.TestCase):
         )
 
     def test_vllm_speculative_model_resolves_from_identity_bound_artifact(self) -> None:
-        profile = load_profile("glm53-flash")
+        profile = load_profile(GLM_PROFILE)
         runtime = profile["runtime"]
         command = build_command(
             profile["model"], runtime, Path("/models/glm"), "127.0.0.1", 8000
@@ -597,7 +585,7 @@ class ProductionProfileTests(unittest.TestCase):
         )
 
     def test_glm_is_mrv2_without_prefix_cache(self) -> None:
-        profile = load_profile("glm53-flash")
+        profile = load_profile(GLM_PROFILE)
         runtime = profile["runtime"]
         self.assertFalse(runtime["cache"]["prefix_cache"])
         self.assertEqual(runtime["cache"]["cpu_offload_gb"], 0)
@@ -613,12 +601,12 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(runtime["linear_backend"], "emulation")
 
     def test_glm_model_download_includes_its_chat_template(self) -> None:
-        model = load_profile("glm53-flash")["model"]
+        model = load_profile(GLM_PROFILE)["model"]
         self.assertIn("chat_template.jinja", model["required_files"])
         self.assertIn("chat_template.jinja", model["allow_patterns"])
 
     def test_glm_api_gate_keeps_reasoning_parser_enabled(self) -> None:
-        model = load_profile("glm53-flash")["model"]
+        model = load_profile(GLM_PROFILE)["model"]
         body = api._literal_chat_body(model)
         self.assertNotIn("chat_template_kwargs", body)
         self.assertEqual(body["reasoning_effort"], "low")
@@ -650,7 +638,7 @@ class ProductionProfileTests(unittest.TestCase):
 
     def test_launcher_start_never_replaces_a_running_profile(self) -> None:
         state = {
-            "profile": "glm53-flash",
+            "profile": GLM_PROFILE,
             "url": "http://127.0.0.1:8000",
         }
         with patch("r9700.launcher.managed_state", return_value=state):
@@ -689,7 +677,7 @@ class ProductionProfileTests(unittest.TestCase):
 
     def test_launcher_switch_stops_before_starting_another_profile(self) -> None:
         state = {
-            "profile": "glm53-flash",
+            "profile": GLM_PROFILE,
             "url": "http://127.0.0.1:8000",
         }
         with (
@@ -735,15 +723,15 @@ class ProductionProfileTests(unittest.TestCase):
         ):
             run.return_value.returncode = 0
             launcher.start(
-                "glm53-flash",
-                runtime_mode="extract-hidden-states-k1",
+                GLM_PROFILE,
+                runtime_mode="native-mtp-k1",
                 dry_run=True,
             )
 
         command = run.call_args.args[0]
         mode_index = command.index("--runtime-mode")
         self.assertEqual(
-            command[mode_index + 1], "extract-hidden-states-k1"
+            command[mode_index + 1], "native-mtp-k1"
         )
 
     def test_launcher_waits_before_adding_litellm_to_active_model(self) -> None:
@@ -825,7 +813,7 @@ class ProductionProfileTests(unittest.TestCase):
 
     def test_launcher_stack_switch_stops_both_components_first(self) -> None:
         state = {
-            "profile": "glm53-flash",
+            "profile": GLM_PROFILE,
             "url": "http://127.0.0.1:8000",
         }
         with (
@@ -846,7 +834,7 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(commands[1][1:4], ["start", "--preset", "qwen38-flash"])
 
     def test_launcher_validates_stack_switch_before_stopping(self) -> None:
-        state = {"profile": "glm53-flash"}
+        state = {"profile": GLM_PROFILE}
         with (
             patch("r9700.launcher.managed_state", return_value=state),
             patch("r9700.launcher.subprocess.run") as run,

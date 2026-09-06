@@ -3,8 +3,8 @@
 ## Project Structure & Module Organization
 
 `r9700/` contains the Python 3.12 control plane. Use `./run` as the public
-entry point. Exactly three self-contained deployment files live in
-`profiles/production/`; each embeds its model, runtime and stack preset.
+entry point. Self-contained deployment files live in `profiles/production/`;
+each embeds its model, runtime and stack preset.
 Profile inheritance and `extends` are forbidden. Immutable software pins and
 patch hashes belong in `manifest/`, `constraints/` and `patches/`. Generated
 state stays under ignored `.runtime/` and `logs/`.

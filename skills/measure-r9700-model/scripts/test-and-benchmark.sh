@@ -4,7 +4,7 @@ set -Eeuo pipefail
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/../../.." && pwd)
 
-profile=glm53-flash
+profile=glm53-flash-rocm
 runtime_mode=
 url=http://127.0.0.1:8000
 prompt_tokens=256
