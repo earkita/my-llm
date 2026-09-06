@@ -98,6 +98,7 @@ supported by vLLM's generic block-FP8 fused-MoE path.
 
 There is no known blocker for the qualified 32K development scope. Promotion
 is intentionally blocked on explicit user approval, not on a runtime failure.
-The 17-patch upstream delta remains maintenance debt, and contexts beyond 32K,
-FP8 KV, higher concurrency, and longer thermal soak tests are not qualified by
-this result.
+An exact DFlash2 K7 BF16 KV 256K boundary request was subsequently qualified.
+The 17-patch upstream delta remains maintenance debt, and contexts beyond
+256K, FP8 KV, higher concurrency, and longer thermal soak tests are not
+qualified by this result.

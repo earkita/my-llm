@@ -468,6 +468,14 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(dflash["speculative_config"]["method"], "dflash")
         self.assertEqual(dflash["speculative_config"]["num_speculative_tokens"], 7)
 
+        dflash_256k = load_runtime(path, "dflash2-k7-256k")
+        self.assertEqual(dflash_256k["limits"]["max_model_len"], 262144)
+        self.assertEqual(dflash_256k["limits"]["max_num_batched_tokens"], 512)
+        self.assertEqual(dflash_256k["limits"]["gpu_memory_utilization"], 0.97)
+        self.assertEqual(
+            dflash_256k["speculative_config"]["num_speculative_tokens"], 7
+        )
+
     def test_glm_embeds_isolated_long_context_modes(self) -> None:
         target_only = load_runtime("glm53-flash", "target-only-32k")
         self.assertIsNone(target_only["speculative_config"])

@@ -201,6 +201,28 @@
             "enforce_eager": true
           }
         }
+      },
+      "dflash2-k7-256k": {
+        "status": "qualified-development",
+        "runtime_name": "glm53-flash-quark-mxfp4-rocm10-mrv2-8xr9700-tp8-dflash2-k7-bf16kv-256k",
+        "reason": "ROCm 10 full-boundary comparison with the qualified ROCm 7.14 production DFlash2 K7 256K configuration.",
+        "runtime_overrides": {
+          "limits": {
+            "max_model_len": 262144,
+            "max_num_seqs": 1,
+            "max_num_batched_tokens": 512,
+            "gpu_memory_utilization": 0.97
+          },
+          "speculative_config": {
+            "model_artifact": "dflash2-drafter",
+            "method": "dflash",
+            "num_speculative_tokens": 7,
+            "draft_tensor_parallel_size": 8,
+            "attention_backend": "TRITON_ATTN",
+            "kv_cache_dtype": "bfloat16",
+            "enforce_eager": true
+          }
+        }
       }
     },
     "environment": {
@@ -254,9 +276,9 @@
   },
   "verification": {
     "scope": "rocm10-development-qualification",
-    "verified_context": 32768,
-    "verified_on": "2026-09-05",
-    "best_runtime_mode": "dflash2-k7",
-    "notes": "Target-only, native MTP K1, DFlash2 K1, and DFlash2 K7 passed API correctness and 3x 4096-input/128-output qualification. This remains a development profile pending explicit promotion approval."
+    "verified_context": 262144,
+    "verified_on": "2026-09-06",
+    "best_runtime_mode": "dflash2-k7-256k",
+    "notes": "Target-only, native MTP K1, DFlash2 K1, and DFlash2 K7 passed API correctness and 3x 4096-input/128-output qualification. DFlash2 K7 also passed exact 32K and 256K context-boundary requests on ROCm 10. This remains a development profile pending explicit promotion approval."
   }
 }

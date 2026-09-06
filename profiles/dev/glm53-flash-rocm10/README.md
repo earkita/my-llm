@@ -101,3 +101,16 @@ skills/start-r9700-runtime/scripts/start-runtime.sh \
 It measured 26.21 client-observed decode tokens/s, 868.34 prefill tokens/s,
 and 92.26% draft-token acceptance in the qualification run. See
 `results/qualification-20260905.md` for the complete evidence and caveats.
+
+For the qualified BF16 KV 256K boundary configuration, use the explicit mode:
+
+```bash
+skills/start-r9700-runtime/scripts/start-runtime.sh \
+  --profile profiles/dev/glm53-flash-rocm10/glm53-flash-rocm10.json \
+  --runtime-mode dflash2-k7-256k
+```
+
+This mode matches the production reference's long-context limits:
+`max_model_len=262144`, scheduler chunk 512, and
+`gpu_memory_utilization=0.97`. See
+`results/qualification-256k-20260906.md` for the exact boundary result.
