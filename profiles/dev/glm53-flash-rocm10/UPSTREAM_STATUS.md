@@ -6,7 +6,7 @@ Selected bases:
 - AITER v0.1.21 `7ff5155f3ba772e534b6cf8dddc0099932327b9b`
 - ROCm SDK wheels 10.0.0 and PyTorch 2.13.0+rocm10.0.0
 
-The ROCm 10 recipe carries 17 vLLM patches, compared with 24 in the ROCm
+The ROCm 10 recipe carries 18 vLLM patches, compared with 24 in the ROCm
 7.14 production recipe. No AITER patch is needed: v0.1.21 already contains
 the ROCm 10 sampling and hipCUB compatibility changes missing from the old
 AITER pin. AMD SMI Python 27.0.0+6b0e43f3 comes from the pinned SDK because
@@ -27,7 +27,8 @@ PyPI's 7.0.2 bindings require a symbol absent from ROCm 10's
 | 0015 | omitted | Its scale handling is upstream; its FP4 BMM guard is unreachable because AITER FP4 BMM is disabled. |
 | 0016 | omitted | Bounded diagnostics are not runtime correctness; metrics and logs provide the evidence. |
 | 0017-0023 | new 0007-0013 | Speculative rollback, bounds, page geometry, and bounded workspace fixes remain absent from selected main. |
-| 0024, 0025 | omitted | They are FP8 KV-only; this profile qualifies BF16 KV. |
+| 0024 | omitted | This is diagnostic logging only and does not affect FP8 KV correctness. |
+| 0025 | refreshed as new 0018 | Required to read standard FP8 sparse MLA cache on RDNA4 through Triton because the selected AITER has no gfx1201 kernel for this path. |
 | 0026-0028 | new 0014-0016 | Still needed to fit and run GLM/DFlash on 32 GB R9700 cards. |
 | none | new 0017 | Runtime qualification exposed missing Quark 128x128 block-FP8 MoE dispatch for the checkpoint's MTP layer. |
 
@@ -73,6 +74,7 @@ sampling and hipCUB changes, so its source remains unpatched.
 | 0015 | Replace the replicated DFlash auxiliary projection with a reduced row-parallel projection. | TP8 DFlash K1/K7 load and output gates. Remove when upstream shards it without changing checkpoint semantics. |
 | 0016 | Dequantize OCP MX expert weights one GEMM at a time and release temporaries between stages. | MoE checks and target/DFlash loading within 32 GB. Remove when upstream bounds the peak or gfx1201 gains a qualified native route. |
 | 0017 | Add Quark 128x128 block-FP8 MoE dispatch, scale shapes, and kernel configuration for the checkpoint's native MTP layer. | Focused unit source, formatting, full MTP load, API output, and sustained K1 decode. Remove when Quark block-FP8 MoE support lands upstream. |
+| 0018 | Route RDNA4 standard FP8 sparse MLA through the rope-free Triton reader with explicit `k_scale` dequantization. | FP8 KV warm-up, API correctness, and long-context gates. Remove when AITER or vLLM provides a qualified gfx1201 path. |
 
 Patch 0017 is deliberately narrower than the broader GLM-5.3 Quark naming
 discussion in issue #54547: it only fills the missing MoE scheme already
@@ -90,7 +92,8 @@ supported by vLLM's generic block-FP8 fused-MoE path.
 - Issue #48568 describes an older GLM-5.2 MTP/RCCL failure. Native MTP
   completed real speculative decoding here, so no speculative all-gather
   patch was imported without a reproduced fault.
-- Old FP8 KV patches remain excluded because this profile qualifies BF16 KV.
+- The old FP8 allocation-audit patch remains excluded because it is not a
+  correctness fix; the functional sparse-MLA FP8 reader is refreshed as 0018.
 - Old bounded-diagnostic patches remain excluded because they do not affect
   runtime correctness.
 
@@ -98,6 +101,6 @@ supported by vLLM's generic block-FP8 fused-MoE path.
 
 The qualified DFlash2 K7 BF16 KV 256K runtime was promoted to
 `profiles/production/glm53-flash-rocm.json` after explicit approval. The
-17-patch upstream delta remains maintenance debt, and contexts beyond 256K,
+18-patch upstream delta remains maintenance debt, and contexts beyond 256K,
 FP8 KV, higher concurrency, and longer thermal soak tests are not qualified by
 this result.

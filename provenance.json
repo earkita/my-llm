@@ -51,13 +51,14 @@
         "aiter_sparse_mla_fp8_reference_pr3262_head": "ea42ba3bf0bc8bc1d94151081bc9fca7f8ac9d9d"
       },
       "target_profile": "profiles/production/glm53-flash-rocm.json",
-      "target_profile_sha256": "6d868364ba38ebbabff2de009e4c9a90d0306dded1a7ec77d7cce3668ff7aa6b",
+      "target_profile_sha256": "62941533d20eb329d093743fc703fdbcd3b5c2af63abf4105f8f398657888fa7",
       "intentional_changes": [
         "replaced the llama.cpp GGUF deployment with the AMD Quark MXFP4 checkpoint",
         "migrated the isolated native recipe to ROCm SDK 10.0.0, PyTorch 2.13.0+rocm10.0.0, AITER v0.1.21 and vLLM main 7fbd44cbe",
-        "kept only the 17 ordered vLLM patches still required by the selected ROCm 10 sources and qualified BF16 KV path",
+        "kept 21 ordered vLLM patches required by the selected ROCm 10 sources, including the RDNA4 Triton sparse-MLA readers, non-persistent chunked-prefill fallback, and a decode indexer that reads the shuffled physical kpool layout correctly",
         "promoted identity-bound DFlash2 K7 with BF16 KV and 262144 tokens to the default after exact 32K and 256K boundary passes",
         "retained target-only, native MTP K1, DFlash2 K1 and DFlash2 K7 as explicit qualified 32K control modes",
+        "updated the final three AMD GPU BDFs for the current post-reseat KFD topology",
         "kept the ROCm 7.14 deployment as a separate production profile"
       ]
     },

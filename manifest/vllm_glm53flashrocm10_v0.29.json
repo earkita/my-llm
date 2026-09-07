@@ -80,10 +80,34 @@
       "glm_fp8_indexer_workspace_fix_head": "8eda002d408de25ab957c2aebda6593d3025e581",
       "aiter_sparse_mla_fp8_reference": "https://github.com/ROCm/aiter/pull/3262",
       "aiter_gfx950_sparse_mla": "https://github.com/ROCm/aiter/pull/4919",
+      "rocm_sparse_mla_prefill_corruption_issue": "https://github.com/vllm-project/vllm/issues/40018",
+      "rocm_sparse_mla_long_context_issue": "https://github.com/vllm-project/vllm/issues/47042",
+      "rdna4_paged_mqa_corruption_issue": "https://github.com/vllm-project/vllm/issues/39303",
+      "paged_mqa_torch_fallback_pr": "https://github.com/vllm-project/vllm/pull/39326",
+      "rocm_sparse_mla_prefill_persistent_fix": "https://github.com/vllm-project/vllm/pull/47567",
+      "aiter_sparse_mla_persistent_issue": "https://github.com/ROCm/aiter/issues/4076",
       "glm_spec_verify_cross_platform_issue": "https://github.com/vllm-project/vllm-ascend/issues/15329",
-      "expected_diff_sha256": "b5235df9bca775a33f5486123fb9584e63874b6034a3d2fc1c91553336ca96cc",
+      "expected_diff_sha256": "f2ce0e503003de5f3ee9ddbc7398e31a82fbaa484614f641b1a98628ec8496ac",
       "full_index_diff": true,
       "apply_intent_to_add": true,
+      "accepted_previous_images": [
+        {
+          "sha256": "b5235df9bca775a33f5486123fb9584e63874b6034a3d2fc1c91553336ca96cc",
+          "patch_count": 17
+        },
+        {
+          "sha256": "8c217ed4d978755f5b6ff743b92f95ca0cc13f2d69aec7a1e4dcb062a7f611d6",
+          "patch_count": 18
+        },
+        {
+          "sha256": "3dbf04c66cbb983cfc1d38b380c3edf8b4f2a54de0b6756d1b8315fc80ec5c5a",
+          "patch_count": 19
+        },
+        {
+          "sha256": "9f02a8940bc39c2529f99b4ccf260426f1f6bee19ab57a8184981b444b9ab947",
+          "patch_count": 20
+        }
+      ],
       "patches": [
         {
           "path": "patches/vllm_glm53flashrocm10_v0.29/0001-fix-enable-GLM-5.3-DFlash2-on-current-vLLM-main.patch",
@@ -152,6 +176,22 @@
         {
           "path": "patches/vllm_glm53flashrocm10_v0.29/0017-fix-load-Quark-block-FP8-MoE-layers.patch",
           "sha256": "e9a6858e401ae8b26f09dc24288f0661663c17882d4fd82a68223def94d568f1"
+        },
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.29/0018-fix-route-RDNA4-FP8-sparse-MLA-through-Triton.patch",
+          "sha256": "ba03f592c7635c3bfccef3c80428ab953160488f408a2ff5bec5ea27512d0d21"
+        },
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.29/0019-fix-disable-persistent-sparse-MLA-for-prefill-continuations.patch",
+          "sha256": "4ee972ed2e7f71a53308833ee7e0216872f3b82ebe9e1e5b349dcc46c0050565"
+        },
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.29/0020-fix-route-RDNA4-full-BF16-sparse-MLA-through-Triton.patch",
+          "sha256": "e3aa3d5974ec567dcd000f7b0744f7a0bf923d43d4b8650e852f11d7dbc6b763"
+        },
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.29/0021-fix-read-shuffled-RDNA4-kpool-cache.patch",
+          "sha256": "b15e2b995f2d0b5aefe6effb8df92b2d8052c54c6ca2417255ac5a8df1626dcf"
         }
       ],
       "rocm_sparse_verify_head": "0f1d78db4495fed10384a2b048e70367e61d3dd1",

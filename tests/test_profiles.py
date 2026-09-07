@@ -341,9 +341,8 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(speculative["kv_cache_dtype"], "bfloat16")
 
         self.assertEqual(
-            default_runtime["required_patches"][-10:],
+            default_runtime["required_patches"][-13:],
             [
-                "0008",
                 "0009",
                 "0010",
                 "0011",
@@ -353,6 +352,10 @@ class ProductionProfileTests(unittest.TestCase):
                 "0015",
                 "0016",
                 "0017",
+                "0018",
+                "0019",
+                "0020",
+                "0021",
             ],
         )
         self.assertTrue(
@@ -370,6 +373,10 @@ class ProductionProfileTests(unittest.TestCase):
                 "0015",
                 "0016",
                 "0017",
+                "0018",
+                "0019",
+                "0020",
+                "0021",
             }.issubset(default_runtime["required_patches"])
         )
 
@@ -428,6 +435,56 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertIn("del w1_gemm", staged_ocp_mx)
         self.assertIn("w2_gemm = self._prepare_w2_for_gemm", staged_ocp_mx)
 
+        fp8_sparse_mla = (
+            ROOT
+            / "patches/vllm_glm53flashrocm10_v0.29/"
+            "0018-fix-route-RDNA4-FP8-sparse-MLA-through-Triton.patch"
+        ).read_text()
+        self.assertIn(
+            "standard_fp8_cache and fp8_triton_supported", fp8_sparse_mla
+        )
+        self.assertIn(
+            "kv.to(tl.float32) * tl.load(kv_scale_ptr)", fp8_sparse_mla
+        )
+        self.assertIn(
+            "RDNA4 Triton FP8 sparse MLA requires a BF16 query",
+            fp8_sparse_mla,
+        )
+
+        persistent_prefill = (
+            ROOT
+            / "patches/vllm_glm53flashrocm10_v0.29/"
+            "0019-fix-disable-persistent-sparse-MLA-for-prefill-continuations.patch"
+        ).read_text()
+        self.assertIn("is_chunked_continuation", persistent_prefill)
+        self.assertIn("if not use_triton_sparse and use_persistent", persistent_prefill)
+
+        full_bf16_sparse_mla = (
+            ROOT
+            / "patches/vllm_glm53flashrocm10_v0.29/"
+            "0020-fix-route-RDNA4-full-BF16-sparse-MLA-through-Triton.patch"
+        ).read_text()
+        self.assertIn("rdna4_triton_supported", full_bf16_sparse_mla)
+        self.assertIn("SAME_QK_V", full_bf16_sparse_mla)
+        self.assertIn("BLOCK_V", full_bf16_sparse_mla)
+
+        rdna4_shuffled_kpool_decode = (
+            ROOT
+            / "patches/vllm_glm53flashrocm10_v0.29/"
+            "0021-fix-read-shuffled-RDNA4-kpool-cache.patch"
+        ).read_text()
+        self.assertIn(
+            "def _rdna4_fp8_paged_mqa_logits_kernel(",
+            rdna4_shuffled_kpool_decode,
+        )
+        self.assertIn(
+            "shuffled_k_offsets = (", rdna4_shuffled_kpool_decode
+        )
+        self.assertIn(
+            "if _ON_RDNA4 and block_size > 1:",
+            rdna4_shuffled_kpool_decode,
+        )
+
     def test_glm_embeds_k1_diagnostic_runtime_modes(self) -> None:
         dflash = load_runtime(GLM_PROFILE, "dflash2-k1")
         self.assertEqual(dflash["active_experimental_mode"], "dflash2-k1")
@@ -463,6 +520,13 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(dflash["speculative_config"]["num_speculative_tokens"], 7)
         self.assertEqual(dflash["limits"]["max_model_len"], 32768)
         self.assertNotIn("dflash2-k7-256k", baseline["experimental_modes"])
+
+        fp8_1m = load_runtime(path, "long-context-1m-fp8-dflash2")
+        self.assertEqual(fp8_1m["limits"]["max_model_len"], 1048576)
+        self.assertEqual(fp8_1m["limits"]["kv_cache_memory_bytes"], 6591622400)
+        self.assertEqual(fp8_1m["cache"]["dtype"], "fp8")
+        self.assertEqual(fp8_1m["speculative_config"]["method"], "dflash")
+        self.assertEqual(fp8_1m["speculative_config"]["kv_cache_dtype"], "fp8")
 
     def test_glm_embeds_isolated_long_context_modes(self) -> None:
         target_only = load_runtime("glm53-flash", "target-only-32k")

@@ -140,7 +140,7 @@ all ECC counters remained zero and the inspected application and kernel logs
 contained no OOM, illegal memory access, GPU reset, HSA/amdgpu error, AER or
 machine-check event.
 
-The ROCm 10 recipe carries 17 ordered vLLM patches. Its cache-page geometry,
+The ROCm 10 recipe carries 18 ordered vLLM patches. Its cache-page geometry,
 slot guards, bounded indexer workspaces, sharded DFlash projection and staged
 OCP-MX dequantization are covered by focused repository tests and by the 32K
 and 256K runtime gates. Detailed identities, measurements and artifact hashes

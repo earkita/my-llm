@@ -1,0 +1,32 @@
+diff --git a/vllm/v1/attention/backends/mla/rocm_aiter_mla_sparse.py b/vllm/v1/attention/backends/mla/rocm_aiter_mla_sparse.py
+--- a/vllm/v1/attention/backends/mla/rocm_aiter_mla_sparse.py
++++ b/vllm/v1/attention/backends/mla/rocm_aiter_mla_sparse.py
+@@ -627,14 +627,24 @@ class ROCMAiterMLASparseMetadataBuilder(
+         reduce_indptr = None
+         reduce_final_map = None
+         reduce_partial_map = None
+-        if not use_triton_sparse:
+-            num_reqs = common_attn_metadata.num_reqs
++        num_reqs = common_attn_metadata.num_reqs
++        total_seq_lens = common_attn_metadata.seq_lens_cpu[:num_reqs].numpy()
++        step_query_lens = seg_lengths[:num_reqs]
++        # The AITER persistent work-stealing path can corrupt multi-token
++        # chunked-prefill continuations on ROCm (vllm#47042 / aiter#4076).
++        # Keep it for decode and fresh single-chunk prefills, where it is both
++        # supported and faster, and use the split-KV path for continuations.
++        is_chunked_continuation = (step_query_lens > 1) & (
++            total_seq_lens > step_query_lens
++        )
++        use_persistent = not is_chunked_continuation.any()
++        if not use_triton_sparse and use_persistent:
+             clamped_seq_lens = np.minimum(
+-                common_attn_metadata.seq_lens_cpu[:num_reqs].numpy(),
++                total_seq_lens,
+                 self.topk_tokens,
+             )
+             clamped_context_lens = np.minimum(
+-                common_attn_metadata.seq_lens_cpu[:num_reqs].numpy() - seg_lengths,
++                total_seq_lens - step_query_lens,
+                 self.topk_tokens,
+             )
+             metadata_key = (

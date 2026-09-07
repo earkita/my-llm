@@ -58,7 +58,11 @@ class AmdSmiSampler:
         self._closed = False
         self.memory_path = _service_memory_path(unit)
         self.gpu_handles = self.amdsmi.amdsmi_get_processor_handles()
-        sockets = self.amdsmi.amdsmi_get_cpusocket_handles()
+        if hasattr(self.amdsmi, "amdsmi_get_cpusocket_handles"):
+            sockets = self.amdsmi.amdsmi_get_cpusocket_handles()
+        else:
+            cpu_handles = self.amdsmi.amdsmi_get_cpu_handles()
+            sockets = cpu_handles.get("processor_handles", [])
         self.cpu_handle = sockets[0] if sockets else None
         self.gpu_bdfs = [
             self.amdsmi.amdsmi_get_gpu_device_bdf(handle)
@@ -191,20 +195,37 @@ def summarize_samples(samples: Sequence[dict[str, Any]]) -> dict[str, Any]:
                 for gpu in row.get("gpus", [])
                 if gpu["gpu"] == gpu_index
             ]
-            used = [float(row["vram_used_mb"]) for row in records]
-            total = [float(row["vram_total_mb"]) for row in records]
-            gfx = [float(row["gfx_percent"]) for row in records]
-            power = [float(row["socket_power_w"]) for row in records]
+            used = [
+                value
+                for row in records
+                if (value := _number(row.get("vram_used_mb"))) is not None
+            ]
+            free = [
+                total - used_value
+                for row in records
+                if (used_value := _number(row.get("vram_used_mb"))) is not None
+                and (total := _number(row.get("vram_total_mb"))) is not None
+            ]
+            gfx = [
+                value
+                for row in records
+                if (value := _number(row.get("gfx_percent"))) is not None
+            ]
+            power = [
+                value
+                for row in records
+                if (value := _number(row.get("socket_power_w"))) is not None
+            ]
             gpu_summary.append(
                 {
                     "gpu": gpu_index,
                     "bdf": records[0]["bdf"],
-                    "vram_used_peak_mb": max(used),
-                    "vram_free_min_mb": min(t - u for t, u in zip(total, used)),
+                    "vram_used_peak_mb": max(used) if used else None,
+                    "vram_free_min_mb": min(free) if free else None,
                     "gfx_mean_percent": _mean(gfx),
-                    "gfx_peak_percent": max(gfx),
+                    "gfx_peak_percent": max(gfx) if gfx else None,
                     "power_mean_w": _mean(power),
-                    "power_peak_w": max(power),
+                    "power_peak_w": max(power) if power else None,
                 }
             )
         summary[phase] = {
