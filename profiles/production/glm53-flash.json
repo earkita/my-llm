@@ -213,6 +213,20 @@
             "ROCBLAS_USE_HIPBLASLT": "0"
           }
         }
+      },
+      "mxfp4-gemv-dflash2-k7-fp8-1m-tp8-noep": {
+        "status": "diagnostic-only",
+        "runtime_name": "glm53-flash-quark-mxfp4-rocm10-mrv2-8xr9700-tp8-noep-mxfp4gemv-dflash2-k7-fp8kv-1m",
+        "reason": "Qualified A/B diagnostic using tensor-sharded MoE on TP8 without expert parallelism; measured 75.06 decode tok/s versus 26.64 tok/s with EP8 at 2048x512, concurrency 1.",
+        "runtime_overrides": {
+          "parallel": {
+            "tensor": 8,
+            "pipeline": 1,
+            "data": 1,
+            "enable_expert_parallel": false,
+            "disable_custom_all_reduce": true
+          }
+        }
       }
     },
     "environment": {

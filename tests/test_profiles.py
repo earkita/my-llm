@@ -489,11 +489,14 @@ class ProductionProfileTests(unittest.TestCase):
             rdna4_shuffled_kpool_decode,
         )
 
-    def test_glm_keeps_only_the_bf16_256k_fallback_mode(self) -> None:
+    def test_glm_keeps_only_qualified_diagnostic_modes(self) -> None:
         baseline = load_runtime(GLM_PROFILE)
         self.assertEqual(
             set(baseline["experimental_modes"]),
-            {"mxfp4-gemv-dflash2-k7-256k"},
+            {
+                "mxfp4-gemv-dflash2-k7-256k",
+                "mxfp4-gemv-dflash2-k7-fp8-1m-tp8-noep",
+            },
         )
 
         fallback = load_runtime(
@@ -508,6 +511,18 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(
             fallback["environment"]["VLLM_ROCM_USE_TRITON_MXFP4_GEMV"],
             "1",
+        )
+
+        tp_noep = load_runtime(
+            GLM_PROFILE,
+            "mxfp4-gemv-dflash2-k7-fp8-1m-tp8-noep",
+        )
+        self.assertEqual(tp_noep["parallel"]["tensor"], 8)
+        self.assertFalse(tp_noep["parallel"]["enable_expert_parallel"])
+        self.assertEqual(tp_noep["limits"]["max_model_len"], 1048576)
+        self.assertEqual(tp_noep["cache"]["dtype"], "fp8")
+        self.assertEqual(
+            tp_noep["speculative_config"]["num_speculative_tokens"], 7
         )
 
     def test_rocm10_glm_defaults_to_packed_gemv_fp8_1m(self) -> None:

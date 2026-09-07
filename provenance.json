@@ -39,14 +39,14 @@
         "freetoken_rocm_mxfp4_decode_reference": "89f14790de7bbc69dd61a999ee76b86ba8316f26"
       },
       "target_profile": "profiles/production/glm53-flash.json",
-      "target_profile_sha256": "48141d0f723723d8343d6477e10834aa8044973c20921790596720a6ce9499e0",
+      "target_profile_sha256": "ddd270fe21d9d4792e23e6d09c7f1fb0105edb34afbbf37058cdad364d4477e5",
       "intentional_changes": [
         "replaced the llama.cpp GGUF deployment with the AMD Quark MXFP4 checkpoint",
         "migrated the isolated native recipe to ROCm SDK 10.0.0, PyTorch 2.13.0+rocm10.0.0, AITER v0.1.21 and vLLM main 7fbd44cbe",
         "kept 22 ordered vLLM patches required by the selected ROCm 10 sources, including the RDNA4 Triton sparse-MLA readers, non-persistent chunked-prefill fallback, shuffled physical kpool decode, and an opt-in packed MXFP4 decode GEMV",
         "replaced the former ROCm 7.14 glm53-flash profile with the qualified ROCm 10 deployment",
         "promoted packed RDNA4 MXFP4 decode GEMV with DFlash2 K7, FP8 KV and 1048576 tokens to the default after an exact boundary pass and four full-context NIAH placements",
-        "retained only the packed GEMV DFlash2 K7 BF16-KV 262144-token configuration as an explicit fallback mode",
+        "retained the packed GEMV DFlash2 K7 BF16-KV 262144-token configuration as an explicit fallback mode and added the qualified TP8 without EP FP8-KV 1M configuration as a diagnostic mode",
         "updated the final three AMD GPU BDFs for the current post-reseat KFD topology",
         "removed the superseded ROCm 7.14 GLM recipe and profile"
       ]
