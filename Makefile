@@ -9,7 +9,6 @@ unit:
 dry-run:
 	@./run install --profile deepseek-v4-flash --dry-run
 	@./run install --profile glm53-flash --dry-run
-	@./run install --profile glm53-flash-rocm --dry-run
 	@./run install --profile qwen38-flash --dry-run
 
 check: unit dry-run

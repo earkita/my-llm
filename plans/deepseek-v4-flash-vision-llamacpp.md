@@ -119,8 +119,7 @@ patchy.
 
 ## Plan zmian w repo
 
-Repo wymaga dokładnie trzech płaskich plików produkcyjnych. Dlatego nie dodawać
-czwartego profilu:
+Repo wymaga płaskich, samowystarczalnych plików produkcyjnych bez `extends`.
 
 1. Zastąpić zawartość `profiles/production/deepseek-v4-flash.json` nowym
    deploymentem llama.cpp, zachowując nazwę profilu `deepseek-v4-flash`.
@@ -130,7 +129,7 @@ czwartego profilu:
      `.runtime/recipes/llamacpp_deepseekv4vision_b10793/`;
    - official `ggml-org/llama.cpp`, pin pełnego SHA;
    - bez patchy na pierwszy build;
-   - `foundation_recipe=vllm_glm53flash_v0.29`, aby użyć lokalnego ROCm 7.14.
+   - `foundation_recipe=vllm_qwen38flash_pr53896`, aby użyć lokalnego ROCm 7.14.
 3. Usunąć nieużywany recipe `vllm_deepseekv4flash_v0.28`, jego manifest i
    patche. Nie zostawiać go tylko jako foundation: po zmianie profilu jego
    post-install smoke sprawdzałby inny backend.

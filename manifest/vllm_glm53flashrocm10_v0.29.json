@@ -87,7 +87,9 @@
       "rocm_sparse_mla_prefill_persistent_fix": "https://github.com/vllm-project/vllm/pull/47567",
       "aiter_sparse_mla_persistent_issue": "https://github.com/ROCm/aiter/issues/4076",
       "glm_spec_verify_cross_platform_issue": "https://github.com/vllm-project/vllm-ascend/issues/15329",
-      "expected_diff_sha256": "f2ce0e503003de5f3ee9ddbc7398e31a82fbaa484614f641b1a98628ec8496ac",
+      "rdna4_mxfp4_decode_reference": "https://github.com/Maxritz/FreeToken-ROCm/blob/89f14790de7bbc69dd61a999ee76b86ba8316f26/python/freetoken/kernel/triton/mxfp4_moe.py",
+      "rdna4_mxfp4_decode_reference_head": "89f14790de7bbc69dd61a999ee76b86ba8316f26",
+      "expected_diff_sha256": "2b61ddd6dade003b9ccf1a7b79b3a56722bc749e67c7818dcd4b44ac5b55fe6c",
       "full_index_diff": true,
       "apply_intent_to_add": true,
       "accepted_previous_images": [
@@ -106,6 +108,10 @@
         {
           "sha256": "9f02a8940bc39c2529f99b4ccf260426f1f6bee19ab57a8184981b444b9ab947",
           "patch_count": 20
+        },
+        {
+          "sha256": "f2ce0e503003de5f3ee9ddbc7398e31a82fbaa484614f641b1a98628ec8496ac",
+          "patch_count": 21
         }
       ],
       "patches": [
@@ -192,6 +198,10 @@
         {
           "path": "patches/vllm_glm53flashrocm10_v0.29/0021-fix-read-shuffled-RDNA4-kpool-cache.patch",
           "sha256": "b15e2b995f2d0b5aefe6effb8df92b2d8052c54c6ca2417255ac5a8df1626dcf"
+        },
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.29/0022-perf-add-packed-RDNA4-MXFP4-decode-GEMV.patch",
+          "sha256": "15b73faf1397b21f8a775d07df3b3e24f3e55abe5743888962dd8f37b3b7fa0c"
         }
       ],
       "rocm_sparse_verify_head": "0f1d78db4495fed10384a2b048e70367e61d3dd1",

@@ -7,7 +7,7 @@ description: Start or stop the complete local R9700 inference stack in dependenc
 
 Run from the repository containing this skill.
 
-Start the default `glm53-flash-rocm` preset. It binds the model, runtime, LiteLLM
+Start the default `glm53-flash` preset. It binds the model, runtime, LiteLLM
 routing and Claude Code settings as one tested selection:
 
 ```bash
@@ -22,8 +22,10 @@ Select another complete preset instead of choosing its components separately:
 ```
 
 The default GLM preset selects the verified vLLM Quark/MXFP4 stack with MRV2,
-TP8/EP8, DFlash2 K=7, BF16 KV and a 256K context. Prefix caching is disabled.
-`--runtime-mode target-only-32k` selects the qualified fallback. Qwen selects
+TP8/EP8, packed RDNA4 GEMV, DFlash2 K=7, FP8 KV and a 1M context. Prefix
+caching is disabled.
+`--runtime-mode mxfp4-gemv-dflash2-k7-256k` selects the BF16 256K
+fallback. Qwen selects
 the production-ready vLLM 0.28 cache-safe MTP K=2 alternative.
 
 The script checks that LiteLLM is installed and that every visible GPU has a
@@ -42,7 +44,7 @@ Stop the complete stack in reverse dependency order:
 Preview either operation without changing service state:
 
 ```bash
-skills/manage-r9700-stack/scripts/manage-stack.sh start --preset glm53-flash-rocm --dry-run
+skills/manage-r9700-stack/scripts/manage-stack.sh start --preset glm53-flash --dry-run
 skills/manage-r9700-stack/scripts/manage-stack.sh stop --dry-run
 ```
 

@@ -24,7 +24,8 @@ description: Validate a running R9700 vLLM model through its API and benchmark c
    ```
 
    For an explicit embedded runtime mode, pass the same identity to both
-   checks with `--runtime-mode`, for example `--runtime-mode target-only-32k`.
+   checks with `--runtime-mode`, for example
+   `--runtime-mode mxfp4-gemv-dflash2-k7-256k`.
 
 Use `--dry-run` to preview both commands without contacting the API.
 

@@ -12,7 +12,7 @@ python="$repo_root/.venv/bin/python"
   exit 1
 }
 
-profile=glm53-flash-rocm
+profile=glm53-flash
 ready_timeout=900
 required_power_cap_w=285
 dry_run=0

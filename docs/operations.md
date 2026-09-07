@@ -9,7 +9,7 @@
 ./run install --profile deepseek-v4-flash
 ```
 
-Analogicznie użyj `glm53-flash`, `glm53-flash-rocm` albo `qwen38-flash`.
+Analogicznie użyj `glm53-flash` albo `qwen38-flash`.
 Dry-run sprawdza hashe constraints i patchy bez pobierania źródeł.
 
 Przed instalacją proxy ustaw niepusty, losowy `LITELLM_MASTER_KEY` w lokalnym
@@ -31,7 +31,7 @@ Dla istniejących wag:
 ./run model verify qwen38-flash
 ```
 
-`glm53-flash-rocm` przypina target Quark/MXFP4 oraz domyślny drafter DFlash2 K7.
+`glm53-flash` przypina target Quark/MXFP4 oraz domyślny drafter DFlash2 K7.
 Plikiem draftera jest
 `/mnt/ai/models/glm/GLM-5.3-Flash-DFlash2-HF-bf582e4/model.safetensors`.
 Download pobiera go automatycznie, a adopt i start wymagają poprawnego rozmiaru
@@ -88,22 +88,18 @@ skills/stop-r9700-runtime/scripts/stop-runtime.sh
 ```
 
 Zwykły start GLM uruchamia produkcyjny profil ROCm 10 z MRV2, TP8/EP8,
-DFlash2 K7, BF16 KV i kontekstem 256K. Target-only, natywne MTP K1 oraz
-DFlash2 K1/K7 pozostają jawnymi trybami kontrolnymi o kontekście 32K:
+packed RDNA4 MXFP4 decode GEMV, DFlash2 K7, FP8 KV i kontekstem 1M. Pozostaje
+jeden jawny fallback z tym samym GEMV i DFlash2, ale BF16 KV oraz 256K:
 
 ```bash
-./run launcher start glm53-flash-rocm
-./run launcher start glm53-flash-rocm --runtime-mode target-only-32k
-./run launcher start glm53-flash-rocm --runtime-mode native-mtp-k1
-./run launcher start glm53-flash-rocm --runtime-mode dflash2-k1
-./run launcher start glm53-flash-rocm --runtime-mode dflash2-k7
+./run launcher start glm53-flash
+./run launcher start glm53-flash \
+  --runtime-mode mxfp4-gemv-dflash2-k7-256k
 ```
 
-Po testach zatrzymaj usługę przed zmianą trybu. Produkcyjny ROCm 10 K7 przeszedł
-dokładny test graniczny `262016 + 128 = 262144`: 606.78 tok/s prefill,
-26.99 tok/s decode i 111/111 zaakceptowanych draftów. Niezależny profil
-`glm53-flash` zachowuje dotychczasowy produkcyjny deployment ROCm 7.14 wraz z
-jego trybami diagnostycznymi.
+Po testach zatrzymaj usługę przed zmianą trybu. Produkcyjny runtime przeszedł
+dokładny test graniczny `1,048,560 + 16 = 1,048,576` oraz NIAH 4/4 na pełnym
+kontekście.
 
 Skrypt startowy wymaga PPT0 najwyżej 285 W na wszystkich widocznych GPU i
 wykonuje host preflight. Niższy limit przechodzi kontrolę. Nie zastępuje
@@ -125,7 +121,7 @@ można sprawdzić bez ręcznego liczenia promptu:
 
 ```bash
 skills/measure-r9700-model/scripts/test-and-benchmark.sh \
-  --profile glm53-flash-rocm \
+  --profile glm53-flash \
   --output-tokens 128 \
   --full-context \
   --concurrency 1 --repetitions 1 --warmup 0
