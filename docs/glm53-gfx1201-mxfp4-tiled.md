@@ -1,13 +1,11 @@
 # GLM-5.3 output-tiled MXFP4 GEMV on gfx1201
 
-This development lane isolates one decode optimization from the production
-`glm53-flash` runtime. It keeps the v0.29 software pins and first 25 vLLM
+This production lane isolates one decode optimization from the prior v0.29
+`glm53-flash` runtime. It keeps the same software pins and first 25 vLLM
 patches, then adds only patch `0026`: an output-tiled Triton MXFP4 GEMV with an
-in-recipe scalar rollback. The explicit profile is
-`profiles/dev/glm53-flash-rocm10-mxfp4-tiled.json`.
-
-The lane is deliberately unqualified. The active production service must not
-be stopped or replaced merely to inspect, build, or preview these gates.
+in-recipe scalar rollback. The qualified profile is
+`profiles/production/glm53-flash.json`; the prior deployment remains available
+as `profiles/production/glm53-flash-v029-rollback.json`.
 
 ## Current state on 2026-09-09
 
@@ -25,10 +23,19 @@ be stopped or replaced merely to inspect, build, or preview these gates.
   decode from `48.835` to `50.435 tok/s` (`+3.28%`) and minimum decode from
   `48.449` to `49.403 tok/s` (`+1.97%`). Mean TTFT regressed `0.63%`, mean E2E
   regressed `0.32%`, and observed prefill regressed `0.63%`.
-- The deployment candidate now exactly matches the active production context
-  topology: 768K maximum context, 4.96 GB fixed FP8 KV reservation, 4096
-  batched tokens, and TP8-sharded Vision weights. The full-model A/B must be
-  repeated in this final topology; v0.29 remains the production rollback.
+- The final deployment-exact nine-request A/B measured 49.820 mean and 48.790
+  minimum decode tok/s for BN8 versus 49.065 and 48.213 for scalar: +1.54%
+  mean and +1.20% minimum. Mean TTFT changed by +0.09%; mean E2E improved by
+  0.05%.
+- API and deterministic Vision smoke passed. NIAH 256K passed all four 5%,
+  35%, 65% and 95% placements.
+- The exact `786368 + 64 = 786432` boundary returned the expected 95% needle
+  in 746.09 seconds. Across 746 one-second telemetry samples, all GPUs averaged
+  at least 99.84% activity, peak power was 238 W, host memory available stayed
+  above 302.93 GB, and the minimum reported VRAM margin was 20 MiB.
+- No new MCE, watchdog, OOM, GPU reset or runtime traceback appeared during
+  the qualification window. v0.31 was promoted; v0.29 remains the explicit
+  topology-exact rollback.
 
 v0.31 is simpler to qualify than v0.30: it changes only a bounded vLLM decode
 kernel and provides a scalar control under the same build. v0.30 changes both
@@ -41,7 +48,7 @@ Validate the immutable plan and preview the GPU commands:
 
 ```bash
 ./run install \
-  --profile profiles/dev/glm53-flash-rocm10-mxfp4-tiled.json \
+  --profile glm53-flash \
   --dry-run
 
 .venv/bin/python scripts/qualify-mxfp4-tiled-gemv.py --dry-run
@@ -72,7 +79,7 @@ benchmark:
 
 ```bash
 skills/measure-r9700-model/scripts/test-and-benchmark.sh \
-  --profile profiles/dev/glm53-flash-rocm10-mxfp4-tiled.json \
+  --profile glm53-flash \
   --runtime-mode scalar-gemv-rollback \
   --prompt-tokens 32768 --output-tokens 128 \
   --concurrency 1 --repetitions 9 --warmup 1

@@ -55,12 +55,13 @@ checkoutów.
 ./run install --profile glm53-flash
 ./run model verify glm53-flash
 
-# domyślnie: MRV2, TP8/no-EP, packed MXFP4 GEMV, DFlash2 K4, FP8 KV, 1M
+# domyślnie: v0.31, MRV2, TP8/no-EP, tiled BN8 MXFP4 GEMV,
+# DFlash2 K4, FP8 KV, 768K i Vision
 ./run launcher start glm53-flash
 
-# jawny fallback BF16 KV, 256K
-./run launcher start glm53-flash \
-  --runtime-mode mxfp4-gemv-dflash2-k7-256k
+# topology-exact rollback: v0.29, scalar GEMV, 768K i Vision
+./run launcher start glm53-flash-v029-rollback \
+  --runtime-mode mxfp4-gemv-dflash2-k4-fp8-768k-vision-weights
 
 skills/start-r9700-runtime/scripts/start-runtime.sh --profile glm53-flash
 ./run service status
@@ -100,13 +101,21 @@ checkpoint. GLM dodatkowo przypina i sprawdza rozmiar oraz SHA-256 draftera
 DFlash2. Serwis nie wystartuje, jeżeli którykolwiek wymagany artefakt ma inną
 tożsamość.
 
-Domyślny `glm53-flash` używa izolowanej recepty ROCm 10, MRV2, TP8 bez Expert
-Parallel, packed RDNA4 MXFP4 decode GEMV, DFlash2 K4, FP8 KV oraz kontekstu
-1,048,576 tokenów; prefix cache i CPU offload są wyłączone. K4 osiągnął 29.28
-tok/s wobec 27.03 tok/s dla K3 w reprezentatywnym teście decode. Próba
-graniczna `1,048,560 + 16` oraz NIAH 4/4 na pełnym kontekście zostały wykonane
-wcześniej z K7 przy tej samej geometrii FP8 KV. Jawne tryby diagnostyczne
-zachowują K3 i K7 jako rollback oraz BF16 KV z kontekstem 262,144 tokenów.
+Domyślny `glm53-flash` używa recepty v0.31 ROCm 10, MRV2, TP8 bez Expert
+Parallel, output-tiled BN8 RDNA4 MXFP4 decode GEMV, DFlash2 K4, FP8 KV,
+kontekstu 786,432 tokenów i TP8-sharded Vision; prefix cache i CPU offload są
+wyłączone. W deployment-exact A/B BN8 poprawił średni decode o 1.54%, a
+minimum o 1.20% względem scalar. Vision smoke, NIAH 256K 4/4 i dokładna
+granica `786,368 + 64 = 786,432` przeszły 9 września 2026. Osobny profil
+`glm53-flash-v029-rollback` zachowuje poprzednią receptę i wszystkie jej tryby.
+
+Podczas pracy Claude Code można bez restartu obserwować kolejkę, zajęcie KV i
+estymowany postęp prefillu, a po zakończeniu żądania dokładny server-side
+prefill, decode, TTFT i E2E:
+
+```bash
+.venv/bin/python scripts/watch-claude-throughput.py
+```
 
 Szczegóły: [architektura](docs/architecture.md),
 [operacje](docs/operations.md), [dowody i ograniczenia](docs/verification.md),

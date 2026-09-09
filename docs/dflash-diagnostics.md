@@ -26,7 +26,7 @@ mkdir -p .runtime/diagnostics/glm-dflash
 Start the explicit BF16-KV 256K fallback, then capture its baseline:
 
 ```bash
-./run launcher start glm53-flash \
+./run launcher start glm53-flash-v029-rollback \
   --runtime-mode mxfp4-gemv-dflash2-k7-256k
 .venv/bin/python scripts/dflash_diagnostics.py capture \
   --case .runtime/diagnostics/glm-dflash/case.json \
@@ -74,12 +74,12 @@ used only as an HTTP header and is never written to an artifact.
 
 ## Qualification evidence on R9700
 
-The production default `glm53-flash` uses ROCm 10, MRV2, TP8 without expert
-parallelism, packed RDNA4 MXFP4 decode GEMV, DFlash2 K4, FP8 KV and a
-1,048,576-token context.
-Prefix caching is disabled. The explicit
-`mxfp4-gemv-dflash2-k7-256k` mode keeps the same GEMV and DFlash2 width
-with BF16 KV at 262,144 tokens.
+The production default `glm53-flash` uses ROCm 10 v0.31, MRV2, TP8 without
+expert parallelism, output-tiled BN8 RDNA4 MXFP4 decode GEMV, DFlash2 K4, FP8
+KV, Vision and a 786,432-token context. Prefix caching is disabled. The
+explicit `mxfp4-gemv-dflash2-k7-256k` mode remains in the
+`glm53-flash-v029-rollback` profile and uses scalar GEMV with BF16 KV at
+262,144 tokens.
 
 Before K4 promotion, the exact K7 full-context request used 1,048,560 prompt
 plus 16 output tokens,
@@ -87,7 +87,7 @@ measured about 607 tok/s observed prefill and 28.31 tok/s decode. Full-context
 NIAH then passed 4/4 placements at 5%, 35%, 65% and 95% depth without an ECC,
 AER or runtime OOM report.
 
-The ROCm 10 recipe carries 25 ordered vLLM patches. Its cache-page geometry,
+The default ROCm 10 v0.31 recipe carries 26 ordered vLLM patches. Its cache-page geometry,
 slot guards, bounded indexer workspaces, sharded DFlash projection, staged
 OCP-MX dequantization and packed RDNA4 MXFP4 GEMV are covered by focused
 repository tests.

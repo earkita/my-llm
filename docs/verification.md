@@ -23,21 +23,43 @@ Profil produkcyjny `glm53-flash` przypina:
 - receptę ROCm 10 z PyTorch `2.13.0+rocm10.0.0` i AITER v0.1.21
   `7ff5155f3ba772e534b6cf8dddc0099932327b9b`.
 
-Domyślna konfiguracja to MRV2, TP8 bez Expert Parallel, PP1, packed RDNA4
-MXFP4 decode GEMV, DFlash2 K4 z draft TP8, FP8 KV, 1,048,576 tokenów,
-`gpu_memory_utilization=0.995`, concurrency 1, bez CPU offload i bez prefix
-cache. Target używa `ROCM_AITER_MLA_SPARSE`, a niekauzalny draft
-`TRITON_ATTN`.
+Domyślna konfiguracja to recepta v0.31, MRV2, TP8 bez Expert Parallel, PP1,
+output-tiled BN8 RDNA4 MXFP4 decode GEMV, DFlash2 K4 z draft TP8, FP8 KV,
+786,432 tokenów, `max_num_batched_tokens=4096`, stała rezerwa KV 4.96 GB,
+concurrency 1, bez CPU offload i bez prefix cache. Vision jest aktywne z
+wagami encoder sharded przez TP8, `TRITON_ATTN`, limitem ośmiu obrazów i 4096
+tokenów obrazu. Target językowy używa `ROCM_AITER_MLA_SPARSE`.
 
-Reprezentatywny test dziewięciu krótkich przebiegów decode zmierzył dla K4
-29.28 tok/s wobec 27.03 tok/s dla K3. Dokładna próba graniczna wykonana przed
-promocją K4, z DFlash2 K7 i tą samą geometrią FP8 KV, wykonała
-`1,048,560 + 16 = 1,048,576` tokenów przy około 607 tok/s obserwowanego
-prefill i 28.31 tok/s decode. NIAH na pełnym kontekście przeszedł 4/4 położeń
-igły: 5%, 35%, 65% i 95%. W tym przebiegu nie odnotowano ECC, AER ani OOM.
+Kwalifikacja 9 września 2026 dała następujące wyniki:
 
-Jawne tryby alternatywne zachowują K3 i K7 jako rollback. Tryb
-`mxfp4-gemv-dflash2-k7-256k` używa BF16 KV oraz limitu 262,144 tokenów.
+- focused kernel gate przeszedł 16/16, a każdy wariant tiled był zgodny ze
+  scalar; w 500 powtórzeniach BN8 osiągnął 1.039x scalar dla up projection i
+  2.261x dla down projection;
+- deployment-exact A/B `32768 x 128`, C1, dziewięć próbek na wariant dał
+  49.820 tok/s średniego decode dla BN8 wobec 49.065 dla scalar (+1.54%) oraz
+  minimum 48.790 wobec 48.213 tok/s (+1.20%); średni TTFT zmienił się o
+  +0.09%, a E2E poprawił o 0.05%;
+- API smoke i deterministyczny Vision smoke przeszły;
+- NIAH 256K przeszedł 4/4 położeń igły: 5%, 35%, 65% i 95%;
+- dokładna granica `786,368 + 64 = 786,432` zwróciła właściwy sekret; model
+  faktycznie przetworzył 786,368 tokenów promptu, wygenerował 18 tokenów i
+  zakończył request po 746.09 s;
+- 746 próbek telemetrycznych z granicy pokazało minimum 99.84% średniej
+  aktywności GPU, maksymalną moc 238 W, co najmniej 302.93 GB dostępnej pamięci
+  hosta i minimalny raportowany margines VRAM 20 MiB;
+- w całym oknie nie pojawił się nowy MCE, watchdog, OOM, reset GPU ani
+  traceback runtime.
+
+Pierwszy izolowany pomiar rzeczywistego żądania Claude Code przez LiteLLM po
+promocji zawierał 271,330 tokenów promptu i 375 tokenów wyjścia. Delty
+liczników vLLM dały prefill 1,115.11 tok/s, decode 29.77 tok/s, TTFT 243.80 s
+i E2E 256.36 s, bez kolejki. Nie jest to bezpośredni komparator testu A/B
+32K: przy kontekście 271K większą część decode zajmują attention i odczyty KV.
+
+Samowystarczalny profil `glm53-flash-v029-rollback` zachowuje poprzednią
+receptę. Tryb `mxfp4-gemv-dflash2-k4-fp8-768k-vision-weights` jest dokładnym
+rollbackiem topologii 768K Vision; pozostałe tryby v0.29 zachowują dawne K3,
+K7, 1M i BF16-KV 256K jako jawne komparatory.
 
 ## Qwen3.8 Flash-Next
 
@@ -49,7 +71,10 @@ TTFT do 2.74 s. Przy 64K MTP2 zaakceptował 696 z 700 draftów i osiągnął
 
 ## Ograniczenia
 
-- Kwalifikacja GLM ROCm 10 obejmuje concurrency 1 i pełny kontekst 1M z FP8 KV.
+- Kwalifikacja GLM ROCm 10 v0.31 obejmuje concurrency 1 i pełny kontekst 768K
+  z FP8 KV oraz Vision. Granica przeszła, ale 20 MiB raportowanego wolnego VRAM
+  oznacza, że zwiększenie rezerwy KV lub dodatkowy stały użytkownik VRAM wymaga
+  ponownej kwalifikacji.
 - Concurrency > 1 i długi thermal soak nie są zakwalifikowane do produkcyjnego
   serwowania. Diagnostyczny tryb GLM K2/FP8/256K/C4 przeszedł 8 września 2026
   krótkie testy czterech równoległych żądań API oraz wywołań narzędzi przez

@@ -27,7 +27,9 @@ nie profilami użytkownika. Rejestr zawiera wyłącznie:
 
 - `vllm_deepseekv4flash_v0.28` dla DeepSeek;
 - `vllm_qwen38flash_pr53896` dla Qwen;
-- `vllm_glm53flashrocm10_v0.29` dla GLM-5.3 Quark/MXFP4 na ROCm 10.
+- `vllm_glm53flashrocm10_v0.29` jako produkcyjny rollback GLM-5.3;
+- `vllm_glm53flashrocm10_v0.30` dla izolowanej ścieżki Gluon sparse MLA;
+- `vllm_glm53flashrocm10_v0.31` jako domyślny GLM-5.3 z tiled BN8 GEMV.
 
 Nazwa receptury ma format `backend_target_version`. Wszystkie jej patche,
 również dotyczące bibliotek pomocniczych, znajdują się wyłącznie w katalogu

@@ -50,6 +50,7 @@ PROFILE_NAMES = tuple(
     )
 )
 GLM_PROFILE = "glm53-flash"
+GLM_ROLLBACK_PROFILE = "glm53-flash-v029-rollback"
 
 
 class ProductionProfileTests(unittest.TestCase):
@@ -187,12 +188,12 @@ class ProductionProfileTests(unittest.TestCase):
     def test_glm_uses_an_isolated_repo_local_vllm_recipe(self) -> None:
         runtime = load_profile(GLM_PROFILE)["runtime"]
         manifest = json.loads(
-            (ROOT / "manifest/vllm_glm53flashrocm10_v0.29.json").read_text()
+            (ROOT / "manifest/vllm_glm53flashrocm10_v0.31.json").read_text()
         )
-        self.assertEqual(runtime["recipe"], "vllm_glm53flashrocm10_v0.29")
+        self.assertEqual(runtime["recipe"], "vllm_glm53flashrocm10_v0.31")
         self.assertEqual(
             manifest["environment"]["venv"],
-            ".runtime/recipes/vllm_glm53flashrocm10_v0.29/venv",
+            ".runtime/recipes/vllm_glm53flashrocm10_v0.31/venv",
         )
         self.assertEqual(
             manifest["sources"]["vllm"]["repository"],
@@ -226,13 +227,13 @@ class ProductionProfileTests(unittest.TestCase):
         )
         self.assertEqual(configured, expected)
 
-    def test_litellm_glm_aliases_declare_one_million_token_context(self) -> None:
+    def test_litellm_glm_aliases_declare_qualified_context(self) -> None:
         config = (ROOT / "config" / "litellm.yaml").read_text()
         block = config.split("- model_name: glm-5.3-flash-high", 1)[1].split(
             "\n  - model_name:", 1
         )[0]
         self.assertIn("model: anthropic/glm-5.3-flash-quark-mxfp4", block)
-        self.assertIn("max_input_tokens: 1048576", block)
+        self.assertIn("max_input_tokens: 786432", block)
 
     def test_litellm_forces_strict_glm_tools_without_rewriting_schemas(self) -> None:
         schema = {
@@ -442,11 +443,11 @@ class ProductionProfileTests(unittest.TestCase):
 
         default_runtime = profile["runtime"]
         speculative = default_runtime["speculative_config"]
-        self.assertEqual(default_runtime["limits"]["max_model_len"], 1048576)
+        self.assertEqual(default_runtime["limits"]["max_model_len"], 786432)
         self.assertEqual(default_runtime["cache"]["dtype"], "fp8")
         self.assertEqual(speculative["model_artifact"], "dflash2-drafter")
         self.assertEqual(speculative["method"], "dflash")
-        # K4 won the representative decode A/B; the checkpoint still supports K7.
+        # K4 won the representative decode A/B; BN8 won the tiled kernel gate.
         self.assertEqual(speculative["num_speculative_tokens"], 4)
         self.assertEqual(speculative["draft_tensor_parallel_size"], 8)
         self.assertEqual(speculative["attention_backend"], "TRITON_ATTN")
@@ -457,7 +458,7 @@ class ProductionProfileTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            default_runtime["required_patches"][-17:],
+            default_runtime["required_patches"][-18:],
             [
                 "0009",
                 "0010",
@@ -476,6 +477,7 @@ class ProductionProfileTests(unittest.TestCase):
                 "0023",
                 "0024",
                 "0025",
+                "0026",
             ],
         )
         self.assertTrue(
@@ -501,6 +503,7 @@ class ProductionProfileTests(unittest.TestCase):
                 "0023",
                 "0024",
                 "0025",
+                "0026",
             }.issubset(default_runtime["required_patches"])
         )
 
@@ -516,16 +519,14 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertTrue({"0026", "1001"}.issubset(runtime["required_patches"]))
 
         production = load_profile(GLM_PROFILE)["runtime"]
-        self.assertEqual(production["recipe"], "vllm_glm53flashrocm10_v0.29")
+        self.assertEqual(production["recipe"], "vllm_glm53flashrocm10_v0.31")
         self.assertNotIn("VLLM_ROCM_USE_GLUON_SPARSE_MLA", production["environment"])
 
-    def test_glm_tiled_mxfp4_gemv_stays_isolated_and_opt_in(self) -> None:
-        profile = load_profile(
-            str(ROOT / "profiles/dev/glm53-flash-rocm10-mxfp4-tiled.json")
-        )
+    def test_glm_tiled_mxfp4_gemv_is_the_qualified_default(self) -> None:
+        profile = load_profile(GLM_PROFILE)
         runtime = profile["runtime"]
-        self.assertEqual(profile["status"], "development")
-        self.assertEqual(runtime["status"], "diagnostic-only")
+        self.assertEqual(profile["status"], "production-ready")
+        self.assertEqual(runtime["status"], "production-ready")
         self.assertEqual(runtime["recipe"], "vllm_glm53flashrocm10_v0.31")
         self.assertEqual(runtime["environment"]["VLLM_ROCM_MXFP4_GEMV_BLOCK_N"], "8")
         self.assertIn("0026", runtime["required_patches"])
@@ -569,7 +570,7 @@ class ProductionProfileTests(unittest.TestCase):
             "0",
         )
         resolved_scalar = load_runtime(
-            str(ROOT / "profiles/dev/glm53-flash-rocm10-mxfp4-tiled.json"),
+            GLM_PROFILE,
             "scalar-gemv-rollback",
         )
         self.assertEqual(
@@ -581,9 +582,9 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(resolved_scalar["limits"], runtime["limits"])
         self.assertEqual(resolved_scalar["multimodal"], runtime["multimodal"])
 
-        production = load_profile(GLM_PROFILE)["runtime"]
-        self.assertEqual(production["recipe"], "vllm_glm53flashrocm10_v0.29")
-        self.assertNotIn("VLLM_ROCM_MXFP4_GEMV_BLOCK_N", production["environment"])
+        rollback = load_profile(GLM_ROLLBACK_PROFILE)["runtime"]
+        self.assertEqual(rollback["recipe"], "vllm_glm53flashrocm10_v0.29")
+        self.assertNotIn("VLLM_ROCM_MXFP4_GEMV_BLOCK_N", rollback["environment"])
 
     def test_glm_long_context_safety_patches_cover_page_sizes_and_bounds(
         self,
@@ -722,8 +723,8 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertIn("def reorder_tools_required_first", strict_tool_order)
         self.assertIn("tools = reorder_tools_required_first(tools)", strict_tool_order)
 
-    def test_glm_keeps_explicit_diagnostic_modes(self) -> None:
-        baseline = load_runtime(GLM_PROFILE)
+    def test_glm_v029_rollback_keeps_explicit_diagnostic_modes(self) -> None:
+        baseline = load_runtime(GLM_ROLLBACK_PROFILE)
         self.assertEqual(
             set(baseline["experimental_modes"]),
             {
@@ -739,7 +740,7 @@ class ProductionProfileTests(unittest.TestCase):
         )
 
         async_scheduler = load_runtime(
-            GLM_PROFILE,
+            GLM_ROLLBACK_PROFILE,
             "mxfp4-gemv-dflash2-k4-fp8-1m-bt2048-async",
         )
         self.assertTrue(async_scheduler["scheduler"]["async"])
@@ -751,7 +752,7 @@ class ProductionProfileTests(unittest.TestCase):
         )
 
         bt1024 = load_runtime(
-            GLM_PROFILE, "mxfp4-gemv-dflash2-k4-fp8-1m-bt1024"
+            GLM_ROLLBACK_PROFILE, "mxfp4-gemv-dflash2-k4-fp8-1m-bt1024"
         )
         self.assertEqual(bt1024["limits"]["max_model_len"], 1048576)
         self.assertEqual(bt1024["limits"]["max_num_seqs"], 1)
@@ -760,7 +761,7 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(bt1024["cache"]["dtype"], "fp8")
 
         vision = load_runtime(
-            GLM_PROFILE,
+            GLM_ROLLBACK_PROFILE,
             "mxfp4-gemv-dflash2-k4-fp8-768k-vision-weights",
         )
         self.assertEqual(vision["limits"]["max_model_len"], 786432)
@@ -796,7 +797,7 @@ class ProductionProfileTests(unittest.TestCase):
         )
 
         fallback = load_runtime(
-            GLM_PROFILE, "mxfp4-gemv-dflash2-k7-256k"
+            GLM_ROLLBACK_PROFILE, "mxfp4-gemv-dflash2-k7-256k"
         )
         self.assertEqual(fallback["limits"]["max_model_len"], 262144)
         self.assertNotIn("kv_cache_memory_bytes", fallback["limits"])
@@ -811,7 +812,7 @@ class ProductionProfileTests(unittest.TestCase):
         )
 
         tp_noep = load_runtime(
-            GLM_PROFILE,
+            GLM_ROLLBACK_PROFILE,
             "mxfp4-gemv-dflash2-k7-fp8-1m-tp8-noep",
         )
         self.assertEqual(tp_noep["parallel"]["tensor"], 8)
@@ -824,7 +825,7 @@ class ProductionProfileTests(unittest.TestCase):
         )
 
         k3 = load_runtime(
-            GLM_PROFILE, "mxfp4-gemv-dflash2-k3-fp8-1m-tp8-noep"
+            GLM_ROLLBACK_PROFILE, "mxfp4-gemv-dflash2-k3-fp8-1m-tp8-noep"
         )
         self.assertEqual(k3["parallel"], baseline["parallel"])
         self.assertEqual(k3["limits"]["max_num_batched_tokens"], 512)
@@ -832,7 +833,7 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(k3["speculative_config"]["num_speculative_tokens"], 3)
 
         workflow_c4 = load_runtime(
-            GLM_PROFILE,
+            GLM_ROLLBACK_PROFILE,
             "mxfp4-gemv-dflash2-k2-fp8-256k-c4-tp8-noep",
         )
         self.assertEqual(workflow_c4["parallel"], baseline["parallel"])
@@ -850,7 +851,7 @@ class ProductionProfileTests(unittest.TestCase):
         )
 
         workflow_c4_async = load_runtime(
-            GLM_PROFILE,
+            GLM_ROLLBACK_PROFILE,
             "mxfp4-gemv-dflash2-k2-fp8-256k-c4-tp8-noep-async",
         )
         self.assertTrue(workflow_c4_async["scheduler"]["async"])
@@ -858,7 +859,7 @@ class ProductionProfileTests(unittest.TestCase):
         for key in ("parallel", "limits", "cache", "speculative_config"):
             self.assertEqual(workflow_c4_async[key], workflow_c4[key])
 
-    def test_rocm10_glm_defaults_to_packed_gemv_fp8_1m(self) -> None:
+    def test_rocm10_glm_defaults_to_tiled_gemv_fp8_768k_vision(self) -> None:
         profile = load_profile(GLM_PROFILE)
         baseline = profile["runtime"]
         self.assertEqual(baseline["speculative_config"]["method"], "dflash")
@@ -868,18 +869,22 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(
             baseline["speculative_config"]["kv_cache_dtype"], "fp8"
         )
-        self.assertEqual(baseline["limits"]["max_model_len"], 1048576)
+        self.assertEqual(baseline["limits"]["max_model_len"], 786432)
         self.assertEqual(baseline["limits"]["max_num_seqs"], 1)
         self.assertEqual(
-            baseline["limits"]["max_num_batched_tokens"], 2048
+            baseline["limits"]["max_num_batched_tokens"], 4096
         )
         self.assertEqual(
             baseline["limits"]["gpu_memory_utilization"], 0.995
         )
         self.assertEqual(
-            baseline["limits"]["kv_cache_memory_bytes"], 6591622400
+            baseline["limits"]["kv_cache_memory_bytes"], 4960000000
         )
         self.assertEqual(baseline["cache"]["dtype"], "fp8")
+        self.assertFalse(baseline["multimodal"]["language_model_only"])
+        self.assertEqual(
+            baseline["environment"]["VLLM_ROCM_MXFP4_GEMV_BLOCK_N"], "8"
+        )
 
         command = build_command(
             profile["model"],
@@ -889,14 +894,14 @@ class ProductionProfileTests(unittest.TestCase):
             8000,
         )
         self.assertEqual(
-            command[command.index("--max-model-len") + 1], "1048576"
+            command[command.index("--max-model-len") + 1], "786432"
         )
         self.assertEqual(
             command[command.index("--kv-cache-dtype") + 1], "fp8"
         )
         self.assertEqual(
             command[command.index("--kv-cache-memory-bytes") + 1],
-            "6591622400",
+            "4960000000",
         )
 
     def test_vllm_speculative_model_resolves_from_identity_bound_artifact(self) -> None:
@@ -919,7 +924,7 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertFalse(runtime["cache"]["prefix_cache"])
         self.assertEqual(runtime["cache"]["cpu_offload_gb"], 0)
         self.assertEqual(runtime["parallel"]["tensor"], 8)
-        self.assertEqual(runtime["limits"]["max_model_len"], 1048576)
+        self.assertEqual(runtime["limits"]["max_model_len"], 786432)
         self.assertEqual(runtime["cache"]["dtype"], "fp8")
         self.assertEqual(runtime["speculative_config"]["method"], "dflash")
         self.assertEqual(
@@ -1052,7 +1057,7 @@ class ProductionProfileTests(unittest.TestCase):
         ):
             run.return_value.returncode = 0
             launcher.start(
-                GLM_PROFILE,
+                GLM_ROLLBACK_PROFILE,
                 runtime_mode="mxfp4-gemv-dflash2-k7-256k",
                 dry_run=True,
             )

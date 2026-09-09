@@ -87,20 +87,41 @@ Bezpieczne zatrzymanie:
 skills/stop-r9700-runtime/scripts/stop-runtime.sh
 ```
 
-Zwykły start GLM uruchamia produkcyjny profil ROCm 10 z MRV2, TP8 bez Expert
-Parallel, packed RDNA4 MXFP4 decode GEMV, DFlash2 K4, FP8 KV i kontekstem 1M.
-Jawny fallback zachowuje DFlash2 K7, BF16 KV oraz 256K:
+Zwykły start GLM uruchamia produkcyjny profil v0.31 ROCm 10 z MRV2, TP8 bez
+Expert Parallel, output-tiled BN8 MXFP4 decode GEMV, DFlash2 K4, FP8 KV,
+kontekstem 768K i Vision. Topology-exact rollback zachowuje v0.29, scalar
+GEMV, DFlash2 K4, FP8 KV oraz 768K Vision:
 
 ```bash
 ./run launcher start glm53-flash
-./run launcher start glm53-flash \
-  --runtime-mode mxfp4-gemv-dflash2-k7-256k
+./run launcher start glm53-flash-v029-rollback \
+  --runtime-mode mxfp4-gemv-dflash2-k4-fp8-768k-vision-weights
 ```
 
-Po testach zatrzymaj usługę przed zmianą trybu. Dokładny test graniczny
-`1,048,560 + 16 = 1,048,576` oraz NIAH 4/4 na pełnym kontekście wykonano z K7
-przy tej samej geometrii FP8 KV; K4 został wybrany jako domyślny po teście
-decode 29.28 tok/s wobec 27.03 tok/s dla K3.
+Po testach zatrzymaj usługę przed zmianą profilu. Kwalifikacja v0.31 objęła
+Vision smoke, NIAH 256K 4/4 i dokładny test graniczny
+`786,368 + 64 = 786,432` z telemetrią.
+
+Live throughput podczas pracy Claude Code można odczytywać bezpośrednio z
+metryk silnika vLLM:
+
+```bash
+.venv/bin/python scripts/watch-claude-throughput.py
+```
+
+Wiersz `LIVE` jest próbkowany co sekundę. Pokazuje liczbę aktywnych i
+oczekujących żądań, zajęcie KV oraz wygładzoną estymatę wzrostu KV w oknie
+10 sekund; ze względu na chunked prefill wartość chwilowa jest skokowa. Po
+zakończeniu wiersz `COMPLETE` wylicza z delt liczników dokładne server-side
+liczby tokenów, prefill tok/s, decode tok/s, TTFT i E2E. Gdy żądania się
+nakładają, wynik `COMPLETE` jest agregatem tych żądań. Pomiar obejmuje również
+ruch przechodzący przez LiteLLM.
+
+Na aktualnej maszynie monitor działa także jako odczytowa usługa użytkownika:
+
+```bash
+journalctl --user -fu r9700-claude-throughput-monitor.service
+```
 
 Skrypt startowy wymaga PPT0 najwyżej 285 W na wszystkich widocznych GPU i
 wykonuje host preflight. Niższy limit przechodzi kontrolę. Nie zastępuje

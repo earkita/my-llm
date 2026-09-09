@@ -153,9 +153,13 @@ def label_samples(samples: list[dict[str, Any]], rows: Sequence[dict[str, Any]])
         for row in rows:
             start = float(row["started_perf"])
             end = float(row["ended_perf"])
-            first = start + float(row["ttft_seconds"])
             if start <= point <= end:
-                phases.add("prefill" if point < first else "decode")
+                ttft = row.get("ttft_seconds")
+                if ttft is None:
+                    phases.add("request")
+                else:
+                    first = start + float(ttft)
+                    phases.add("prefill" if point < first else "decode")
         if len(phases) == 1:
             sample["phase"] = next(iter(phases))
         elif phases:

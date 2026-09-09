@@ -130,17 +130,20 @@ def main() -> int:
         depth = float(fixture["depth_requested"])
         expected = str(fixture["secret"])
         started_at = _now()
-        started = time.monotonic()
+        started_perf = time.perf_counter()
         print(f"depth={depth:.2f} started_at={started_at}", flush=True)
         try:
             response = _post_json(endpoint, body, args.timeout)
-            elapsed = time.monotonic() - started
+            ended_perf = time.perf_counter()
+            elapsed = ended_perf - started_perf
             answer, finish_reason, reasoning_characters = _content(response)
             result = {
                 "schema_version": 1,
                 "label": args.label,
                 "started_at": started_at,
                 "finished_at": _now(),
+                "started_perf": started_perf,
+                "ended_perf": ended_perf,
                 "elapsed_seconds": elapsed,
                 "depth_requested": depth,
                 "needle_prompt_depth": fixture["needle_prompt_depth"],
@@ -157,12 +160,15 @@ def main() -> int:
                 "usage": response.get("usage"),
             }
         except (OSError, ValueError, json.JSONDecodeError) as error:
-            elapsed = time.monotonic() - started
+            ended_perf = time.perf_counter()
+            elapsed = ended_perf - started_perf
             result = {
                 "schema_version": 1,
                 "label": args.label,
                 "started_at": started_at,
                 "finished_at": _now(),
+                "started_perf": started_perf,
+                "ended_perf": ended_perf,
                 "elapsed_seconds": elapsed,
                 "depth_requested": depth,
                 "request_path": str(path),
@@ -193,6 +199,7 @@ def main() -> int:
         "exact_matches": sum(bool(result["exact_match"]) for result in results),
         "all_exact": len(results) == len(prepared)
         and all(bool(result["exact_match"]) for result in results),
+        "rows": results,
         "results": [
             {
                 key: result.get(key)

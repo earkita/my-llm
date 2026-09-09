@@ -42,21 +42,36 @@
         "glm_required_first_tools_pr55558_head": "bcca85b9083512bccdb039a1770834ee6e246646"
       },
       "target_profile": "profiles/production/glm53-flash.json",
-      "target_profile_sha256": "b22fcfbb3145e2ecc981061f5788815e907cf3f97fe6ee6c9cf620af24fe695c",
+      "target_profile_sha256": "a86cdc8ece5b8925f0d66de72d22977a208739374cda8a97675c97596f7d9014",
       "intentional_changes": [
         "replaced the llama.cpp GGUF deployment with the AMD Quark MXFP4 checkpoint",
         "migrated the isolated native recipe to ROCm SDK 10.0.0, PyTorch 2.13.0+rocm10.0.0, AITER v0.1.21 and vLLM main 7fbd44cbe",
         "kept 25 ordered vLLM patches required by the selected ROCm 10 sources, including the RDNA4 Triton sparse-MLA readers, non-persistent chunked-prefill fallback, shuffled physical kpool decode, an opt-in packed MXFP4 decode GEMV, duplicate GLM router-GEMM removal, and required-first GLM tool schemas",
         "replaced the former ROCm 7.14 glm53-flash profile with the qualified ROCm 10 deployment",
-        "promoted packed RDNA4 MXFP4 decode GEMV with DFlash2 K4, TP8 without EP, FP8 KV, 1048576 tokens and a 2048-token chunked-prefill budget to the default after the controlled 32K benchmark improved client-observed prefill from 728.30 to 1130.62 tok/s; decode remains subject to separate verification",
+        "previously promoted packed RDNA4 MXFP4 decode GEMV with DFlash2 K4, TP8 without EP, FP8 KV, 1048576 tokens and a 2048-token chunked-prefill budget before the v0.31 tiled-GEMV qualification",
         "retained DFlash2 K3 and K7 as rollback comparators and the packed GEMV DFlash2 K7 BF16-KV 262144-token configuration as an explicit fallback mode",
         "added opt-in async-scheduling A/B modes for the default K4 FP8-KV 1M BT2048 runtime and the K2 FP8-KV 256K concurrency-4 workflow runtime",
         "added a diagnostic DFlash2 K2 FP8-KV 262144-token concurrency-4 workflow mode that keeps the aggregate context and sparse-indexer workspace bound at 1M tokens",
         "added an opt-in 768K vision mode limited to eight images and 4096 image tokens per image, with the BF16 vision encoder weights sharded across TP8, Triton ViT attention for RDNA4, and a reduced fixed KV reservation",
         "updated the final three AMD GPU BDFs for the current post-reseat KFD topology",
         "removed the superseded ROCm 7.14 GLM recipe and profile",
-      "configured Claude Code auto-compaction at 90 percent of the explicit 1M context window",
-      "consolidated LiteLLM and every Claude Code model role on the single 1M glm-5.3-flash-high alias"
+      "promoted the v0.31 output-tiled BN8 MXFP4 GEMV after a deployment-exact nine-request A/B improved mean decode by 1.54 percent and minimum decode by 1.20 percent versus scalar",
+      "qualified API, Vision, four 256K NIAH placements, and the exact 786432-token boundary with 746 one-second telemetry samples and no new CPU or GPU runtime error",
+      "configured Claude Code auto-compaction at 90 percent of the qualified 768K context window",
+      "consolidated LiteLLM and every Claude Code model role on the single 768K glm-5.3-flash-high alias",
+      "preserved the prior v0.29 deployment as the self-contained glm53-flash-v029-rollback profile"
+      ]
+    },
+    "glm53-flash-v029-rollback": {
+      "source_model": "https://huggingface.co/amd/GLM-5.3-Flash-Quark-MXFP4",
+      "source_model_sha256": "b5688f25491202978c19c4d036eef579f61bbe07",
+      "source_runtime": "https://github.com/vllm-project/vllm/commit/7fbd44cbe0a90b9c8fd3a94a0f0401ac4b1bc719",
+      "source_runtime_sha256": "7fbd44cbe0a90b9c8fd3a94a0f0401ac4b1bc719",
+      "target_profile": "profiles/production/glm53-flash-v029-rollback.json",
+      "target_profile_sha256": "479dcae74adfdf54cb65c46b0175f93eba1250d1f86be6c3bee0811654279284",
+      "intentional_changes": [
+        "renamed the former glm53-flash deployment without changing its v0.29 runtime contract",
+        "retained the exact mxfp4-gemv-dflash2-k4-fp8-768k-vision-weights mode for production rollback"
       ]
     },
     "qwen38-flash": {
@@ -77,6 +92,8 @@
   "recipes": [
     "vllm_deepseekv4flash_v0.28",
     "vllm_qwen38flash_pr53896",
-    "vllm_glm53flashrocm10_v0.29"
+    "vllm_glm53flashrocm10_v0.29",
+    "vllm_glm53flashrocm10_v0.30",
+    "vllm_glm53flashrocm10_v0.31"
   ]
 }
