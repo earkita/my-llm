@@ -185,6 +185,19 @@
       "enforce_eager": true
     },
     "experimental_modes": {
+      "prefix-cache": {
+        "status": "diagnostic-only",
+        "runtime_name": "glm53-flash-quark-mxfp4-rocm10-mrv2-8xr9700-tp8-noep-mxfp4gemv-tiledbn8-dflash2-k4-fp8kv-768k-vision-prefixcache",
+        "reason": "Deployment-exact prefix-cache qualification candidate; only automatic prefix caching differs from the production runtime.",
+        "runtime_overrides": {
+          "cache": {
+            "dtype": "fp8",
+            "block_size": 16,
+            "prefix_cache": true,
+            "cpu_offload_gb": 0
+          }
+        }
+      },
       "scalar-gemv-rollback": {
         "status": "diagnostic-only",
         "runtime_name": "glm53-flash-quark-mxfp4-rocm10-mrv2-8xr9700-tp8-noep-mxfp4gemv-scalar-dflash2-k4-fp8kv-768k-vision-weights",

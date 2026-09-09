@@ -582,6 +582,35 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(resolved_scalar["limits"], runtime["limits"])
         self.assertEqual(resolved_scalar["multimodal"], runtime["multimodal"])
 
+        prefix_cache = runtime["experimental_modes"]["prefix-cache"]
+        self.assertEqual(prefix_cache["status"], "diagnostic-only")
+        self.assertEqual(
+            set(prefix_cache["runtime_overrides"]),
+            {"cache"},
+        )
+        resolved_prefix_cache = load_runtime(GLM_PROFILE, "prefix-cache")
+        self.assertTrue(resolved_prefix_cache["cache"]["prefix_cache"])
+        self.assertEqual(resolved_prefix_cache["cache"]["dtype"], "fp8")
+        self.assertEqual(resolved_prefix_cache["cache"]["block_size"], 16)
+        self.assertEqual(resolved_prefix_cache["cache"]["cpu_offload_gb"], 0)
+        self.assertEqual(resolved_prefix_cache["limits"], runtime["limits"])
+        self.assertEqual(
+            resolved_prefix_cache["speculative_config"],
+            runtime["speculative_config"],
+        )
+        self.assertEqual(
+            resolved_prefix_cache["multimodal"], runtime["multimodal"]
+        )
+        prefix_cache_command = build_command(
+            profile["model"],
+            resolved_prefix_cache,
+            Path("/models/glm"),
+            "127.0.0.1",
+            8000,
+        )
+        self.assertIn("--enable-prefix-caching", prefix_cache_command)
+        self.assertNotIn("--no-enable-prefix-caching", prefix_cache_command)
+
         rollback = load_profile(GLM_ROLLBACK_PROFILE)["runtime"]
         self.assertEqual(rollback["recipe"], "vllm_glm53flashrocm10_v0.29")
         self.assertNotIn("VLLM_ROCM_MXFP4_GEMV_BLOCK_N", rollback["environment"])

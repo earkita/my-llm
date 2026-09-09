@@ -98,6 +98,19 @@ GEMV, DFlash2 K4, FP8 KV oraz 768K Vision:
   --runtime-mode mxfp4-gemv-dflash2-k4-fp8-768k-vision-weights
 ```
 
+Tryb `prefix-cache` jest przygotowany do deployment-exact kwalifikacji, ale nie
+jest jeszcze domyślną konfiguracją produkcyjną. Zachowuje BN8, DFlash2 K4,
+FP8 KV, 768K i Vision, zmieniając wyłącznie automatic prefix caching. Jego
+aktywacja wymaga kontrolowanej zmiany procesu:
+
+```bash
+./run launcher switch glm53-flash --runtime-mode prefix-cache --with-litellm
+```
+
+Nie wykonuj tej komendy tylko po to, aby sprawdzić konfigurację. Bez zatrzymania
+działającego modelu użyj `--dry-run`; pełna kwalifikacja musi porównać cold miss,
+warm hit tego samego prefiksu oraz poprawność odpowiedzi.
+
 Po testach zatrzymaj usługę przed zmianą profilu. Kwalifikacja v0.31 objęła
 Vision smoke, NIAH 256K 4/4 i dokładny test graniczny
 `786,368 + 64 = 786,432` z telemetrią.

@@ -30,6 +30,10 @@ concurrency 1, bez CPU offload i bez prefix cache. Vision jest aktywne z
 wagami encoder sharded przez TP8, `TRITON_ATTN`, limitem ośmiu obrazów i 4096
 tokenów obrazu. Target językowy używa `ROCM_AITER_MLA_SPARSE`.
 
+Tryb diagnostyczny `prefix-cache` zachowuje całą tę topologię i przełącza tylko
+automatic prefix caching. Został przygotowany bez zmiany aktywnego procesu;
+nie jest jeszcze wynikiem kwalifikacji ani domyślną konfiguracją produkcyjną.
+
 Kwalifikacja 9 września 2026 dała następujące wyniki:
 
 - focused kernel gate przeszedł 16/16, a każdy wariant tiled był zgodny ze

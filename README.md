@@ -108,6 +108,9 @@ wyłączone. W deployment-exact A/B BN8 poprawił średni decode o 1.54%, a
 minimum o 1.20% względem scalar. Vision smoke, NIAH 256K 4/4 i dokładna
 granica `786,368 + 64 = 786,432` przeszły 9 września 2026. Osobny profil
 `glm53-flash-v029-rollback` zachowuje poprzednią receptę i wszystkie jej tryby.
+Jawny tryb diagnostyczny `prefix-cache` przygotowuje identyczną topologię v0.31
+z automatic prefix caching; nie jest aktywowany przez zwykły start profilu,
+dopóki nie przejdzie osobnej kwalifikacji cold/warm.
 
 Podczas pracy Claude Code można bez restartu obserwować kolejkę, zajęcie KV i
 estymowany postęp prefillu, a po zakończeniu żądania dokładny server-side
