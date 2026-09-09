@@ -1,0 +1,111 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Sat, 5 Sep 2026 13:58:18 +0200
+Subject: [PATCH 03/16] fix: honor explicit accelerator and Triton targets
+
+---
+ tests/test_triton_utils.py     | 19 +++++++++++++++++--
+ vllm/platforms/__init__.py     | 13 +++++++++++++
+ vllm/triton_utils/importing.py | 15 ++++++++++++++-
+ 3 files changed, 44 insertions(+), 3 deletions(-)
+
+diff --git a/tests/test_triton_utils.py b/tests/test_triton_utils.py
+index 0ae4c0d..f8ebcdd 100644
+--- a/tests/test_triton_utils.py
++++ b/tests/test_triton_utils.py
+@@ -10,7 +10,9 @@ from vllm.triton_utils import importing as triton_importing
+ from vllm.triton_utils.importing import TritonLanguagePlaceholder, TritonPlaceholder
+ 
+ 
+-def _has_triton_for_backends(**drivers: bool) -> bool:
++def _has_triton_for_backends(
++    target_device: str | None = None, **drivers: bool
++) -> bool:
+     """Re-evaluate ``HAS_TRITON`` against a synthetic ``triton.backends`` map.
+ 
+     ``drivers`` maps backend name to whether its driver reports itself active.
+@@ -30,10 +32,14 @@ def _has_triton_for_backends(**drivers: bool) -> bool:
+     triton_mod.__dict__["backends"] = backends_mod
+ 
+     patched_modules = {"triton": triton_mod, "triton.backends": backends_mod}
++    environment = {}
++    if target_device is not None:
++        environment["VLLM_TARGET_DEVICE"] = target_device
++
+     try:
+         with (
+             mock.patch.dict(sys.modules, patched_modules),
+-            mock.patch.dict("os.environ", {}, clear=True),
++            mock.patch.dict("os.environ", environment, clear=True),
+         ):
+             return importlib.reload(triton_importing).HAS_TRITON
+     finally:
+@@ -124,6 +130,15 @@ def test_multiple_active_gpu_backends_disable_triton():
+     assert _has_triton_for_backends(amd=True, nvidia=True) is False
+ 
+ 
++def test_explicit_rocm_target_ignores_active_nvidia_driver():
++    assert (
++        _has_triton_for_backends(
++            target_device="rocm", amd=True, nvidia=True
++        )
++        is True
++    )
++
++
+ def test_cpu_backend_alone_disables_triton():
+     assert _has_triton_for_backends(cpu=True) is False
+ 
+diff --git a/vllm/platforms/__init__.py b/vllm/platforms/__init__.py
+index b34b0b9a..bef8826a 100644
+--- a/vllm/platforms/__init__.py
++++ b/vllm/platforms/__init__.py
+@@ -231,6 +231,19 @@ builtin_platform_plugins = {
+ 
+ 
+ def resolve_current_platform_cls_qualname() -> str:
++    # A caller-selected accelerator target is authoritative on mixed-vendor
++    # hosts. Otherwise NVML and AMDSMI can both find devices and activate the
++    # CUDA and ROCm plugins at the same time.
++    explicit_target = os.getenv("VLLM_TARGET_DEVICE")
++    if explicit_target in builtin_platform_plugins:
++        platform_cls_qualname = builtin_platform_plugins[explicit_target]()
++        if platform_cls_qualname is None:
++            raise RuntimeError(
++                f"Explicit platform target {explicit_target!r} is unavailable"
++            )
++        logger.debug("Explicitly selected platform %s.", explicit_target)
++        return platform_cls_qualname
++
+     # An explicit CPU target is authoritative. Native CPU-only CI jobs reuse
+     # an accelerator wheel and can run on accelerator hosts, so probing every
+     # plugin would otherwise activate both CPU and the host accelerator.
+diff --git a/vllm/triton_utils/importing.py b/vllm/triton_utils/importing.py
+index 966ab55..30e9fba 100644
+--- a/vllm/triton_utils/importing.py
++++ b/vllm/triton_utils/importing.py
+@@ -28,10 +28,23 @@ if HAS_TRITON:
+         # drivers. Triton's own driver selection skips it for the same reason
+         # (see triton.runtime.driver._create_driver): CPU is only ever used
+         # when explicitly selected.
++        explicit_target_backend = os.environ.get("TRITON_DEFAULT_BACKEND")
++        if explicit_target_backend is None:
++            explicit_target_backend = {
++                "rocm": "amd",
++                "cuda": "nvidia",
++                "xpu": "intel",
++            }.get(os.environ.get("VLLM_TARGET_DEVICE", "").lower())
++            if explicit_target_backend is not None:
++                # Triton's lazy driver selection must use the same backend.
++                os.environ["TRITON_DEFAULT_BACKEND"] = explicit_target_backend
+         active_drivers = [
+             x.driver
+             for name, x in backends.items()
+-            if name != "cpu" and x.driver and x.driver.is_active()
++            if name != "cpu"
++            and (explicit_target_backend is None or name == explicit_target_backend)
++            and x.driver
++            and x.driver.is_active()
+         ]
+ 
+         # Check Triton CPU

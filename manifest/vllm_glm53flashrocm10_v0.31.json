@@ -1,0 +1,248 @@
+{
+  "schema_version": 1,
+  "platform": {
+    "os": "Ubuntu 26.04",
+    "python": "3.12",
+    "gpu_arch": "gfx1201",
+    "reference_gpu_count": 8
+  },
+  "environment": {
+    "venv": ".runtime/recipes/vllm_glm53flashrocm10_v0.31/venv",
+    "source_root": ".runtime/recipes/vllm_glm53flashrocm10_v0.31/src",
+    "constraints": "constraints/rocm-10.0-py312.txt",
+    "constraints_sha256": "5b658cd3e1fdc7566014624017b4884136e86c24878f85410c6ead76ac5b59b3",
+    "constraint_overlays": [
+      {
+        "path": "constraints/vllm-glm53-flash-py312.override.txt",
+        "sha256": "f6a4484d90a27489f9c1f4bbe3e94eb8392adc8537be4167de2cb50340b694ad"
+      }
+    ],
+    "rocm_version": "10.0.0",
+    "rocm_index_url": "https://stable.repo.amd.com/rocm/whl-next/",
+    "torch_version": "2.13.0+rocm10.0.0",
+    "torchvision_version": "0.28.0+rocm10.0.0",
+    "amdsmi_version": "27.0.0+6b0e43f3",
+    "amdsmi_from_rocm_sdk": true,
+    "amdsmi_source_commit": "6b0e43f341195e203754e08f850e437ff2fc09f9",
+    "huggingface_hub_version": "1.28.0",
+    "pip_version": "26.2.1",
+    "setuptools_version": "79.0.1",
+    "wheel_version": "0.47.0"
+  },
+  "kernel_driver": {
+    "version": "10.0.0-4",
+    "filename": "rocm-installer-10.0.0-4.run",
+    "url": "https://repo.radeon.com/rocm/installer/rocm-runfile-installer/rocm-rel-10.0/rocm-installer-10.0.0-4.run",
+    "sha256": "367355d25f59835ff6e23fe1067e13070ea8deced9e056db2973557dc07bef9c"
+  },
+  "sources": {
+    "aiter": {
+      "repository": "https://github.com/ROCm/aiter.git",
+      "commit": "7ff5155f3ba772e534b6cf8dddc0099932327b9b",
+      "version": "0.1.21+git.7ff5155f3",
+      "expected_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "patches": []
+    },
+    "vllm": {
+      "repository": "https://github.com/vllm-project/vllm.git",
+      "commit": "7fbd44cbe0a90b9c8fd3a94a0f0401ac4b1bc719",
+      "version": "v0.31-main-7fbd44cbe",
+      "upstream_pr": "https://github.com/vllm-project/vllm/pull/55423",
+      "upstream_pr_head": "374e367e2b87ee65332b03468b76dc4c40e69519",
+      "triton_mla_noncausal_commit": "7e2d79176f5bb56153cbae8224d37256355d39e7",
+      "quark_weight_scale_fix": "https://github.com/vllm-project/vllm/pull/54770",
+      "quark_glm53_quantization_issue": "https://github.com/vllm-project/vllm/issues/54547",
+      "rocm_fp4_bmm_correctness_fix": "https://github.com/vllm-project/vllm/pull/51915",
+      "rocm_fp4_bmm_correctness_head": "a01639d728245fc7db13ce54858670418e6a2370",
+      "rocm_mrv2_fix": "https://github.com/vllm-project/vllm/pull/54925",
+      "rocm_mrv2_head": "252ef14859ac6626d8d3bbd27c0682f0594d4236",
+      "glm5next_eagle3_issue": "https://github.com/vllm-project/vllm/issues/54451",
+      "glm5next_dflash_mhc_reference": "https://github.com/sgl-project/sglang/pull/36755",
+      "excluded_dflash_prefix_cache_patch": "https://github.com/vllm-project/vllm/pull/54163",
+      "excluded_dflash_prefix_cache_head": "ccc71957c46ea5d970c41062e08287e30040939b",
+      "dflash_mrv2_issue": "https://github.com/vllm-project/vllm/issues/49559",
+      "dflash_greedy_k1_issue": "https://github.com/vllm-project/vllm/issues/54928",
+      "mrv2_draft_attention_backend_fix": "https://github.com/vllm-project/vllm/commit/25240513856e9aca9b07e9381f2a4513b6954bd8",
+      "dflash_sliding_window_aot_fix": "https://github.com/vllm-project/vllm/commit/5093e4844a75f279d1921d7e34ccd23d68529f27",
+      "resumed_spec_decode_padding_fix": "https://github.com/vllm-project/vllm/commit/a26b71d868772eaf31706208fbd7260c601d7566",
+      "rocm_sparse_verify_fix": "https://github.com/vllm-project/vllm/pull/55239",
+      "glm_kpool_speculative_rollback_fix": "https://github.com/vllm-project/vllm/pull/55219",
+      "glm_kpool_speculative_rollback_head": "6712aa109b856d2fefd75a28084db358eb7f9e1b",
+      "glm_kpool_speculative_rollback_backport_commit": "de63c84731cd719a6ab5c9e8d73289c9c96a7587",
+      "glm_kpool_invalid_index_fix": "https://github.com/vllm-project/vllm/pull/55201",
+      "glm_kpool_invalid_index_head": "40bf4af864fb4e0fd3f84c5650ca9ba465c31ac8",
+      "rocm_kpool_page_alignment_issue": "https://github.com/vllm-project/vllm/issues/55280",
+      "glm_kpool_kernel_page_geometry_issue": "https://github.com/vllm-project/vllm/issues/54359",
+      "slot_mapping_block_table_guard": "https://github.com/vllm-project/vllm/pull/54296",
+      "slot_mapping_block_table_guard_head": "191f82d710493c9a02077d976d8cf0403ab8c96a",
+      "glm_fp8_indexer_workspace_issue": "https://github.com/vllm-project/vllm/issues/55221",
+      "glm_fp8_indexer_workspace_fix": "https://github.com/vllm-project/vllm/pull/55222",
+      "glm_fp8_indexer_workspace_fix_head": "8eda002d408de25ab957c2aebda6593d3025e581",
+      "aiter_sparse_mla_fp8_reference": "https://github.com/ROCm/aiter/pull/3262",
+      "aiter_gfx950_sparse_mla": "https://github.com/ROCm/aiter/pull/4919",
+      "rocm_sparse_mla_prefill_corruption_issue": "https://github.com/vllm-project/vllm/issues/40018",
+      "rocm_sparse_mla_long_context_issue": "https://github.com/vllm-project/vllm/issues/47042",
+      "rdna4_paged_mqa_corruption_issue": "https://github.com/vllm-project/vllm/issues/39303",
+      "paged_mqa_torch_fallback_pr": "https://github.com/vllm-project/vllm/pull/39326",
+      "rocm_sparse_mla_prefill_persistent_fix": "https://github.com/vllm-project/vllm/pull/47567",
+      "aiter_sparse_mla_persistent_issue": "https://github.com/ROCm/aiter/issues/4076",
+      "glm_spec_verify_cross_platform_issue": "https://github.com/vllm-project/vllm-ascend/issues/15329",
+      "rdna4_mxfp4_decode_reference": "https://github.com/Maxritz/FreeToken-ROCm/blob/89f14790de7bbc69dd61a999ee76b86ba8316f26/python/freetoken/kernel/triton/mxfp4_moe.py",
+      "rdna4_mxfp4_decode_reference_head": "89f14790de7bbc69dd61a999ee76b86ba8316f26",
+      "glm_moe_router_dedup_pr": "https://github.com/vllm-project/vllm/pull/55736",
+      "glm_moe_router_dedup_head": "0c2b5ad442672ea2efbf62df4a3df1cce01b946e",
+      "glm_required_first_tools_pr": "https://github.com/vllm-project/vllm/pull/55558",
+      "glm_required_first_tools_head": "bcca85b9083512bccdb039a1770834ee6e246646",
+      "expected_diff_sha256": "cae40fbbd1ee0fce39dc6d6d0174eced9fc7f6626104bf50771eecdbf9b1a025",
+      "full_index_diff": true,
+      "apply_intent_to_add": true,
+      "accepted_previous_images": [
+        {
+          "sha256": "b5235df9bca775a33f5486123fb9584e63874b6034a3d2fc1c91553336ca96cc",
+          "patch_count": 17
+        },
+        {
+          "sha256": "8c217ed4d978755f5b6ff743b92f95ca0cc13f2d69aec7a1e4dcb062a7f611d6",
+          "patch_count": 18
+        },
+        {
+          "sha256": "3dbf04c66cbb983cfc1d38b380c3edf8b4f2a54de0b6756d1b8315fc80ec5c5a",
+          "patch_count": 19
+        },
+        {
+          "sha256": "9f02a8940bc39c2529f99b4ccf260426f1f6bee19ab57a8184981b444b9ab947",
+          "patch_count": 20
+        },
+        {
+          "sha256": "f2ce0e503003de5f3ee9ddbc7398e31a82fbaa484614f641b1a98628ec8496ac",
+          "patch_count": 21
+        },
+        {
+          "sha256": "2b61ddd6dade003b9ccf1a7b79b3a56722bc749e67c7818dcd4b44ac5b55fe6c",
+          "patch_count": 22
+        },
+        {
+          "sha256": "8ccf39951c3be3a098af50a17991fa4ac86840710ba39a08352e538d810ac9b4",
+          "patch_count": 25
+        }
+      ],
+      "patches": [
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.31/0001-fix-enable-GLM-5.3-DFlash2-on-current-vLLM-main.patch",
+          "sha256": "b71d410e567cb4d397c56c6153838c2fcf113129dac838d946d251f54be513ee"
+        },
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.31/0002-fix-load-GLM-Quark-weight_scale-tensors.patch",
+          "sha256": "591ad2fda27201caf2d807e5237b48943a43005849623ea6257ce078440c8192"
+        },
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.31/0003-fix-honor-explicit-accelerator-platform-target.patch",
+          "sha256": "164753b752dfe894a5747892ca9883c3202f817ad7f5cc6071a259721ba38e16"
+        },
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.31/0004-fix-match-GLM-packed-projections-to-Quark-overrides.patch",
+          "sha256": "605479403779cbddb43271e808aa26a191276222075c7b94fcf386c9cb574c34"
+        },
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.31/0005-fix-enable-the-AITER-kpool-indexer-on-RDNA4.patch",
+          "sha256": "4aae0e9f767eba523cf5b92c740988d159896b2abedead82313085d06c658d7c"
+        },
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.31/0006-fix-route-GLM-speculative-verify-through-ragged-spar.patch",
+          "sha256": "9cc2edaf5537619233c537cb27ce563379dfae1fcdb078bf7140284fcb5b5e8e"
+        },
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.31/0007-fix-preserve-GLM-kpool-state-across-speculative-roll.patch",
+          "sha256": "9630e44697fea57113c7df1bd877d19dab5feafeed499f5b9af599bc191cf3a0"
+        },
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.31/0008-fix-reject-invalid-GLM-kpool-indices.patch",
+          "sha256": "faf40aaddd8bb359aba7adbdcc85765dad01b45481fa73fb9735eb0c0350c2fe"
+        },
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.31/0009-fix-bound-the-sparse-indexer-prefill-workspace.patch",
+          "sha256": "d02e319663d76a0236fee5e6f4a0d029997a02fea4fba8ab5ef320058bef40e1"
+        },
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.31/0010-fix-align-ROCm-GLM-kpool-pages-to-kernel-geometry.patch",
+          "sha256": "e1b2c57418890f4ac44e2f713f79f5e03b926c78dda75435b3111cf9ebbf4a26"
+        },
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.31/0011-fix-advertise-actual-GLM-kpool-kernel-page-sizes.patch",
+          "sha256": "f855a6b3b21776244d7f5cda5473f78829ef8823eefbec347244cfe6ab8393ca"
+        },
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.31/0012-fix-guard-block-table-loads-in-slot-mapping.patch",
+          "sha256": "3760db7bdc00cdf765907549d4d6148a0ce628557752499cf1eb1fc2af664b71"
+        },
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.31/0013-fix-right-size-the-GLM-indexer-prefill-workspace.patch",
+          "sha256": "04df66a39baf44c350f626044cd934d3309de8ad970470f7752bb8136ea98a8d"
+        },
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.31/0014-fix-compress-the-GLM-indexer-decode-workspace.patch",
+          "sha256": "f3ca0acd0a6e887c154f30e7ae6561570d0202ad71d40de2a50139ecc2653269"
+        },
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.31/0015-fix-shard-the-DFlash-auxiliary-projection.patch",
+          "sha256": "26abb7877a6d4af56c0c8154751d310069abeed3a48cbb494721d46b3a69478b"
+        },
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.31/0016-fix-stage-OCP-MX-expert-dequantization.patch",
+          "sha256": "ce560c5ba773db4b06fb27da9dc50d2d2e2d3a4170195e9667d0b9945e375287"
+        },
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.31/0017-fix-load-Quark-block-FP8-MoE-layers.patch",
+          "sha256": "e9a6858e401ae8b26f09dc24288f0661663c17882d4fd82a68223def94d568f1"
+        },
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.31/0018-fix-route-RDNA4-FP8-sparse-MLA-through-Triton.patch",
+          "sha256": "ba03f592c7635c3bfccef3c80428ab953160488f408a2ff5bec5ea27512d0d21"
+        },
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.31/0019-fix-disable-persistent-sparse-MLA-for-prefill-continuations.patch",
+          "sha256": "4ee972ed2e7f71a53308833ee7e0216872f3b82ebe9e1e5b349dcc46c0050565"
+        },
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.31/0020-fix-route-RDNA4-full-BF16-sparse-MLA-through-Triton.patch",
+          "sha256": "e3aa3d5974ec567dcd000f7b0744f7a0bf923d43d4b8650e852f11d7dbc6b763"
+        },
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.31/0021-fix-read-shuffled-RDNA4-kpool-cache.patch",
+          "sha256": "b15e2b995f2d0b5aefe6effb8df92b2d8052c54c6ca2417255ac5a8df1626dcf"
+        },
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.31/0022-perf-add-packed-RDNA4-MXFP4-decode-GEMV.patch",
+          "sha256": "15b73faf1397b21f8a775d07df3b3e24f3e55abe5743888962dd8f37b3b7fa0c"
+        },
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.31/0023-perf-avoid-duplicate-GLM-MoE-router-GEMM.patch",
+          "sha256": "8c403e10b7828da302c1eb161a67fcd142cf7c2d3fdaa5737808b3e96a282a31"
+        },
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.31/0024-fix-render-GLM-tool-schemas-required-first.patch",
+          "sha256": "371ac21f063b7b68d7452493e7b60bbaac345cbcf8858029ab364f7a7d5de565"
+        },
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.31/0025-fix-align-GLM-strict-tool-schema-order.patch",
+          "sha256": "2108ae2d0afabb6ed82730574271d222ade2ab38b75ddfba3fe2ff9ed2fd4948"
+        },
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.31/0026-perf-add-tiled-RDNA4-MXFP4-decode-GEMV.patch",
+          "sha256": "bf1b270d37b1bc76477bfc9c5f9a2c21eeedfde84f2b70685c03c0464a135f43"
+        }
+      ],
+      "rocm_sparse_verify_head": "0f1d78db4495fed10384a2b048e70367e61d3dd1",
+      "dflash_layout_constraint_investigated_not_applied": "https://github.com/vllm-project/vllm/pull/55340",
+      "dflash_layout_constraint_head": "c83572a3393654d1d1522dbf381c66b394078d24",
+      "rdna4_mxfp4_tiled_decode": "local output-tiled Triton candidate with scalar rollback and block_n 1/2/4/8"
+    },
+    "triton-kernels": {
+      "repository": "https://github.com/ROCm/triton.git",
+      "commit": "0f380657dbf3ee86eb57558ff71df24f03b5d4e7",
+      "version": "vllm-0.31-rocm10-kernels",
+      "expected_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "patches": []
+    }
+  }
+}

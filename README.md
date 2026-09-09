@@ -109,4 +109,5 @@ wcześniej z K7 przy tej samej geometrii FP8 KV. Jawne tryby diagnostyczne
 zachowują K3 i K7 jako rollback oraz BF16 KV z kontekstem 262,144 tokenów.
 
 Szczegóły: [architektura](docs/architecture.md),
-[operacje](docs/operations.md), [dowody i ograniczenia](docs/verification.md).
+[operacje](docs/operations.md), [dowody i ograniczenia](docs/verification.md),
+[plan eksperymentu v0.31](docs/glm53-gfx1201-mxfp4-tiled.md).

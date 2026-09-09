@@ -1,0 +1,608 @@
+From 7c9cf655eff479391dcd16438c02106108c056a9 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Wed, 9 Sep 2026 16:33:20 +0200
+Subject: [PATCH] perf: add tiled RDNA4 MXFP4 decode GEMV
+
+---
+ .../kernels/benchmark_rocm_mxfp4_gemv.py      | 174 ++++++++++++++++++
+ .../quantization/test_rocm_mxfp4_gemv.py      |  14 +-
+ vllm/envs.py                                  |   6 +
+ .../kernels/linear/mxfp4/emulation.py         |  12 +-
+ .../kernels/linear/mxfp4/rocm_gemv.py         | 143 +++++++++++++-
+ .../fused_moe/experts/ocp_mx_emulation_moe.py |  14 +-
+ 6 files changed, 354 insertions(+), 9 deletions(-)
+ create mode 100644 benchmarks/kernels/benchmark_rocm_mxfp4_gemv.py
+
+diff --git a/benchmarks/kernels/benchmark_rocm_mxfp4_gemv.py b/benchmarks/kernels/benchmark_rocm_mxfp4_gemv.py
+new file mode 100644
+index 0000000000..5670c46f39
+--- /dev/null
++++ b/benchmarks/kernels/benchmark_rocm_mxfp4_gemv.py
+@@ -0,0 +1,174 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""Compare scalar and output-tiled packed MXFP4 GEMV on ROCm.
++
++The default shapes mirror one TP8 GLM-5.3-Flash MoE shard during DFlash K4
++verification: five input rows become forty top-k routes for the up projection,
++followed by forty independent down-projection rows.
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++from datetime import datetime
++from pathlib import Path
++from typing import Any
++
++import torch
++
++from vllm.model_executor.kernels.linear.mxfp4.rocm_gemv import (
++    ROCM_MXFP4_GEMV_BLOCK_N_CHOICES,
++    rocm_mxfp4_row_gemv,
++)
++from vllm.triton_utils import triton
++
++
++def _case(
++    *,
++    name: str,
++    rows: int,
++    routes_per_input: int,
++    output_size: int,
++    input_size: int,
++    experts: int,
++) -> dict[str, Any]:
++    generator = torch.Generator(device="cuda").manual_seed(20260909)
++    x = torch.randn(
++        (rows, input_size),
++        generator=generator,
++        device="cuda",
++        dtype=torch.bfloat16,
++    )
++    weight = torch.randint(
++        0,
++        256,
++        (experts, output_size, input_size // 2),
++        generator=generator,
++        device="cuda",
++        dtype=torch.uint8,
++    )
++    weight_scale = torch.randint(
++        118,
++        130,
++        (experts, output_size, input_size // 32),
++        generator=generator,
++        device="cuda",
++        dtype=torch.uint8,
++    )
++    routes = rows * routes_per_input
++    expert_ids = torch.arange(routes, device="cuda", dtype=torch.int32) % experts
++    route_weights = torch.rand(
++        routes, generator=generator, device="cuda", dtype=torch.float32
++    )
++
++    outputs: dict[int, torch.Tensor] = {}
++    timings: dict[str, dict[str, float]] = {}
++    for block_n in ROCM_MXFP4_GEMV_BLOCK_N_CHOICES:
++        output = torch.empty((routes, output_size), device="cuda", dtype=torch.bfloat16)
++
++        def run(output: torch.Tensor = output, block_n: int = block_n) -> None:
++            rocm_mxfp4_row_gemv(
++                x,
++                weight,
++                weight_scale,
++                expert_ids=expert_ids,
++                route_weights=route_weights,
++                routes_per_input=routes_per_input,
++                out=output,
++                block_n=block_n,
++            )
++
++        run()
++        torch.cuda.synchronize()
++        outputs[block_n] = output.clone()
++        median, p20, p80 = triton.testing.do_bench(
++            run,
++            warmup=100,
++            rep=500,
++            quantiles=[0.5, 0.2, 0.8],
++        )
++        timings[str(block_n)] = {
++            "median_ms": float(median),
++            "p20_ms": float(p20),
++            "p80_ms": float(p80),
++        }
++
++    reference = outputs[0]
++    correctness = {}
++    baseline_ms = timings["0"]["median_ms"]
++    for block_n, output in outputs.items():
++        diff = (output.float() - reference.float()).abs()
++        correctness[str(block_n)] = {
++            "max_abs_diff": float(diff.max().item()),
++            "mean_abs_diff": float(diff.mean().item()),
++            "close": bool(torch.allclose(output, reference, atol=0.125, rtol=0.04)),
++        }
++        timings[str(block_n)]["speedup_vs_scalar"] = (
++            baseline_ms / timings[str(block_n)]["median_ms"]
++        )
++
++    return {
++        "name": name,
++        "shape": {
++            "rows": rows,
++            "routes": routes,
++            "routes_per_input": routes_per_input,
++            "experts": experts,
++            "output_size": output_size,
++            "input_size": input_size,
++        },
++        "timings": timings,
++        "correctness": correctness,
++    }
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser()
++    parser.add_argument("--output", type=Path)
++    args = parser.parse_args()
++    if not torch.version.hip:
++        parser.error("this benchmark requires ROCm")
++
++    payload = {
++        "schema_version": 1,
++        "generated_at": datetime.now().astimezone().isoformat(),
++        "device": torch.cuda.get_device_name(0),
++        "gfx_arch": torch.cuda.get_device_properties(0).gcnArchName,
++        "cases": [
++            _case(
++                name="glm53_tp8_moe_up_k4",
++                rows=5,
++                routes_per_input=8,
++                output_size=512,
++                input_size=4096,
++                experts=8,
++            ),
++            _case(
++                name="glm53_tp8_moe_down_k4",
++                rows=40,
++                routes_per_input=1,
++                output_size=4096,
++                input_size=256,
++                experts=8,
++            ),
++        ],
++    }
++    encoded = json.dumps(payload, indent=2) + "\n"
++    if args.output:
++        args.output.parent.mkdir(parents=True, exist_ok=True)
++        args.output.write_text(encoded, encoding="utf-8")
++    print(encoded, end="")
++    return (
++        0
++        if all(
++            result["close"]
++            for case in payload["cases"]
++            for result in case["correctness"].values()
++        )
++        else 1
++    )
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/kernels/quantization/test_rocm_mxfp4_gemv.py b/tests/kernels/quantization/test_rocm_mxfp4_gemv.py
+index 748fdd7cd2..0649d0d802 100644
+--- a/tests/kernels/quantization/test_rocm_mxfp4_gemv.py
++++ b/tests/kernels/quantization/test_rocm_mxfp4_gemv.py
+@@ -27,8 +27,9 @@ pytestmark = [
+ ]
+ 
+ 
+-@pytest.mark.parametrize("shape", [(1, 64, 256), (4, 96, 512)])
+-def test_rocm_mxfp4_row_gemv_dense(shape: tuple[int, int, int]) -> None:
++@pytest.mark.parametrize("block_n", [0, 1, 2, 4, 8])
++@pytest.mark.parametrize("shape", [(1, 65, 256), (4, 95, 512)])
++def test_rocm_mxfp4_row_gemv_dense(shape: tuple[int, int, int], block_n: int) -> None:
+     rows, output_size, input_size = shape
+     torch.manual_seed(7)
+     x = torch.randn((rows, input_size), device="cuda", dtype=torch.bfloat16) * 0.2
+@@ -44,6 +45,7 @@ def test_rocm_mxfp4_row_gemv_dense(shape: tuple[int, int, int]) -> None:
+         weight,
+         weight_scale,
+         bias=bias,
++        block_n=block_n,
+     )
+     expected = F.linear(
+         x,
+@@ -54,7 +56,8 @@ def test_rocm_mxfp4_row_gemv_dense(shape: tuple[int, int, int]) -> None:
+     torch.testing.assert_close(actual, expected, atol=0.0625, rtol=0.02)
+ 
+ 
+-def test_rocm_mxfp4_row_gemv_expert_routing() -> None:
++@pytest.mark.parametrize("block_n", [0, 1, 2, 4, 8])
++def test_rocm_mxfp4_row_gemv_expert_routing(block_n: int) -> None:
+     rows, experts, topk, output_size, input_size = 2, 3, 2, 64, 256
+     torch.manual_seed(11)
+     x = torch.randn((rows, input_size), device="cuda", dtype=torch.bfloat16) * 0.2
+@@ -83,6 +86,7 @@ def test_rocm_mxfp4_row_gemv_expert_routing() -> None:
+         route_weights=route_weights,
+         bias=bias,
+         routes_per_input=topk,
++        block_n=block_n,
+     )
+ 
+     dequantized = dequant_mxfp4(weight, weight_scale, torch.bfloat16)
+@@ -175,6 +179,7 @@ def test_rocm_mxfp4_gemv_moe_matches_emulation(
+             "VLLM_ROCM_USE_TRITON_MXFP4_GEMV",
+             "1" if use_packed_gemv else "0",
+         )
++        monkeypatch.setenv("VLLM_ROCM_MXFP4_GEMV_BLOCK_N", "4")
+         quant_config = ocp_mx_moe_quant_config(
+             quant_dtype="mxfp4",
+             weight_dtype="mxfp4",
+@@ -190,6 +195,9 @@ def test_rocm_mxfp4_gemv_moe_matches_emulation(
+                 routing_tables=None,
+             )
+             assert kernel.fused_experts.use_rocm_gemv is use_packed_gemv
++            assert kernel.fused_experts.rocm_gemv_block_n == (
++                4 if use_packed_gemv else 0
++            )
+             return kernel.apply(
+                 hidden_states=hidden_states,
+                 w1=w1,
+diff --git a/vllm/envs.py b/vllm/envs.py
+index 388c6a1843..ca5a89d8d4 100755
+--- a/vllm/envs.py
++++ b/vllm/envs.py
+@@ -154,6 +154,7 @@ if TYPE_CHECKING:
+     VLLM_ROCM_MOE_PADDING: bool = True
+     VLLM_ROCM_SHUFFLE_KV_CACHE_LAYOUT: bool = False
+     VLLM_ROCM_USE_TRITON_MXFP4_GEMV: bool = False
++    VLLM_ROCM_MXFP4_GEMV_BLOCK_N: int = 0
+     VLLM_ENABLE_V1_MULTIPROCESSING: bool = True
+     VLLM_LOG_BATCHSIZE_INTERVAL: float = -1
+     VLLM_DISABLE_COMPILE_CACHE: bool = False
+@@ -1372,6 +1373,11 @@ environment_variables: dict[str, Callable[[], Any]] = {
+     "VLLM_ROCM_USE_TRITON_MXFP4_GEMV": lambda: (
+         os.getenv("VLLM_ROCM_USE_TRITON_MXFP4_GEMV", "False").lower() in ("true", "1")
+     ),
++    # Zero keeps the qualified scalar-output kernel. Positive values select
++    # the experimental output-tiled RDNA4 decode implementation.
++    "VLLM_ROCM_MXFP4_GEMV_BLOCK_N": lambda: int(
++        os.getenv("VLLM_ROCM_MXFP4_GEMV_BLOCK_N", "0")
++    ),
+     # Custom quick allreduce kernel for MI3* cards
+     # Choice of quantization level: FP, INT8, INT6, INT4, INT3 or NONE
+     # Recommended for large models to get allreduce
+diff --git a/vllm/model_executor/kernels/linear/mxfp4/emulation.py b/vllm/model_executor/kernels/linear/mxfp4/emulation.py
+index 13ff9c2425..39f2f3aa01 100644
+--- a/vllm/model_executor/kernels/linear/mxfp4/emulation.py
++++ b/vllm/model_executor/kernels/linear/mxfp4/emulation.py
+@@ -11,6 +11,7 @@ from torch.nn.parameter import Parameter
+ import vllm.envs as envs
+ from vllm.logger import init_logger
+ from vllm.model_executor.kernels.linear.mxfp4.rocm_gemv import (
++    ROCM_MXFP4_GEMV_BLOCK_N_CHOICES,
+     ROCM_MXFP4_GEMV_MAX_ROWS,
+     rocm_mxfp4_row_gemv,
+ )
+@@ -49,15 +50,23 @@ class EmulationMxfp4LinearKernel(MxFp4LinearKernel):
+     def __init__(self, config: MxFp4LinearLayerConfig) -> None:
+         super().__init__(config)
+         self.use_rocm_gemv = False
++        self.rocm_gemv_block_n = 0
+         if current_platform.is_rocm() and envs.VLLM_ROCM_USE_TRITON_MXFP4_GEMV:
+             from vllm.platforms.rocm import on_rdna4
+ 
+             self.use_rocm_gemv = on_rdna4()
+             if self.use_rocm_gemv:
++                self.rocm_gemv_block_n = envs.VLLM_ROCM_MXFP4_GEMV_BLOCK_N
++                if self.rocm_gemv_block_n not in ROCM_MXFP4_GEMV_BLOCK_N_CHOICES:
++                    raise ValueError(
++                        "VLLM_ROCM_MXFP4_GEMV_BLOCK_N must be one of "
++                        f"{ROCM_MXFP4_GEMV_BLOCK_N_CHOICES}"
++                    )
+                 logger.info_once(
+                     "Using experimental packed Triton MXFP4 GEMV for RDNA4 "
+-                    "linear decode batches up to %d rows.",
++                    "linear decode batches up to %d rows (block_n=%d).",
+                     ROCM_MXFP4_GEMV_MAX_ROWS,
++                    self.rocm_gemv_block_n,
+                 )
+         if config.activation_quant_key is None:
+             # no input Q/DQ for weight-only
+@@ -138,6 +147,7 @@ class EmulationMxfp4LinearKernel(MxFp4LinearKernel):
+                 layer.weight,
+                 layer.weight_scale,
+                 bias=bias,
++                block_n=self.rocm_gemv_block_n,
+             )
+             return out.reshape(*input_shape[:-1], out.shape[-1])
+ 
+diff --git a/vllm/model_executor/kernels/linear/mxfp4/rocm_gemv.py b/vllm/model_executor/kernels/linear/mxfp4/rocm_gemv.py
+index 3205dcf752..6717c842d8 100644
+--- a/vllm/model_executor/kernels/linear/mxfp4/rocm_gemv.py
++++ b/vllm/model_executor/kernels/linear/mxfp4/rocm_gemv.py
+@@ -23,6 +23,7 @@ from vllm.utils.torch_utils import direct_register_custom_op
+ 
+ ROCM_MXFP4_GEMV_MAX_ROWS = 16
+ ROCM_MXFP4_GEMV_MAX_ROUTES = 64
++ROCM_MXFP4_GEMV_BLOCK_N_CHOICES = (0, 1, 2, 4, 8)
+ _MXFP4_GROUP_SIZE = 32
+ _PACK_FACTOR = 2
+ 
+@@ -141,6 +142,109 @@ def _rocm_mxfp4_row_gemv_kernel(
+     tl.store(out_ptr + route * stride_om + out_col * stride_on, value)
+ 
+ 
++@triton.jit
++def _rocm_mxfp4_row_gemv_tiled_kernel(
++    x_ptr,
++    weight_ptr,
++    weight_scale_ptr,
++    expert_ids_ptr,
++    route_weights_ptr,
++    bias_ptr,
++    out_ptr,
++    K: tl.constexpr,
++    N: tl.constexpr,
++    num_experts,
++    routes_per_input: tl.constexpr,
++    stride_xm,
++    stride_xk,
++    stride_we,
++    stride_wn,
++    stride_wk,
++    stride_wse,
++    stride_wsn,
++    stride_wsk,
++    stride_be,
++    stride_bn,
++    stride_om,
++    stride_on,
++    HAS_EXPERT_IDS: tl.constexpr,
++    HAS_ROUTE_WEIGHTS: tl.constexpr,
++    HAS_BIAS: tl.constexpr,
++    BLOCK_N: tl.constexpr,
++    BLOCK_PACKED_K: tl.constexpr,
++):
++    """Compute several output columns while sharing each activation load.
++
++    Unlike the scalar-output kernel, this kernel walks packed weight bytes
++    directly.  Each byte supplies two E2M1 values, so it also avoids loading
++    the same packed byte once for the low nibble and again for the high nibble.
++    """
++    route = tl.program_id(0).to(tl.int64)
++    output_cols = tl.program_id(1).to(tl.int64) * BLOCK_N + tl.arange(0, BLOCK_N)
++    valid_output = output_cols < N
++
++    expert = tl.load(expert_ids_ptr + route).to(tl.int64) if HAS_EXPERT_IDS else 0
++    valid_expert = (expert >= 0) & (expert < num_experts)
++    safe_expert = tl.maximum(expert, 0)
++    input_row = route // routes_per_input
++
++    packed_offsets = tl.arange(0, BLOCK_PACKED_K)
++    acc = tl.zeros((BLOCK_N,), dtype=tl.float32)
++    for packed_start in range(0, K // _PACK_FACTOR, BLOCK_PACKED_K):
++        packed_k = packed_start + packed_offsets
++        valid_packed_k = packed_k < K // _PACK_FACTOR
++        weight_mask = valid_expert & valid_output[:, None] & valid_packed_k[None, :]
++        packed = tl.load(
++            weight_ptr
++            + safe_expert * stride_we
++            + output_cols[:, None] * stride_wn
++            + packed_k[None, :] * stride_wk,
++            mask=weight_mask,
++            other=0,
++        ).to(tl.int32)
++        scale = tl.load(
++            weight_scale_ptr
++            + safe_expert * stride_wse
++            + output_cols[:, None] * stride_wsn
++            + (packed_k[None, :] // (_MXFP4_GROUP_SIZE // _PACK_FACTOR)) * stride_wsk,
++            mask=weight_mask,
++            other=0,
++        )
++        block_scale = _e8m0_to_f32(scale)
++
++        even_k = packed_k * _PACK_FACTOR
++        odd_k = even_k + 1
++        x_even = tl.load(
++            x_ptr + input_row * stride_xm + even_k * stride_xk,
++            mask=valid_expert & valid_packed_k,
++            other=0.0,
++        ).to(tl.float32)
++        x_odd = tl.load(
++            x_ptr + input_row * stride_xm + odd_k * stride_xk,
++            mask=valid_expert & valid_packed_k,
++            other=0.0,
++        ).to(tl.float32)
++        low = _e2m1_to_f32(packed & 0xF)
++        high = _e2m1_to_f32((packed >> 4) & 0xF)
++        products = (x_even[None, :] * low + x_odd[None, :] * high) * block_scale
++        acc += tl.sum(products, axis=1)
++
++    if HAS_BIAS:
++        acc += tl.load(
++            bias_ptr + safe_expert * stride_be + output_cols * stride_bn,
++            mask=valid_expert & valid_output,
++            other=0.0,
++        ).to(tl.float32)
++    if HAS_ROUTE_WEIGHTS:
++        acc *= tl.load(route_weights_ptr + route).to(tl.float32)
++    acc = tl.where(valid_expert, acc, 0.0)
++    tl.store(
++        out_ptr + route * stride_om + output_cols * stride_on,
++        acc,
++        mask=valid_output,
++    )
++
++
+ def _normalize_weight_strides(
+     tensor: torch.Tensor,
+ ) -> tuple[int, int, int, int]:
+@@ -172,6 +276,7 @@ def _rocm_mxfp4_row_gemv(
+     bias: torch.Tensor | None,
+     out: torch.Tensor,
+     routes_per_input: int,
++    block_n: int,
+ ) -> None:
+     if x.ndim != 2:
+         raise ValueError(f"MXFP4 GEMV input must be 2D, got {x.shape}")
+@@ -189,6 +294,11 @@ def _rocm_mxfp4_row_gemv(
+         raise ValueError("MXFP4 GEMV tensors must reside on the same GPU")
+     if routes_per_input < 1:
+         raise ValueError("routes_per_input must be positive")
++    if block_n not in ROCM_MXFP4_GEMV_BLOCK_N_CHOICES:
++        raise ValueError(
++            "MXFP4 GEMV block_n must be one of "
++            f"{ROCM_MXFP4_GEMV_BLOCK_N_CHOICES}, got {block_n}"
++        )
+ 
+     routes, output_size = out.shape
+     input_size = x.shape[1]
+@@ -249,8 +359,7 @@ def _rocm_mxfp4_row_gemv(
+     expert_ids_ptr = weight if expert_ids is None else expert_ids
+     route_weights_ptr = x if route_weights is None else route_weights
+     bias_ptr = x if bias is None else bias
+-    grid = (routes, output_size)
+-    _rocm_mxfp4_row_gemv_kernel[grid](
++    common_args = (
+         x,
+         weight,
+         weight_scale,
+@@ -258,6 +367,8 @@ def _rocm_mxfp4_row_gemv(
+         route_weights_ptr,
+         bias_ptr,
+         out,
++    )
++    common_kwargs = dict(
+         K=input_size,
+         num_experts=num_experts,
+         routes_per_input=routes_per_input,
+@@ -276,7 +387,23 @@ def _rocm_mxfp4_row_gemv(
+         HAS_EXPERT_IDS=expert_ids is not None,
+         HAS_ROUTE_WEIGHTS=route_weights is not None,
+         HAS_BIAS=bias is not None,
+-        BLOCK_K=256,
++    )
++    if block_n == 0:
++        _rocm_mxfp4_row_gemv_kernel[(routes, output_size)](
++            *common_args,
++            **common_kwargs,
++            BLOCK_K=256,
++            num_warps=4,
++            num_stages=1,
++        )
++        return
++
++    _rocm_mxfp4_row_gemv_tiled_kernel[(routes, triton.cdiv(output_size, block_n))](
++        *common_args,
++        **common_kwargs,
++        N=output_size,
++        BLOCK_N=block_n,
++        BLOCK_PACKED_K=128,
+         num_warps=4,
+         num_stages=1,
+     )
+@@ -291,6 +418,7 @@ def _rocm_mxfp4_row_gemv_fake(
+     bias: torch.Tensor | None,
+     out: torch.Tensor,
+     routes_per_input: int,
++    block_n: int,
+ ) -> None:
+     return None
+ 
+@@ -313,8 +441,13 @@ def rocm_mxfp4_row_gemv(
+     bias: torch.Tensor | None = None,
+     routes_per_input: int = 1,
+     out: torch.Tensor | None = None,
++    block_n: int = 0,
+ ) -> torch.Tensor:
+-    """Apply packed row-major MXFP4 weights without full dequantization."""
++    """Apply packed row-major MXFP4 weights without full dequantization.
++
++    ``block_n=0`` preserves the qualified scalar-output kernel.  Positive
++    values opt into the experimental output-tiled implementation.
++    """
+     output_size = weight.shape[-2]
+     routes = x.shape[0] * routes_per_input
+     if out is None:
+@@ -328,6 +461,7 @@ def rocm_mxfp4_row_gemv(
+         bias,
+         out,
+         routes_per_input,
++        block_n,
+     )
+     return out
+ 
+@@ -335,5 +469,6 @@ def rocm_mxfp4_row_gemv(
+ __all__ = [
+     "ROCM_MXFP4_GEMV_MAX_ROUTES",
+     "ROCM_MXFP4_GEMV_MAX_ROWS",
++    "ROCM_MXFP4_GEMV_BLOCK_N_CHOICES",
+     "rocm_mxfp4_row_gemv",
+ ]
+diff --git a/vllm/model_executor/layers/fused_moe/experts/ocp_mx_emulation_moe.py b/vllm/model_executor/layers/fused_moe/experts/ocp_mx_emulation_moe.py
+index a81ef4a266..d8398309b6 100644
+--- a/vllm/model_executor/layers/fused_moe/experts/ocp_mx_emulation_moe.py
++++ b/vllm/model_executor/layers/fused_moe/experts/ocp_mx_emulation_moe.py
+@@ -17,6 +17,7 @@ import vllm.envs as envs
+ import vllm.model_executor.layers.fused_moe.modular_kernel as mk
+ from vllm.logger import init_logger
+ from vllm.model_executor.kernels.linear.mxfp4.rocm_gemv import (
++    ROCM_MXFP4_GEMV_BLOCK_N_CHOICES,
+     ROCM_MXFP4_GEMV_MAX_ROUTES,
+     ROCM_MXFP4_GEMV_MAX_ROWS,
+     rocm_mxfp4_row_gemv,
+@@ -132,6 +133,7 @@ class OCP_MXQuantizationEmulationTritonExperts(TritonExperts):
+         self._quant_dtype = activation_quant_dtype(self.ocp_mx_scheme)
+ 
+         self.use_rocm_gemv = False
++        self.rocm_gemv_block_n = 0
+         if (
+             self.ocp_mx_scheme.startswith("w_mxfp4")  # type: ignore[union-attr]
+             and current_platform.is_rocm()
+@@ -141,11 +143,19 @@ class OCP_MXQuantizationEmulationTritonExperts(TritonExperts):
+ 
+             self.use_rocm_gemv = on_rdna4()
+             if self.use_rocm_gemv:
++                self.rocm_gemv_block_n = envs.VLLM_ROCM_MXFP4_GEMV_BLOCK_N
++                if self.rocm_gemv_block_n not in ROCM_MXFP4_GEMV_BLOCK_N_CHOICES:
++                    raise ValueError(
++                        "VLLM_ROCM_MXFP4_GEMV_BLOCK_N must be one of "
++                        f"{ROCM_MXFP4_GEMV_BLOCK_N_CHOICES}"
++                    )
+                 logger.info_once(
+                     "Using experimental packed Triton MXFP4 GEMV for RDNA4 "
+-                    "MoE decode batches up to %d tokens and %d routes.",
++                    "MoE decode batches up to %d tokens and %d routes "
++                    "(block_n=%d).",
+                     ROCM_MXFP4_GEMV_MAX_ROWS,
+                     ROCM_MXFP4_GEMV_MAX_ROUTES,
++                    self.rocm_gemv_block_n,
+                 )
+ 
+     @staticmethod
+@@ -296,6 +306,7 @@ class OCP_MXQuantizationEmulationTritonExperts(TritonExperts):
+             routes_per_input=topk,
+             bias=self.w1_bias,
+             out=intermediate_cache1,
++            block_n=self.rocm_gemv_block_n,
+         )
+         self.activation(activation, intermediate_cache2, intermediate_cache1)
+ 
+@@ -318,6 +329,7 @@ class OCP_MXQuantizationEmulationTritonExperts(TritonExperts):
+             route_weights=route_weights,
+             bias=self.w2_bias,
+             out=intermediate_cache3.view(route_count, hidden_size),
++            block_n=self.rocm_gemv_block_n,
+         )
+         self.moe_sum(intermediate_cache3, output)
+ 
+-- 
+2.53.0
+

@@ -1,0 +1,186 @@
+From 50b982e70c33104ee649b956a70daf2b10b83871 Mon Sep 17 00:00:00 2001
+From: Jared Wen <w13431838023@gmail.com>
+Date: Sun, 6 Sep 2026 08:23:55 +0000
+Subject: [PATCH 24/25] fix: render GLM tool schemas required-first
+
+GLM follows the property order rendered in tool schemas. Put required
+properties before optional properties, recursively, so a bulky optional
+value cannot make the model omit a later required key.
+
+Upstream: https://github.com/vllm-project/vllm/pull/55558
+Upstream-Commit: 50b982e70c33104ee649b956a70daf2b10b83871
+---
+ tests/tool_parsers/test_utils.py           | 63 ++++++++++++++++++++++
+ vllm/renderers/online_renderer.py          | 11 ++++
+ vllm/tool_parsers/glm47_moe_tool_parser.py |  4 ++
+ vllm/tool_parsers/utils.py                 | 39 ++++++++++++++
+ 4 files changed, 117 insertions(+)
+
+diff --git a/tests/tool_parsers/test_utils.py b/tests/tool_parsers/test_utils.py
+--- a/tests/tool_parsers/test_utils.py
++++ b/tests/tool_parsers/test_utils.py
+@@ -3,6 +3,7 @@
+ 
+ import ast
+ import json
++from typing import Any
+ 
+ import pytest
+ 
+@@ -18,6 +19,7 @@ from vllm.tool_parsers.utils import (
+     make_valid_python,
+     normalize_leading_zero_ints,
+     rename_reserved_kwargs,
++    reorder_properties_required_first,
+     restore_reserved_kwarg_names,
+ )
+ 
+@@ -764,3 +766,64 @@ class TestRenameReservedKwargs:
+             "path": "x",
+             "from": 1,
+         }
++
++
++class TestReorderPropertiesRequiredFirst:
++    def test_required_first_in_declaration_order(self):
++        schema = {
++            "type": "object",
++            "properties": {
++                "tag": {"type": "string"},
++                "choices": {"type": "array"},
++                "prompt": {"type": "string"},
++            },
++            "required": ["prompt", "tag"],
++        }
++        reorder_properties_required_first(schema)
++        assert list(schema["properties"]) == ["prompt", "tag", "choices"]
++
++    def test_recurses_into_array_items(self):
++        schema: dict[str, Any] = {
++            "type": "object",
++            "properties": {
++                "items": {
++                    "type": "array",
++                    "items": {
++                        "type": "object",
++                        "properties": {
++                            "detail": {"type": "string"},
++                            "title": {"type": "string"},
++                        },
++                        "required": ["title", "detail"],
++                    },
++                }
++            },
++            "required": ["items"],
++        }
++        reorder_properties_required_first(schema)
++        nested = schema["properties"]["items"]["items"]
++        assert list(nested["properties"]) == ["title", "detail"]
++
++    def test_no_required_keeps_order(self):
++        schema = {
++            "type": "object",
++            "properties": {"b": {"type": "string"}, "a": {"type": "string"}},
++        }
++        reorder_properties_required_first(schema)
++        assert list(schema["properties"]) == ["b", "a"]
++
++    def test_required_entry_missing_from_properties_is_skipped(self):
++        schema = {
++            "type": "object",
++            "properties": {"b": {"type": "string"}, "a": {"type": "string"}},
++            "required": ["missing", "a"],
++        }
++        reorder_properties_required_first(schema)
++        assert list(schema["properties"]) == ["a", "b"]
++
++    def test_non_dict_schemas_pass_through(self):
++        assert reorder_properties_required_first(None) is None
++        assert reorder_properties_required_first(True) is True
++        assert reorder_properties_required_first([{"type": "string"}]) == [
++            {"type": "string"}
++        ]
+diff --git a/vllm/renderers/online_renderer.py b/vllm/renderers/online_renderer.py
+--- a/vllm/renderers/online_renderer.py
++++ b/vllm/renderers/online_renderer.py
+@@ -178,6 +178,17 @@ class OnlineRenderer:
+             tool_dicts = None
+         else:
+             tool_dicts = [tool.model_dump() for tool in request.tools]
++            if tool_parser is not None and getattr(
++                tool_parser, "reorder_tool_schema_required_first", False
++            ):
++                from vllm.tool_parsers.utils import (
++                    reorder_properties_required_first,
++                )
++
++                for tool_dict in tool_dicts:
++                    params = tool_dict.get("function", {}).get("parameters")
++                    if params is not None:
++                        reorder_properties_required_first(params)
+ 
+         if not self.use_harmony:
+             # Common case.
+diff --git a/vllm/tool_parsers/glm47_moe_tool_parser.py b/vllm/tool_parsers/glm47_moe_tool_parser.py
+--- a/vllm/tool_parsers/glm47_moe_tool_parser.py
++++ b/vllm/tool_parsers/glm47_moe_tool_parser.py
+@@ -9,3 +9,7 @@ from vllm.parser.engine.registered_adapters import Glm47MoeParserToolAdapter
+ class Glm47MoeModelToolParser(Glm47MoeParserToolAdapter):  # type: ignore[valid-type, misc]
+     supports_required_and_named = False
+     structural_tag_model = "glm_4_7"
++    # GLM renders tool schemas verbatim into the prompt and follows the
++    # property order when emitting arguments; putting required fields first
++    # keeps the model from omitting them once it starts on optional fields.
++    reorder_tool_schema_required_first = True
+diff --git a/vllm/tool_parsers/utils.py b/vllm/tool_parsers/utils.py
+--- a/vllm/tool_parsers/utils.py
++++ b/vllm/tool_parsers/utils.py
+@@ -1050,6 +1050,45 @@ def extract_types_from_schema(schema: Any) -> list[str]:
+     return list(types) if types else ["string"]
+ 
+ 
++def reorder_properties_required_first(schema: Any) -> Any:
++    """Reorder an object schema's ``properties`` so that fields declared in
++    ``required`` come first (in ``required`` declaration order), followed by
++    optional fields in their original order. Recurses into nested schemas.
++
++    Property order is not semantically meaningful for JSON Schema
++    validation, but chat templates render schemas verbatim into the prompt
++    and models tend to emit arguments in the rendered order; putting
++    required fields first makes the model commit to them before it starts
++    on bulky optional fields (which it may otherwise never return from).
++
++    May mutate and return *schema*; only call it on per-request copies.
++    """
++    if isinstance(schema, list):
++        return [reorder_properties_required_first(s) for s in schema]
++    if not isinstance(schema, dict):
++        return schema
++
++    for key in ("properties", "$defs", "definitions"):
++        if isinstance(sub := schema.get(key), dict):
++            schema[key] = {
++                k: reorder_properties_required_first(v) for k, v in sub.items()
++            }
++    for key in ("items", "additionalProperties", "contains"):
++        if isinstance(sub := schema.get(key), (dict, list)):
++            schema[key] = reorder_properties_required_first(sub)
++    for key in ("anyOf", "oneOf", "allOf", "prefixItems"):
++        if isinstance(sub := schema.get(key), list):
++            schema[key] = [reorder_properties_required_first(s) for s in sub]
++
++    props = schema.get("properties")
++    required = schema.get("required")
++    if isinstance(props, dict) and isinstance(required, list) and required:
++        ordered = {k: props[k] for k in required if k in props}
++        ordered.update((k, v) for k, v in props.items() if k not in ordered)
++        schema["properties"] = ordered
++    return schema
++
++
+ _TYPE_ALIASES: dict[str, str] = {
+     "str": "string",
+     "text": "string",
+-- 
+2.51.0
+

@@ -146,6 +146,7 @@ class ProductionProfileTests(unittest.TestCase):
             "vllm_deepseekv4flash_v0.28",
             "vllm_glm53flashrocm10_v0.29",
             "vllm_glm53flashrocm10_v0.30",
+            "vllm_glm53flashrocm10_v0.31",
             "vllm_qwen38flash_pr53896",
         }
         self.assertEqual(set(recipe_names()), expected)
@@ -517,6 +518,29 @@ class ProductionProfileTests(unittest.TestCase):
         production = load_profile(GLM_PROFILE)["runtime"]
         self.assertEqual(production["recipe"], "vllm_glm53flashrocm10_v0.29")
         self.assertNotIn("VLLM_ROCM_USE_GLUON_SPARSE_MLA", production["environment"])
+
+    def test_glm_tiled_mxfp4_gemv_stays_isolated_and_opt_in(self) -> None:
+        profile = load_profile(
+            str(ROOT / "profiles/dev/glm53-flash-rocm10-mxfp4-tiled.json")
+        )
+        runtime = profile["runtime"]
+        self.assertEqual(profile["status"], "development")
+        self.assertEqual(runtime["status"], "diagnostic-only")
+        self.assertEqual(runtime["recipe"], "vllm_glm53flashrocm10_v0.31")
+        self.assertEqual(runtime["environment"]["VLLM_ROCM_MXFP4_GEMV_BLOCK_N"], "4")
+        self.assertIn("0026", runtime["required_patches"])
+
+        scalar = runtime["experimental_modes"]["scalar-gemv-rollback"]
+        self.assertEqual(
+            scalar["runtime_overrides"]["environment"][
+                "VLLM_ROCM_MXFP4_GEMV_BLOCK_N"
+            ],
+            "0",
+        )
+
+        production = load_profile(GLM_PROFILE)["runtime"]
+        self.assertEqual(production["recipe"], "vllm_glm53flashrocm10_v0.29")
+        self.assertNotIn("VLLM_ROCM_MXFP4_GEMV_BLOCK_N", production["environment"])
 
     def test_glm_long_context_safety_patches_cover_page_sizes_and_bounds(
         self,

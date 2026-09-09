@@ -1,0 +1,59 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Sat, 5 Sep 2026 13:59:02 +0200
+Subject: [PATCH 06/16] fix: route GLM speculative verify through ragged sparse
+ MLA
+
+---
+ tests/v1/attention/test_rocm_glm5next_sparse.py       |  5 ++++-
+ .../attention/backends/mla/rocm_aiter_mla_sparse.py   | 11 +++++++----
+ 2 files changed, 11 insertions(+), 5 deletions(-)
+
+diff --git a/tests/v1/attention/test_rocm_glm5next_sparse.py b/tests/v1/attention/test_rocm_glm5next_sparse.py
+index 35b51c85..1fab92cb 100644
+--- a/tests/v1/attention/test_rocm_glm5next_sparse.py
++++ b/tests/v1/attention/test_rocm_glm5next_sparse.py
+@@ -73,7 +73,9 @@ def test_fit_kpool_indices_rejects_narrow_input():
+         ("auto", 512, 0, 2, 2, 1, True),
+         ("fp8", 512, 1, 0, 0, 32, False),
+         ("auto", 576, 1, 0, 0, 32, False),
+-        ("auto", 512, 0, 2, 4, 2, False),
++        ("auto", 512, 0, 2, 4, 2, True),
++        ("auto", 512, 0, 2, 12, 6, True),
++        ("auto", 512, 0, 0, 0, 0, False),
+     ],
+ )
+ def test_rocm_sparse_triton_route(
+@@ -85,6 +87,7 @@ def test_rocm_sparse_triton_route(
+     max_query_len,
+     expected,
+ ):
++    """Validate Triton routing for prefill, decode, and MTP verification."""
+     assert (
+         _use_rocm_sparse_triton(
+             kv_cache_dtype=kv_cache_dtype,
+diff --git a/vllm/v1/attention/backends/mla/rocm_aiter_mla_sparse.py b/vllm/v1/attention/backends/mla/rocm_aiter_mla_sparse.py
+index ef707d6e..706d28e3 100644
+--- a/vllm/v1/attention/backends/mla/rocm_aiter_mla_sparse.py
++++ b/vllm/v1/attention/backends/mla/rocm_aiter_mla_sparse.py
+@@ -53,13 +53,16 @@ def _use_rocm_sparse_triton(
+     num_decode_tokens: int,
+     max_query_len: int,
+ ) -> bool:
+-    """Select the rope-free BF16 path not supported by AITER sparse MLA."""
+-    plain_decode = num_decode_tokens == num_decodes
++    """Select the rope-free BF16 path not supported by AITER sparse MLA.
++
++    The ragged Triton kernel indexes metadata per query token, so multi-token
++    speculative verification rows have the same capability requirements as
++    plain decode rows.
++    """
+     return (
+         not kv_cache_dtype.startswith("fp8")
+         and head_size == kv_lora_rank
+-        and plain_decode
+-        and (num_prefills > 0 or (num_decodes > 0 and max_query_len == 1))
++        and (num_prefills > 0 or num_decodes > 0)
+     )
+ 
+ 

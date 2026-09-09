@@ -1,0 +1,257 @@
+From bcca85b9083512bccdb039a1770834ee6e246646 Mon Sep 17 00:00:00 2001
+From: Jared Wen <jaredwen@inferact.ai>
+Date: Mon, 7 Sep 2026 05:27:55 +0000
+Subject: [PATCH 25/25] fix: align GLM strict tool schema order
+
+Build GLM strict-mode structural tags from deep copies carrying the same
+required-first property order rendered into the prompt. This keeps the
+xgrammar key order aligned with what the model sees while leaving the
+request untouched.
+
+Upstream: https://github.com/vllm-project/vllm/pull/55558
+Upstream-Commit: bcca85b9083512bccdb039a1770834ee6e246646
+---
+ docs/features/tool_calling.md                    |   7 +-
+ tests/tool_parsers/test_glm47_moe_tool_parser.py | 118 ++++++++++++++++++++++-
+ vllm/tool_parsers/abstract_tool_parser.py        |  15 ++-
+ vllm/tool_parsers/glm47_moe_tool_parser.py       |   1 +
+ vllm/tool_parsers/utils.py                       |  18 ++++
+ 5 files changed, 155 insertions(+), 4 deletions(-)
+
+diff --git a/docs/features/tool_calling.md b/docs/features/tool_calling.md
+--- a/docs/features/tool_calling.md
++++ b/docs/features/tool_calling.md
+@@ -401,8 +401,13 @@ Supported models:
+ 
+ * `zai-org/GLM-4.7`
+ * `zai-org/GLM-4.7-Flash`
++* `zai-org/GLM-5.x` (including `GLM-5.3-Flash`)
+ 
+-Flags: `--tool-call-parser glm47`
++Flags: `--tool-call-parser glm47 --reasoning-parser glm45`
++
++Tool schemas are rendered into the prompt with required properties first, and strict-mode
++structural tags use that same order, so the grammar guarantees every required argument while
++the model keeps the key order it was shown.
+ 
+ ### FunctionGemma Models (`functiongemma`)
+ 
+diff --git a/tests/tool_parsers/test_glm47_moe_tool_parser.py b/tests/tool_parsers/test_glm47_moe_tool_parser.py
+--- a/tests/tool_parsers/test_glm47_moe_tool_parser.py
++++ b/tests/tool_parsers/test_glm47_moe_tool_parser.py
+@@ -4,13 +4,17 @@
+ """Tests for the GLM-4.7 tool call parser."""
+ 
+ import json
+-from unittest.mock import Mock
++from unittest.mock import MagicMock, Mock
+ 
+ import pytest
++import xgrammar as xgr
+ from openai.types.responses import ResponseFunctionToolCall
++from xgrammar.testing import _is_grammar_accept_string
+ 
+ from vllm.entrypoints.generate.base.protocol import FunctionCall
+ from vllm.entrypoints.openai.chat_completion.protocol import (
++    ChatCompletionNamedFunction,
++    ChatCompletionNamedToolChoiceParam,
+     ChatCompletionRequest,
+     ChatCompletionToolsParam,
+     FunctionDefinition,
+@@ -266,3 +270,115 @@ class TestGlm47Streaming:
+         ]
+         args = json.loads("".join(arguments))
+         assert args["city"] == "Beijing"
++
++
++def _preferences_tool(strict: bool | None) -> ChatCompletionToolsParam:
++    return ChatCompletionToolsParam(
++        function=FunctionDefinition(
++            name="collect_preferences",
++            strict=strict,
++            parameters={
++                "type": "object",
++                "properties": {
++                    "note": {"type": "string"},
++                    "items": {
++                        "type": "array",
++                        "items": {
++                            "type": "object",
++                            "properties": {
++                                "prompt": {"type": "string"},
++                                "choices": {
++                                    "type": "array",
++                                    "items": {"type": "string"},
++                                },
++                                "tag": {"type": "string"},
++                            },
++                            "required": ["prompt", "tag"],
++                        },
++                    },
++                },
++                "required": ["items"],
++            },
++        ),
++    )
++
++
++def _json_schema_formats(node) -> list[dict]:
++    if isinstance(node, dict):
++        found = [node] if node.get("type") == "json_schema" else []
++        return found + [f for v in node.values() for f in _json_schema_formats(v)]
++    if isinstance(node, list):
++        return [f for v in node for f in _json_schema_formats(v)]
++    return []
++
++
++def _call(items: str, note: str | None = None) -> str:
++    args = f"<arg_key>items</arg_key><arg_value>{items}</arg_value>"
++    if note is not None:
++        args += f"<arg_key>note</arg_key><arg_value>{note}</arg_value>"
++    return f"<tool_call>collect_preferences{args}</tool_call>"
++
++
++class TestGlm47StructuralTag:
++    """Strict mode must enforce the same required-first key order the prompt
++    shows the model: the grammar then guarantees required arguments instead of
++    fighting the order the model was primed with."""
++
++    @staticmethod
++    def _tag(tool_choice, strict):
++        tools = [_preferences_tool(strict)]
++        parser = Glm47MoeModelToolParser(MagicMock(), tools=tools)
++        request = ChatCompletionRequest(messages=[], model="m", tools=tools)
++        request.tool_choice = tool_choice
++        tag = parser.get_structural_tag(request)
++        # The request keeps the client's schema order.
++        assert list(tools[0].function.parameters["properties"]) == ["note", "items"]
++        return tag
++
++    def test_auto_without_strict_is_unconstrained(self):
++        assert self._tag("auto", strict=None) is None
++
++    @pytest.mark.parametrize(
++        "tool_choice",
++        [
++            "auto",
++            "required",
++            ChatCompletionNamedToolChoiceParam(
++                function=ChatCompletionNamedFunction(name="collect_preferences")
++            ),
++        ],
++    )
++    def test_embedded_schema_uses_required_first_order(self, tool_choice):
++        formats = _json_schema_formats(self._tag(tool_choice, strict=True).model_dump())
++        assert len(formats) == 1
++        schema = formats[0]["json_schema"]
++        assert list(schema["properties"]) == ["items", "note"]
++        assert list(schema["properties"]["items"]["items"]["properties"]) == [
++            "prompt",
++            "tag",
++            "choices",
++        ]
++
++    @pytest.mark.parametrize(
++        "output",
++        [
++            _call('[{"prompt": "q", "tag": "t", "choices": ["a"]}]'),
++            _call('[{"prompt": "q", "tag": "t"}]', note="n"),
++            _call("[]"),
++        ],
++    )
++    def test_grammar_accepts_required_first_output(self, output):
++        grammar = xgr.Grammar.from_structural_tag(self._tag("required", strict=True))
++        assert _is_grammar_accept_string(grammar, output, require_termination=False)
++
++    @pytest.mark.parametrize(
++        "output",
++        [
++            _call('[{"prompt": "q", "choices": ["a"]}]'),
++            "<tool_call>collect_preferences<arg_key>note</arg_key><arg_value>n"
++            "</arg_value></tool_call>",
++        ],
++    )
++    def test_grammar_rejects_missing_required_key(self, output):
++        grammar = xgr.Grammar.from_structural_tag(self._tag("required", strict=True))
++        assert not _is_grammar_accept_string(grammar, output, require_termination=False)
+diff --git a/vllm/tool_parsers/abstract_tool_parser.py b/vllm/tool_parsers/abstract_tool_parser.py
+--- a/vllm/tool_parsers/abstract_tool_parser.py
++++ b/vllm/tool_parsers/abstract_tool_parser.py
+@@ -30,7 +30,11 @@ from vllm.sampling_params import (
+     StructuredOutputsParams,
+ )
+ from vllm.tokenizers import TokenizerLike
+-from vllm.tool_parsers.utils import Tool, get_json_schema_from_tools
++from vllm.tool_parsers.utils import (
++    Tool,
++    get_json_schema_from_tools,
++    reorder_tools_required_first,
++)
+ from vllm.utils.collection_utils import is_list_of
+ from vllm.utils.import_utils import import_plugin
+ 
+@@ -59,6 +63,10 @@ class ToolParser:
+     # xgrammar builtin structural tag model key. Subclasses set this when
+     # their parsed tool-call syntax matches a builtin xgrammar format.
+     structural_tag_model: str | None = None
++    # Render each tool's object schemas with required properties first, both
++    # in the prompt (OnlineRenderer) and in the structural tag, so the order
++    # the model is shown is the order the grammar enforces.
++    reorder_tool_schema_required_first: bool = False
+     engine_based_streaming: bool = False
+ 
+     def __init_subclass__(cls, **kwargs: Any) -> None:
+@@ -176,9 +184,12 @@ class ToolParser:
+             return None
+         from vllm.tool_parsers.structural_tag_registry import get_model_structural_tag
+ 
++        tools = request.tools
++        if self.reorder_tool_schema_required_first and tools:
++            tools = reorder_tools_required_first(tools)
+         return get_model_structural_tag(
+             model=self.structural_tag_model,
+-            tools=request.tools,
++            tools=tools,
+             tool_choice=request.tool_choice,
+             reasoning=reasoning,
+         )
+diff --git a/vllm/tool_parsers/glm47_moe_tool_parser.py b/vllm/tool_parsers/glm47_moe_tool_parser.py
+--- a/vllm/tool_parsers/glm47_moe_tool_parser.py
++++ b/vllm/tool_parsers/glm47_moe_tool_parser.py
+@@ -12,4 +12,5 @@ class Glm47MoeModelToolParser(Glm47MoeParserToolAdapter):  # type: ignore[valid-
+     # GLM renders tool schemas verbatim into the prompt and follows the
+     # property order when emitting arguments; putting required fields first
+     # keeps the model from omitting them once it starts on optional fields.
++    # The strict-mode grammar (xgrammar glm_4_7) enforces the same order.
+     reorder_tool_schema_required_first = True
+diff --git a/vllm/tool_parsers/utils.py b/vllm/tool_parsers/utils.py
+--- a/vllm/tool_parsers/utils.py
++++ b/vllm/tool_parsers/utils.py
+@@ -1089,6 +1089,24 @@ def reorder_properties_required_first(schema: Any) -> Any:
+     return schema
+ 
+ 
++def reorder_tools_required_first(tools: list[Tool]) -> list[Tool]:
++    """Return copies of *tools* whose parameter schemas are reordered with
++    :func:`reorder_properties_required_first`. Non-function tools pass
++    through unchanged."""
++    reordered: list[Tool] = []
++    for tool in tools:
++        if isinstance(tool, ChatCompletionToolsParam):
++            tool = tool.model_copy(deep=True)
++            tool.function.parameters = reorder_properties_required_first(
++                tool.function.parameters
++            )
++        elif isinstance(tool, FunctionTool):
++            tool = tool.model_copy(deep=True)
++            tool.parameters = reorder_properties_required_first(tool.parameters)
++        reordered.append(tool)
++    return reordered
++
++
+ _TYPE_ALIASES: dict[str, str] = {
+     "str": "string",
+     "text": "string",
+-- 
+2.51.0
+

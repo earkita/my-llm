@@ -1,0 +1,244 @@
+diff --git a/vllm/v1/attention/backends/mla/rocm_aiter_mla_sparse.py b/vllm/v1/attention/backends/mla/rocm_aiter_mla_sparse.py
+--- a/vllm/v1/attention/backends/mla/rocm_aiter_mla_sparse.py
++++ b/vllm/v1/attention/backends/mla/rocm_aiter_mla_sparse.py
+@@ -57,20 +57,27 @@ def _use_rocm_sparse_triton(
+     num_decodes: int,
+     num_decode_tokens: int,
+     max_query_len: int,
+-    fp8_triton_supported: bool = _ON_RDNA4,
++    rdna4_triton_supported: bool = _ON_RDNA4,
+ ) -> bool:
+-    """Select the rope-free path not supported by AITER sparse MLA.
++    """Select the sparse Triton path supported by the current cache geometry.
+ 
+     The ragged Triton kernel indexes metadata per query token, so multi-token
+     speculative verification rows have the same capability requirements as
+-    plain decode rows. RDNA4 has no AITER MLA code object, so its standard FP8
+-    cache is read by the same Triton path with explicit dequantization.
++    plain decode rows. On RDNA4 it also provides the correctness fallback for
++    full BF16 MLA (512 NoPE + 64 RoPE); standard FP8 remains limited to the
++    rope-free shape and uses explicit per-tensor dequantization.
+     """
+     fp8_cache = kv_cache_dtype.startswith("fp8")
+     standard_fp8_cache = kv_cache_dtype in ("fp8", "fp8_e4m3")
++    supported_cache = not fp8_cache or (
++        standard_fp8_cache and rdna4_triton_supported
++    )
++    supported_dims = head_size == kv_lora_rank or (
++        not fp8_cache and rdna4_triton_supported
++    )
+     return (
+-        (not fp8_cache or (standard_fp8_cache and fp8_triton_supported))
+-        and head_size == kv_lora_rank
++        supported_cache
++        and supported_dims
+         and (num_prefills > 0 or num_decodes > 0)
+     )
+ 
+diff --git a/vllm/v1/attention/ops/rocm_aiter_mla_sparse.py b/vllm/v1/attention/ops/rocm_aiter_mla_sparse.py
+--- a/vllm/v1/attention/ops/rocm_aiter_mla_sparse.py
++++ b/vllm/v1/attention/ops/rocm_aiter_mla_sparse.py
+@@ -1396,12 +1396,15 @@ def _sparse_attn_prefill_ragged_kernel(
+     out_stride_d,
+     num_heads,
+     head_dim,
++    value_dim,
+     num_kv,
+     scale,
+     FP8_KV: tl.constexpr,
+     HAS_ATTN_SINK: tl.constexpr,
++    SAME_QK_V: tl.constexpr,
+     BLOCK_H: tl.constexpr,
+     BLOCK_D: tl.constexpr,
++    BLOCK_V: tl.constexpr,
+     BLOCK_K: tl.constexpr,
+ ):
+     query_idx = tl.program_id(0)
+@@ -1409,8 +1412,10 @@ def _sparse_attn_prefill_ragged_kernel(
+ 
+     head_offsets = pid_h * BLOCK_H + tl.arange(0, BLOCK_H)
+     dim_offsets = tl.arange(0, BLOCK_D)
++    value_offsets = tl.arange(0, BLOCK_V)
+     head_mask = head_offsets < num_heads
+     dim_mask = dim_offsets < head_dim
++    value_mask = value_offsets < value_dim
+ 
+     q = tl.load(
+         q_ptr
+@@ -1424,7 +1429,7 @@ def _sparse_attn_prefill_ragged_kernel(
+     neg_large = -3.4028234663852886e38
+     m_i = tl.full((BLOCK_H,), neg_large, dtype=tl.float32)
+     l_i = tl.zeros((BLOCK_H,), dtype=tl.float32)
+-    acc = tl.zeros((BLOCK_H, BLOCK_D), dtype=tl.float32)
++    acc = tl.zeros((BLOCK_H, BLOCK_V), dtype=tl.float32)
+ 
+     kv_start = tl.load(kv_indptr_ptr + query_idx)
+     kv_end = tl.load(kv_indptr_ptr + query_idx + 1)
+@@ -1451,6 +1456,20 @@ def _sparse_attn_prefill_ragged_kernel(
+             kv = (
+                 kv.to(tl.float32) * tl.load(kv_scale_ptr).to(tl.float32)
+             ).to(tl.bfloat16)
++        if SAME_QK_V:
++            value = kv
++        else:
++            value = tl.load(
++                kv_ptr
++                + _sparse_kv_row_offset(safe_slot[:, None], kv_stride_n)
++                + value_offsets[None, :] * kv_stride_d,
++                mask=valid[:, None] & value_mask[None, :],
++                other=0.0,
++            )
++            if FP8_KV:
++                value = (
++                    value.to(tl.float32) * tl.load(kv_scale_ptr).to(tl.float32)
++                ).to(tl.bfloat16)
+ 
+         next_k_pos = k_start + BLOCK_K + k_offsets
+         slot = tl.load(
+@@ -1467,7 +1486,7 @@ def _sparse_attn_prefill_ragged_kernel(
+         p = tl.where(head_mask[:, None] & valid[None, :], p, 0.0)
+         l_new = l_i * alpha + tl.sum(p, axis=1)
+ 
+-        acc = acc * alpha[:, None] + tl.dot(p.to(kv.dtype), kv)
++        acc = acc * alpha[:, None] + tl.dot(p.to(value.dtype), value)
+         m_i = m_new
+         l_i = l_new
+ 
+@@ -1492,9 +1511,9 @@ def _sparse_attn_prefill_ragged_kernel(
+         out_ptr
+         + query_idx * out_stride_t
+         + head_offsets[:, None] * out_stride_h
+-        + dim_offsets[None, :] * out_stride_d,
++        + value_offsets[None, :] * out_stride_d,
+         out,
+-        mask=head_mask[:, None] & dim_mask[None, :],
++        mask=head_mask[:, None] & value_mask[None, :],
+     )
+ 
+ 
+@@ -2635,11 +2654,16 @@ def _rocm_sparse_attn_prefill_ragged_triton(
+         assert kv.dtype not in fp8_kv_dtypes
+         kv_scale_arg = q
+ 
+-    block_h = 16
++    block_h = 8 if head_dim > nope_head_dim else 16
+     block_d = triton.next_power_of_2(head_dim)
++    block_v = triton.next_power_of_2(nope_head_dim)
+     block_k = 16 if head_dim >= 256 else 32
+     num_warps = 4
+-    out = torch.empty_like(q, dtype=torch.bfloat16)
++    out = torch.empty(
++        (num_queries, num_heads, nope_head_dim),
++        dtype=torch.bfloat16,
++        device=q.device,
++    )
+     _sparse_attn_prefill_ragged_kernel[(num_queries, triton.cdiv(num_heads, block_h))](
+         q,
+         kv,
+@@ -2658,12 +2682,15 @@ def _rocm_sparse_attn_prefill_ragged_triton(
+         out.stride(2),
+         num_heads,
+         head_dim,
++        nope_head_dim,
+         kv.shape[0],
+         float(scale),
+         FP8_KV=fp8_kv,
+         HAS_ATTN_SINK=has_attn_sink,
++        SAME_QK_V=head_dim == nope_head_dim,
+         BLOCK_H=block_h,
+         BLOCK_D=block_d,
++        BLOCK_V=block_v,
+         BLOCK_K=block_k,
+         num_warps=num_warps,
+     )
+diff --git a/tests/v1/attention/test_rocm_glm5next_sparse.py b/tests/v1/attention/test_rocm_glm5next_sparse.py
+--- a/tests/v1/attention/test_rocm_glm5next_sparse.py
++++ b/tests/v1/attention/test_rocm_glm5next_sparse.py
+@@ -14,6 +14,7 @@ from vllm.v1.attention.ops.rocm_aiter_mla_sparse import (
+     _sparse_kv_row_offset,
+     _validate_dsv4_sparse_dims,
+     _validate_sparse_dims,
++    rocm_sparse_attn_prefill,
+ )
+ 
+ 
+@@ -102,6 +103,20 @@ def test_rocm_sparse_triton_route(
+     )
+ 
+ 
++def test_rdna4_routes_full_bf16_but_not_full_fp8_to_triton():
++    common = {
++        "head_size": 576,
++        "kv_lora_rank": 512,
++        "num_prefills": 1,
++        "num_decodes": 0,
++        "num_decode_tokens": 0,
++        "max_query_len": 32,
++        "rdna4_triton_supported": True,
++    }
++    assert _use_rocm_sparse_triton(kv_cache_dtype="auto", **common)
++    assert not _use_rocm_sparse_triton(kv_cache_dtype="fp8", **common)
++
++
+ def test_rocm_sparse_attention_accepts_glm_nope_dimensions():
+     _validate_sparse_dims(512, 512, 0, "test")
+ 
+@@ -128,3 +143,58 @@ def test_sparse_prefill_kv_row_offset_does_not_overflow_int32():
+     _store_sparse_kv_row_offset_kernel[(1,)](slot, output, stride=512)
+ 
+     assert output.item() == 6554 * 640 * 512
++
++
++@pytest.mark.skipif(not current_platform.is_rocm(), reason="ROCm required")
++def test_full_glm_sparse_prefill_matches_torch_reference():
++    torch.manual_seed(7)
++    device = torch.device("cuda")
++    num_queries, num_heads = 2, 16
++    qk_dim, value_dim, num_kv, topk = 576, 512, 257, 128
++    q = torch.randn(
++        num_queries, num_heads, qk_dim, device=device, dtype=torch.bfloat16
++    )
++    kv = torch.randn(num_kv, 1, qk_dim, device=device, dtype=torch.bfloat16)
++    rows = [
++        (torch.arange(topk, device=device, dtype=torch.int32) * (row + 1) + 3)
++        % num_kv
++        for row in range(num_queries)
++    ]
++    indices = torch.cat(rows)
++    indptr = torch.arange(
++        0,
++        (num_queries + 1) * topk,
++        topk,
++        device=device,
++        dtype=torch.int32,
++    )
++    output = torch.empty(
++        num_queries, num_heads, value_dim, device=device, dtype=torch.bfloat16
++    )
++    scale = qk_dim**-0.5
++    rocm_sparse_attn_prefill(
++        q=q,
++        kv=kv,
++        indices=None,
++        topk_length=None,
++        scale=scale,
++        head_dim=qk_dim,
++        nope_head_dim=value_dim,
++        rope_head_dim=qk_dim - value_dim,
++        attn_sink=None,
++        output=output,
++        ragged_indices=indices,
++        ragged_indptr=indptr,
++    )
++
++    reference = []
++    for row in range(num_queries):
++        selected = kv[rows[row].long(), 0]
++        scores = torch.einsum("hd,kd->hk", q[row].float(), selected.float())
++        probs = torch.softmax(scores * scale, dim=-1)
++        reference.append(
++            torch.einsum("hk,kv->hv", probs, selected[:, :value_dim].float())
++        )
++    torch.testing.assert_close(
++        output.float(), torch.stack(reference), rtol=0.03, atol=0.03
++    )
