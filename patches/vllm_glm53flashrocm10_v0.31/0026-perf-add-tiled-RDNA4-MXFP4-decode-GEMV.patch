@@ -8,9 +8,9 @@ Subject: [PATCH] perf: add tiled RDNA4 MXFP4 decode GEMV
  .../quantization/test_rocm_mxfp4_gemv.py      |  14 +-
  vllm/envs.py                                  |   6 +
  .../kernels/linear/mxfp4/emulation.py         |  12 +-
- .../kernels/linear/mxfp4/rocm_gemv.py         | 143 +++++++++++++-
+ .../kernels/linear/mxfp4/rocm_gemv.py         | 145 +++++++++++++-
  .../fused_moe/experts/ocp_mx_emulation_moe.py |  14 +-
- 6 files changed, 354 insertions(+), 9 deletions(-)
+ 6 files changed, 356 insertions(+), 9 deletions(-)
  create mode 100644 benchmarks/kernels/benchmark_rocm_mxfp4_gemv.py
 
 diff --git a/benchmarks/kernels/benchmark_rocm_mxfp4_gemv.py b/benchmarks/kernels/benchmark_rocm_mxfp4_gemv.py
@@ -204,7 +204,7 @@ index 748fdd7cd2..0649d0d802 100644
 -@pytest.mark.parametrize("shape", [(1, 64, 256), (4, 96, 512)])
 -def test_rocm_mxfp4_row_gemv_dense(shape: tuple[int, int, int]) -> None:
 +@pytest.mark.parametrize("block_n", [0, 1, 2, 4, 8])
-+@pytest.mark.parametrize("shape", [(1, 65, 256), (4, 95, 512)])
++@pytest.mark.parametrize("shape", [(1, 66, 256), (4, 95, 512)])
 +def test_rocm_mxfp4_row_gemv_dense(shape: tuple[int, int, int], block_n: int) -> None:
      rows, output_size, input_size = shape
      torch.manual_seed(7)
@@ -239,7 +239,7 @@ index 748fdd7cd2..0649d0d802 100644
              "VLLM_ROCM_USE_TRITON_MXFP4_GEMV",
              "1" if use_packed_gemv else "0",
          )
-+        monkeypatch.setenv("VLLM_ROCM_MXFP4_GEMV_BLOCK_N", "4")
++        monkeypatch.setenv("VLLM_ROCM_MXFP4_GEMV_BLOCK_N", "8")
          quant_config = ocp_mx_moe_quant_config(
              quant_dtype="mxfp4",
              weight_dtype="mxfp4",
@@ -248,7 +248,7 @@ index 748fdd7cd2..0649d0d802 100644
              )
              assert kernel.fused_experts.use_rocm_gemv is use_packed_gemv
 +            assert kernel.fused_experts.rocm_gemv_block_n == (
-+                4 if use_packed_gemv else 0
++                8 if use_packed_gemv else 0
 +            )
              return kernel.apply(
                  hidden_states=hidden_states,
@@ -334,7 +334,7 @@ index 3205dcf752..6717c842d8 100644
  _MXFP4_GROUP_SIZE = 32
  _PACK_FACTOR = 2
  
-@@ -141,6 +142,109 @@ def _rocm_mxfp4_row_gemv_kernel(
+@@ -141,6 +142,111 @@ def _rocm_mxfp4_row_gemv_kernel(
      tl.store(out_ptr + route * stride_om + out_col * stride_on, value)
  
  
@@ -386,9 +386,11 @@ index 3205dcf752..6717c842d8 100644
 +
 +    packed_offsets = tl.arange(0, BLOCK_PACKED_K)
 +    acc = tl.zeros((BLOCK_N,), dtype=tl.float32)
-+    for packed_start in range(0, K // _PACK_FACTOR, BLOCK_PACKED_K):
++    # Keep these layout constants literal: Triton rejects ordinary Python
++    # globals referenced from a JIT kernel, even when their values are fixed.
++    for packed_start in range(0, K // 2, BLOCK_PACKED_K):
 +        packed_k = packed_start + packed_offsets
-+        valid_packed_k = packed_k < K // _PACK_FACTOR
++        valid_packed_k = packed_k < K // 2
 +        weight_mask = valid_expert & valid_output[:, None] & valid_packed_k[None, :]
 +        packed = tl.load(
 +            weight_ptr
@@ -402,13 +404,13 @@ index 3205dcf752..6717c842d8 100644
 +            weight_scale_ptr
 +            + safe_expert * stride_wse
 +            + output_cols[:, None] * stride_wsn
-+            + (packed_k[None, :] // (_MXFP4_GROUP_SIZE // _PACK_FACTOR)) * stride_wsk,
++            + (packed_k[None, :] // 16) * stride_wsk,
 +            mask=weight_mask,
 +            other=0,
 +        )
 +        block_scale = _e8m0_to_f32(scale)
 +
-+        even_k = packed_k * _PACK_FACTOR
++        even_k = packed_k * 2
 +        odd_k = even_k + 1
 +        x_even = tl.load(
 +            x_ptr + input_row * stride_xm + even_k * stride_xk,
@@ -444,7 +446,7 @@ index 3205dcf752..6717c842d8 100644
  def _normalize_weight_strides(
      tensor: torch.Tensor,
  ) -> tuple[int, int, int, int]:
-@@ -172,6 +276,7 @@ def _rocm_mxfp4_row_gemv(
+@@ -172,6 +278,7 @@ def _rocm_mxfp4_row_gemv(
      bias: torch.Tensor | None,
      out: torch.Tensor,
      routes_per_input: int,
@@ -452,7 +454,7 @@ index 3205dcf752..6717c842d8 100644
  ) -> None:
      if x.ndim != 2:
          raise ValueError(f"MXFP4 GEMV input must be 2D, got {x.shape}")
-@@ -189,6 +294,11 @@ def _rocm_mxfp4_row_gemv(
+@@ -189,6 +296,11 @@ def _rocm_mxfp4_row_gemv(
          raise ValueError("MXFP4 GEMV tensors must reside on the same GPU")
      if routes_per_input < 1:
          raise ValueError("routes_per_input must be positive")
@@ -464,7 +466,7 @@ index 3205dcf752..6717c842d8 100644
  
      routes, output_size = out.shape
      input_size = x.shape[1]
-@@ -249,8 +359,7 @@ def _rocm_mxfp4_row_gemv(
+@@ -249,8 +361,7 @@ def _rocm_mxfp4_row_gemv(
      expert_ids_ptr = weight if expert_ids is None else expert_ids
      route_weights_ptr = x if route_weights is None else route_weights
      bias_ptr = x if bias is None else bias
@@ -474,7 +476,7 @@ index 3205dcf752..6717c842d8 100644
          x,
          weight,
          weight_scale,
-@@ -258,6 +367,8 @@ def _rocm_mxfp4_row_gemv(
+@@ -258,6 +369,8 @@ def _rocm_mxfp4_row_gemv(
          route_weights_ptr,
          bias_ptr,
          out,
@@ -483,7 +485,7 @@ index 3205dcf752..6717c842d8 100644
          K=input_size,
          num_experts=num_experts,
          routes_per_input=routes_per_input,
-@@ -276,7 +387,23 @@ def _rocm_mxfp4_row_gemv(
+@@ -276,7 +389,23 @@ def _rocm_mxfp4_row_gemv(
          HAS_EXPERT_IDS=expert_ids is not None,
          HAS_ROUTE_WEIGHTS=route_weights is not None,
          HAS_BIAS=bias is not None,
@@ -508,7 +510,7 @@ index 3205dcf752..6717c842d8 100644
          num_warps=4,
          num_stages=1,
      )
-@@ -291,6 +418,7 @@ def _rocm_mxfp4_row_gemv_fake(
+@@ -291,6 +420,7 @@ def _rocm_mxfp4_row_gemv_fake(
      bias: torch.Tensor | None,
      out: torch.Tensor,
      routes_per_input: int,
@@ -516,7 +518,7 @@ index 3205dcf752..6717c842d8 100644
  ) -> None:
      return None
  
-@@ -313,8 +441,13 @@ def rocm_mxfp4_row_gemv(
+@@ -313,8 +443,13 @@ def rocm_mxfp4_row_gemv(
      bias: torch.Tensor | None = None,
      routes_per_input: int = 1,
      out: torch.Tensor | None = None,
@@ -531,7 +533,7 @@ index 3205dcf752..6717c842d8 100644
      output_size = weight.shape[-2]
      routes = x.shape[0] * routes_per_input
      if out is None:
-@@ -328,6 +461,7 @@ def rocm_mxfp4_row_gemv(
+@@ -328,6 +463,7 @@ def rocm_mxfp4_row_gemv(
          bias,
          out,
          routes_per_input,
@@ -539,7 +541,7 @@ index 3205dcf752..6717c842d8 100644
      )
      return out
  
-@@ -335,5 +469,6 @@ def rocm_mxfp4_row_gemv(
+@@ -335,5 +471,6 @@ def rocm_mxfp4_row_gemv(
  __all__ = [
      "ROCM_MXFP4_GEMV_MAX_ROUTES",
      "ROCM_MXFP4_GEMV_MAX_ROWS",
@@ -605,4 +607,3 @@ index a81ef4a266..d8398309b6 100644
  
 -- 
 2.53.0
-

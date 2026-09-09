@@ -12,13 +12,23 @@ be stopped or replaced merely to inspect, build, or preview these gates.
 ## Current state on 2026-09-09
 
 - The isolated `vllm_glm53flashrocm10_v0.31` recipe is installed.
-- The default candidate is `VLLM_ROCM_MXFP4_GEMV_BLOCK_N=4`; embedded mode
+- The benchmark-selected candidate is `VLLM_ROCM_MXFP4_GEMV_BLOCK_N=8`; embedded mode
   `scalar-gemv-rollback` selects `block_n=0` in the exact same recipe.
 - The operator benchmark covers `block_n=0/1/2/4/8` and the two TP8/DFlash K4
   MoE shapes: up projection `5 x 4096 -> 40 x 512` and down projection
   `40 x 256 -> 40 x 4096`, each across eight local experts.
-- No v0.31 GPU or API performance result exists yet. v0.29 remains the
-  production and rollback target.
+- The 2026-09-09 single-R9700 gate passed 16/16 focused tests. In the exact
+  500-repetition microbenchmark, BN8 reached `1.039x` scalar on the up
+  projection and `2.261x` on the down projection.
+- The first full-model `32768 x 128`, C1 A/B used the earlier 1M
+  language-only topology. Across nine requests per variant, BN8 improved mean
+  decode from `48.835` to `50.435 tok/s` (`+3.28%`) and minimum decode from
+  `48.449` to `49.403 tok/s` (`+1.97%`). Mean TTFT regressed `0.63%`, mean E2E
+  regressed `0.32%`, and observed prefill regressed `0.63%`.
+- The deployment candidate now exactly matches the active production context
+  topology: 768K maximum context, 4.96 GB fixed FP8 KV reservation, 4096
+  batched tokens, and TP8-sharded Vision weights. The full-model A/B must be
+  repeated in this final topology; v0.29 remains the production rollback.
 
 v0.31 is simpler to qualify than v0.30: it changes only a bounded vLLM decode
 kernel and provides a scalar control under the same build. v0.30 changes both
@@ -51,13 +61,14 @@ Run the single-GPU correctness and microbenchmark gate first:
   --run-gpu-gates --gpu 0
 ```
 
-Keep v0.31 only if every tiled choice matches the scalar result and at least
-one choice wins both exact GLM shapes. Select the block size from the measured
-artifact, not from the current `block_n=4` hypothesis.
+The completed gate selected BN8 because every tiled choice matched the scalar
+result and BN8 won both exact GLM shapes. Re-run this gate whenever the kernel,
+Triton pin, or GPU software stack changes.
 
-Then perform two separate managed-runtime trials, gracefully stopping between
-them: first `scalar-gemv-rollback`, then the default tiled candidate. For each
-trial, run API validation before a matched benchmark:
+Then perform two separate managed-runtime trials in the 768K Vision topology,
+gracefully stopping between them: first `scalar-gemv-rollback`, then the
+default tiled candidate. For each trial, run API validation before a matched
+benchmark:
 
 ```bash
 skills/measure-r9700-model/scripts/test-and-benchmark.sh \
@@ -76,7 +87,18 @@ count, cache state, power cap, and DFlash K4 configuration. Promote only after:
 3. Nine-run `32768 x 128`, C1 A/B improves mean decode throughput without a
    worse minimum or material TTFT/E2E regression.
 4. 256K NIAH passes with the established needle placements.
-5. A final 1M boundary run passes with telemetry and no new GPU/system errors.
+5. A final 768K boundary run passes with telemetry and no new GPU/system
+   errors.
+
+The reusable NIAH replay command validates every fixture hash before sending a
+request and writes one result per needle depth:
+
+```bash
+.venv/bin/python scripts/replay-niah-requests.py \
+  --requests-dir logs/results/niah-ab-bf16-vs-fp8-256k-20260906/requests-v2 \
+  --output-dir logs/qualification/v031-tiled-bn8-niah-256k-RUN \
+  --label v031-tiled-bn8-768k-vision
+```
 
 ## Follow-on upstream lanes
 

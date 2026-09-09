@@ -153,6 +153,22 @@ def _environment(
             text=True,
         ).stdout.strip()
     )
+    environment["ROCM_HOME"] = str(rocm_root)
+    environment["ROCM_PATH"] = str(rocm_root)
+    environment["PYTORCH_ROCM_ARCH"] = "gfx1201"
+    environment["GPU_ARCHS"] = "gfx1201"
+    environment["TRITON_DEFAULT_BACKEND"] = "amd"
+    environment["PATH"] = os.pathsep.join(
+        (str(rocm_root / "bin"), str(python.parent), environment.get("PATH", ""))
+    )
+    environment["CPLUS_INCLUDE_PATH"] = os.pathsep.join(
+        part
+        for part in (
+            str(rocm_root / "include"),
+            environment.get("CPLUS_INCLUDE_PATH", ""),
+        )
+        if part
+    )
     library_dirs = (rocm_root / "share/amd_smi/amdsmi", rocm_root / "lib")
     environment["LD_LIBRARY_PATH"] = os.pathsep.join(
         part

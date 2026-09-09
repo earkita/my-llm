@@ -527,8 +527,39 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(profile["status"], "development")
         self.assertEqual(runtime["status"], "diagnostic-only")
         self.assertEqual(runtime["recipe"], "vllm_glm53flashrocm10_v0.31")
-        self.assertEqual(runtime["environment"]["VLLM_ROCM_MXFP4_GEMV_BLOCK_N"], "4")
+        self.assertEqual(runtime["environment"]["VLLM_ROCM_MXFP4_GEMV_BLOCK_N"], "8")
         self.assertIn("0026", runtime["required_patches"])
+        self.assertEqual(runtime["limits"]["max_model_len"], 786432)
+        self.assertEqual(runtime["limits"]["max_num_batched_tokens"], 4096)
+        self.assertEqual(runtime["limits"]["kv_cache_memory_bytes"], 4960000000)
+        self.assertFalse(runtime["multimodal"]["language_model_only"])
+        self.assertEqual(
+            runtime["multimodal"]["encoder_attention_backend"], "TRITON_ATTN"
+        )
+        self.assertEqual(runtime["multimodal"]["encoder_tp_mode"], "weights")
+        self.assertEqual(
+            runtime["multimodal"]["limit_per_prompt"], {"image": 8, "video": 0}
+        )
+        command = build_command(
+            profile["model"], runtime, Path("/models/glm"), "127.0.0.1", 8000
+        )
+        self.assertEqual(
+            command[command.index("--max-model-len") + 1], "786432"
+        )
+        self.assertEqual(
+            command[command.index("--max-num-batched-tokens") + 1], "4096"
+        )
+        self.assertNotIn("--language-model-only", command)
+        self.assertEqual(
+            command[command.index("--mm-encoder-attn-backend") + 1],
+            "TRITON_ATTN",
+        )
+        self.assertEqual(
+            profile["stack"]["claude_settings"]["env"][
+                "CLAUDE_CODE_MAX_CONTEXT_TOKENS"
+            ],
+            "786432",
+        )
 
         scalar = runtime["experimental_modes"]["scalar-gemv-rollback"]
         self.assertEqual(
@@ -537,6 +568,18 @@ class ProductionProfileTests(unittest.TestCase):
             ],
             "0",
         )
+        resolved_scalar = load_runtime(
+            str(ROOT / "profiles/dev/glm53-flash-rocm10-mxfp4-tiled.json"),
+            "scalar-gemv-rollback",
+        )
+        self.assertEqual(
+            resolved_scalar["environment"]["VLLM_TARGET_DEVICE"], "rocm"
+        )
+        self.assertEqual(
+            resolved_scalar["environment"]["VLLM_ROCM_MXFP4_GEMV_BLOCK_N"], "0"
+        )
+        self.assertEqual(resolved_scalar["limits"], runtime["limits"])
+        self.assertEqual(resolved_scalar["multimodal"], runtime["multimodal"])
 
         production = load_profile(GLM_PROFILE)["runtime"]
         self.assertEqual(production["recipe"], "vllm_glm53flashrocm10_v0.29")

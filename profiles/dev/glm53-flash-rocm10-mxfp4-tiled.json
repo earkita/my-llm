@@ -67,10 +67,10 @@
   },
   "runtime": {
     "schema_version": 1,
-    "name": "glm53-flash-quark-mxfp4-rocm10-mrv2-8xr9700-tp8-noep-mxfp4gemv-tiledbn4-dflash2-k4-fp8kv-1m-bt2048",
+    "name": "glm53-flash-quark-mxfp4-rocm10-mrv2-8xr9700-tp8-noep-mxfp4gemv-tiledbn8-dflash2-k4-fp8kv-768k-vision-weights",
     "status": "diagnostic-only",
     "recipe": "vllm_glm53flashrocm10_v0.31",
-    "description": "Isolated ROCm 10 experiment retaining the qualified 1M/K4 topology while replacing scalar-output packed MXFP4 GEMV with a block-N=4 output-tiled candidate",
+    "description": "Isolated ROCm 10 experiment matching the active 768K Vision/K4 production topology while replacing scalar-output packed MXFP4 GEMV with the microbenchmark-selected block-N=8 output-tiled candidate",
     "required_model_family": "glm5next",
     "required_patches": [
       "0001",
@@ -128,11 +128,11 @@
       "disable_custom_all_reduce": true
     },
     "limits": {
-      "max_model_len": 1048576,
+      "max_model_len": 786432,
       "max_num_seqs": 1,
-      "max_num_batched_tokens": 2048,
+      "max_num_batched_tokens": 4096,
       "gpu_memory_utilization": 0.995,
-      "kv_cache_memory_bytes": 6591622400
+      "kv_cache_memory_bytes": 4960000000
     },
     "cache": {
       "dtype": "fp8",
@@ -145,7 +145,16 @@
       "enforce_eager": true
     },
     "multimodal": {
-      "language_model_only": true
+      "language_model_only": false,
+      "encoder_attention_backend": "TRITON_ATTN",
+      "limit_per_prompt": {
+        "image": 8,
+        "video": 0
+      },
+      "encoder_tp_mode": "weights",
+      "processor_kwargs": {
+        "max_image_tokens": 4096
+      }
     },
     "loading": {
       "format": "safetensors",
@@ -178,10 +187,22 @@
     "experimental_modes": {
       "scalar-gemv-rollback": {
         "status": "diagnostic-only",
-        "runtime_name": "glm53-flash-quark-mxfp4-rocm10-mrv2-8xr9700-tp8-noep-mxfp4gemv-scalar-dflash2-k4-fp8kv-1m-bt2048",
+        "runtime_name": "glm53-flash-quark-mxfp4-rocm10-mrv2-8xr9700-tp8-noep-mxfp4gemv-scalar-dflash2-k4-fp8kv-768k-vision-weights",
         "reason": "Exact scalar-output packed GEMV rollback within the same v0.31 recipe.",
         "runtime_overrides": {
           "environment": {
+            "VLLM_TARGET_DEVICE": "rocm",
+            "VLLM_USE_V2_MODEL_RUNNER": "1",
+            "VLLM_ROCM_USE_AITER": "1",
+            "VLLM_ROCM_USE_AITER_FP8BMM": "0",
+            "VLLM_ROCM_USE_AITER_FP4BMM": "0",
+            "VLLM_ROCM_USE_AITER_FP4_ASM_GEMM": "0",
+            "VLLM_ROCM_USE_TRITON_MXFP4_GEMV": "1",
+            "VLLM_DISABLE_PYNCCL": "1",
+            "VLLM_KV_CACHE_LAYOUT": "LBHNC",
+            "SAFETENSORS_FAST_GPU": "1",
+            "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+            "ROCBLAS_USE_HIPBLASLT": "0",
             "VLLM_ROCM_MXFP4_GEMV_BLOCK_N": "0"
           }
         }
@@ -200,7 +221,7 @@
       "SAFETENSORS_FAST_GPU": "1",
       "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
       "ROCBLAS_USE_HIPBLASLT": "0",
-      "VLLM_ROCM_MXFP4_GEMV_BLOCK_N": "4"
+      "VLLM_ROCM_MXFP4_GEMV_BLOCK_N": "8"
     },
     "hardware_topology": {
       "captured_on": "2026-09-05",
@@ -232,8 +253,8 @@
         "DISABLE_PROMPT_CACHING": "1",
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
         "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
-        "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "1048576",
-        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1048576",
+        "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "786432",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "786432",
         "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "90"
       }
     }
@@ -243,6 +264,6 @@
     "verified_context": 0,
     "verified_on": null,
     "best_runtime_mode": null,
-    "notes": "Not GPU-qualified. The production v0.29 profile remains the rollback baseline and must stay running until an explicit switch is approved. Required gates are: block_n 0/1/2/4/8 microbenchmark on exact GLM TP8 MoE shapes, packed-kernel correctness against scalar output, focused vLLM kernel tests, short API smoke, nine-run representative K4 decode A/B, 256K NIAH, and only then a 1M boundary test."
+    "notes": "Operator-qualified on one gfx1201 R9700 on 2026-09-09: 16/16 focused tests passed and all block_n variants matched scalar output. On 500-repetition exact-shape microbenchmarks, block_n=8 reached 1.039x scalar for the TP8/DFlash K4 up projection and 2.261x for the down projection. A nine-request 32K-by-128 full-model A/B in the earlier 1M language-only topology improved mean decode by 3.28% and minimum decode by 1.97%, with 0.63% mean TTFT and 0.32% mean E2E regressions. The final deployment candidate now matches production 768K Vision limits; deployment-exact API/A-B, 256K NIAH, and the 768K context boundary remain pending. Production v0.29 remains the rollback baseline."
   }
 }

@@ -93,7 +93,7 @@
       "glm_moe_router_dedup_head": "0c2b5ad442672ea2efbf62df4a3df1cce01b946e",
       "glm_required_first_tools_pr": "https://github.com/vllm-project/vllm/pull/55558",
       "glm_required_first_tools_head": "bcca85b9083512bccdb039a1770834ee6e246646",
-      "expected_diff_sha256": "cae40fbbd1ee0fce39dc6d6d0174eced9fc7f6626104bf50771eecdbf9b1a025",
+      "expected_diff_sha256": "fd32a2870e93d97421fbc809e4aac4db26d81fb3103687d8059f09e03253e776",
       "full_index_diff": true,
       "apply_intent_to_add": true,
       "accepted_previous_images": [
@@ -229,7 +229,7 @@
         },
         {
           "path": "patches/vllm_glm53flashrocm10_v0.31/0026-perf-add-tiled-RDNA4-MXFP4-decode-GEMV.patch",
-          "sha256": "bf1b270d37b1bc76477bfc9c5f9a2c21eeedfde84f2b70685c03c0464a135f43"
+          "sha256": "4faadf7e5c17373657b912ebbca1e7f499648ab33705ad639e59506b14d75165"
         }
       ],
       "rocm_sparse_verify_head": "0f1d78db4495fed10384a2b048e70367e61d3dd1",
