@@ -100,6 +100,17 @@ request and writes one result per needle depth:
   --label v031-tiled-bn8-768k-vision
 ```
 
+Prepare the 768K boundary case through the tokenizer-only endpoints while the
+production service remains active. The resulting prompt reserves exactly 64
+tokens for the answer and preserves the needle at 95%:
+
+```bash
+.venv/bin/python scripts/prepare-niah-boundary.py \
+  --source logs/results/niah-mxfp4-gemv-fp8-1m-20260907/requests/request-depth-095.json \
+  --output logs/results/niah-boundary-768k/requests/request-depth-095.json \
+  --target-prompt-tokens 786368
+```
+
 ## Follow-on upstream lanes
 
 Keep these out of v0.31 so its result stays attributable:
