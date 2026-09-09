@@ -89,6 +89,44 @@ def _completion(
     }
 
 
+def _active(metrics: dict[str, float]) -> bool:
+    return bool(metrics["running_requests"] or metrics["waiting_requests"])
+
+
+class CompletionAccumulator:
+    """Retain counter baselines across prefill and decode metric updates."""
+
+    def __init__(self, initial: dict[str, float]) -> None:
+        self.previous = initial
+        self.previous_active = _active(initial)
+        self.request_baseline: dict[str, float] | None = None
+
+    def observe(
+        self, current: dict[str, float]
+    ) -> tuple[dict[str, float | int] | None, int, bool]:
+        active = _active(current)
+        completed_now = round(
+            _delta(current, self.previous, "completed_requests")
+        )
+        if self.request_baseline is None and not self.previous_active and (
+            active or completed_now
+        ):
+            self.request_baseline = self.previous
+        completion = (
+            _completion(current, self.request_baseline)
+            if completed_now and self.request_baseline is not None
+            else None
+        )
+        completion_unavailable = (
+            completed_now if completed_now and completion is None else 0
+        )
+        if completed_now or not active:
+            self.request_baseline = None
+        self.previous = current
+        self.previous_active = active
+        return completion, completion_unavailable, active
+
+
 def _print(payload: dict[str, Any], *, json_lines: bool) -> None:
     if json_lines:
         print(json.dumps(payload, separators=(",", ":")), flush=True)
@@ -102,6 +140,13 @@ def _print(payload: dict[str, Any], *, json_lines: bool) -> None:
             f"decode={completion['decode_tokens_per_second']:.1f} tok/s  "
             f"TTFT={completion['mean_ttft_seconds']:.3f}s  "
             f"E2E={completion['mean_e2e_seconds']:.3f}s",
+            flush=True,
+        )
+    elif payload.get("completion_unavailable"):
+        print(
+            f"{payload['timestamp']}  COMPLETE "
+            f"n={payload['completion_unavailable']}  "
+            "metrics=unavailable (monitor attached after request start)",
             flush=True,
         )
     print(
@@ -122,7 +167,7 @@ def follow(
     json_lines: bool,
 ) -> None:
     history: deque[tuple[float, float]] = deque()
-    previous = _metrics(url)
+    accumulator = CompletionAccumulator(_metrics(url))
     deadline = time.perf_counter()
     while True:
         now = time.perf_counter()
@@ -133,9 +178,8 @@ def follow(
         oldest_time, oldest_kv = history[0]
         elapsed = max(now - oldest_time, 1e-9)
         kv_growth = max(current["kv_cache_fraction"] - oldest_kv, 0.0)
-        completion = _completion(current, previous)
-        active = current["running_requests"] or current["waiting_requests"]
-        if include_idle or active or completion is not None:
+        completion, completion_unavailable, active = accumulator.observe(current)
+        if include_idle or active or completion is not None or completion_unavailable:
             _print(
                 {
                     "timestamp": datetime.now().astimezone().isoformat(),
@@ -147,10 +191,10 @@ def follow(
                     / elapsed,
                     "kv_growth_window_seconds": elapsed,
                     "completion": completion,
+                    "completion_unavailable": completion_unavailable,
                 },
                 json_lines=json_lines,
             )
-        previous = current
         deadline += interval
         time.sleep(max(deadline - time.perf_counter(), 0.0))
 
@@ -159,7 +203,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Follow vLLM's live engine throughput while requests arrive through "
-            "Claude Code and LiteLLM. Values are aggregate engine-window metrics."
+            "Claude Code and LiteLLM. Completion metrics are accumulated from "
+            "the observed start of each request."
         )
     )
     parser.add_argument(
