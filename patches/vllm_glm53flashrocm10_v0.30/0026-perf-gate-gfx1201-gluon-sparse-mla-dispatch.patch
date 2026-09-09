@@ -1,0 +1,142 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: R9700 Runtime <r9700@localhost>
+Date: Wed, 9 Sep 2026 04:09:00 +0200
+Subject: [PATCH] perf: gate gfx1201 Gluon sparse MLA dispatch
+
+
+diff --git a/tests/v1/attention/test_rocm_glm5next_sparse.py b/tests/v1/attention/test_rocm_glm5next_sparse.py
+index 4db173e..4f86c54 100644
+--- a/tests/v1/attention/test_rocm_glm5next_sparse.py
++++ b/tests/v1/attention/test_rocm_glm5next_sparse.py
+@@ -7,6 +7,7 @@ import torch
+ from vllm.platforms import current_platform
+ from vllm.triton_utils import tl, triton
+ from vllm.v1.attention.backends.mla.rocm_aiter_mla_sparse import (
++    _use_aiter_gluon_sparse_mla,
+     _use_rocm_sparse_triton,
+     fit_kpool_indices_to_aiter,
+ )
+@@ -117,6 +118,30 @@ def test_rdna4_routes_full_bf16_but_not_full_fp8_to_triton():
+     assert not _use_rocm_sparse_triton(kv_cache_dtype="fp8", **common)
+ 
+ 
++@pytest.mark.parametrize(
++    "enabled,rdna4,head_size,kv_lora_rank,expected",
++    [
++        (True, True, 512, 512, True),
++        (False, True, 512, 512, False),
++        (True, False, 512, 512, False),
++        (True, True, 576, 512, False),
++        (True, True, 256, 256, False),
++    ],
++)
++def test_aiter_gluon_sparse_mla_is_strictly_opt_in(
++    enabled, rdna4, head_size, kv_lora_rank, expected
++):
++    assert (
++        _use_aiter_gluon_sparse_mla(
++            head_size=head_size,
++            kv_lora_rank=kv_lora_rank,
++            enabled=enabled,
++            rdna4_supported=rdna4,
++        )
++        is expected
++    )
++
++
+ def test_rocm_sparse_attention_accepts_glm_nope_dimensions():
+     _validate_sparse_dims(512, 512, 0, "test")
+ 
+diff --git a/vllm/envs.py b/vllm/envs.py
+index 388c6a1..2a8513d 100755
+--- a/vllm/envs.py
++++ b/vllm/envs.py
+@@ -154,6 +154,7 @@ if TYPE_CHECKING:
+     VLLM_ROCM_MOE_PADDING: bool = True
+     VLLM_ROCM_SHUFFLE_KV_CACHE_LAYOUT: bool = False
+     VLLM_ROCM_USE_TRITON_MXFP4_GEMV: bool = False
++    VLLM_ROCM_USE_GLUON_SPARSE_MLA: bool = False
+     VLLM_ENABLE_V1_MULTIPROCESSING: bool = True
+     VLLM_LOG_BATCHSIZE_INTERVAL: float = -1
+     VLLM_DISABLE_COMPILE_CACHE: bool = False
+@@ -1372,6 +1373,12 @@ environment_variables: dict[str, Callable[[], Any]] = {
+     "VLLM_ROCM_USE_TRITON_MXFP4_GEMV": lambda: (
+         os.getenv("VLLM_ROCM_USE_TRITON_MXFP4_GEMV", "False").lower() in ("true", "1")
+     ),
++    # Experimental rope-free sparse MLA implemented with RDNA4 wave32 WMMA.
++    # It is opt-in until operator and long-context qualification are complete.
++    "VLLM_ROCM_USE_GLUON_SPARSE_MLA": lambda: (
++        os.getenv("VLLM_ROCM_USE_GLUON_SPARSE_MLA", "False").lower()
++        in ("true", "1")
++    ),
+     # Custom quick allreduce kernel for MI3* cards
+     # Choice of quantization level: FP, INT8, INT6, INT4, INT3 or NONE
+     # Recommended for large models to get allreduce
+diff --git a/vllm/v1/attention/backends/mla/rocm_aiter_mla_sparse.py b/vllm/v1/attention/backends/mla/rocm_aiter_mla_sparse.py
+index 3bf3462..ef9d140 100644
+--- a/vllm/v1/attention/backends/mla/rocm_aiter_mla_sparse.py
++++ b/vllm/v1/attention/backends/mla/rocm_aiter_mla_sparse.py
+@@ -8,6 +8,7 @@ import numpy as np
+ import torch
+ 
+ from vllm import _custom_ops as ops
++from vllm import envs
+ from vllm._aiter_ops import rocm_aiter_ops
+ from vllm.config import VllmConfig, get_current_vllm_config
+ from vllm.config.cache import CacheDType
+@@ -82,6 +83,19 @@ def _use_rocm_sparse_triton(
+     )
+ 
+ 
++def _use_aiter_gluon_sparse_mla(
++    *,
++    head_size: int,
++    kv_lora_rank: int,
++    enabled: bool | None = None,
++    rdna4_supported: bool = _ON_RDNA4,
++) -> bool:
++    """Gate the unqualified gfx1201 rope-free Gluon sparse-MLA path."""
++    if enabled is None:
++        enabled = envs.VLLM_ROCM_USE_GLUON_SPARSE_MLA
++    return enabled and rdna4_supported and head_size == kv_lora_rank == 512
++
++
+ def fit_kpool_indices_to_aiter(
+     token_indices: torch.Tensor, topk_tokens: int
+ ) -> torch.Tensor:
+@@ -820,6 +834,32 @@ class ROCMAiterMLASparseImpl(MLAAttentionImpl[ROCMAiterMLASparseMetadata]):
+             device=q.device,
+         )
+ 
++        if use_triton_sparse and _use_aiter_gluon_sparse_mla(
++            head_size=q.shape[-1],
++            kv_lora_rank=self.kv_lora_rank,
++        ):
++            from aiter.ops.triton.attention.sparse_mla import sparse_mla_fwd
++
++            logger.info_once(
++                "Using experimental gfx1201 Gluon sparse MLA with wave32 WMMA"
++            )
++            sparse_mla_fwd(
++                q,
++                kv_c_and_k_pe_cache.view(-1, q.shape[-1]),
++                attn_metadata.paged_kv_indptr,
++                attn_metadata.paged_kv_indices,
++                self.scale,
++                kv_scale=(
++                    layer._k_scale
++                    if self.kv_cache_dtype.startswith("fp8")
++                    else None
++                ),
++                kv_lora_rank=self.kv_lora_rank,
++                qk_rope_head_dim=q.shape[-1] - self.kv_lora_rank,
++                out=output,
++            )
++            return AiterMLAHelper.get_mla_unpadded_o(self.num_heads, output)
++
+         if use_triton_sparse:
+             rocm_sparse_attn_prefill(
+                 q=q,
+-- 
+2.53.0
+

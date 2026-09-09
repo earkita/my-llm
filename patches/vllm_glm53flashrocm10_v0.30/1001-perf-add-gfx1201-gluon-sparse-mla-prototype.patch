@@ -1,0 +1,645 @@
+From 2a9bd70f67b0ea6c846676dc742b86aa62053693 Mon Sep 17 00:00:00 2001
+From: R9700 Runtime <r9700@localhost>
+Date: Wed, 9 Sep 2026 04:06:23 +0200
+Subject: [PATCH] perf: add gfx1201 Gluon sparse MLA prototype
+
+---
+ .../triton/_gluon_kernels/gfx1201/__init__.py |   1 +
+ .../gfx1201/attention/__init__.py             |   1 +
+ .../gfx1201/attention/sparse_mla.py           | 310 ++++++++++++++++++
+ aiter/ops/triton/attention/sparse_mla.py      |  25 +-
+ .../ops/triton/attention/sparse_mla_rdna4.py  | 188 +++++++++++
+ .../attention/test_sparse_mla_rdna4.py        |  57 ++++
+ 6 files changed, 581 insertions(+), 1 deletion(-)
+ create mode 100644 aiter/ops/triton/_gluon_kernels/gfx1201/__init__.py
+ create mode 100644 aiter/ops/triton/_gluon_kernels/gfx1201/attention/__init__.py
+ create mode 100644 aiter/ops/triton/_gluon_kernels/gfx1201/attention/sparse_mla.py
+ create mode 100644 aiter/ops/triton/attention/sparse_mla_rdna4.py
+ create mode 100644 op_tests/triton_tests/attention/test_sparse_mla_rdna4.py
+
+diff --git a/aiter/ops/triton/_gluon_kernels/gfx1201/__init__.py b/aiter/ops/triton/_gluon_kernels/gfx1201/__init__.py
+new file mode 100644
+index 0000000..548d2d4
+--- /dev/null
++++ b/aiter/ops/triton/_gluon_kernels/gfx1201/__init__.py
+@@ -0,0 +1 @@
++# SPDX-License-Identifier: MIT
+diff --git a/aiter/ops/triton/_gluon_kernels/gfx1201/attention/__init__.py b/aiter/ops/triton/_gluon_kernels/gfx1201/attention/__init__.py
+new file mode 100644
+index 0000000..548d2d4
+--- /dev/null
++++ b/aiter/ops/triton/_gluon_kernels/gfx1201/attention/__init__.py
+@@ -0,0 +1 @@
++# SPDX-License-Identifier: MIT
+diff --git a/aiter/ops/triton/_gluon_kernels/gfx1201/attention/sparse_mla.py b/aiter/ops/triton/_gluon_kernels/gfx1201/attention/sparse_mla.py
+new file mode 100644
+index 0000000..20597f6
+--- /dev/null
++++ b/aiter/ops/triton/_gluon_kernels/gfx1201/attention/sparse_mla.py
+@@ -0,0 +1,310 @@
++# SPDX-License-Identifier: MIT
++# Copyright (C) 2024-2026, Advanced Micro Devices, Inc. All rights reserved.
++
++"""Wave32/WMMA sparse MLA kernels for gfx1201.
++
++This is intentionally a rope-free GLM-5.3 kernel.  Unlike the gfx950 kernel,
++it does not use CDNA buffer instructions, MFMA, or wave64 layouts.  Gather is
++synchronous for the first RDNA4 implementation; the split-K grid supplies
++enough independent work to hide memory latency during decode.
++"""
++
++import triton.language as tl
++from triton.experimental import gluon
++from triton.experimental.gluon import language as gl
++
++from aiter.ops.triton.utils._triton.kernel_repr import make_kernel_repr
++
++
++_sparse_mla_repr = make_kernel_repr(
++    "_sparse_mla_gfx1201",
++    ["BLOCK_H", "BLOCK_D", "BLOCK_K", "H", "D", "KV_SPLITS"],
++)
++
++
++@gluon.jit(repr=_sparse_mla_repr)
++def _sparse_mla_gfx1201(
++    q_ptr,
++    kv_ptr,
++    kv_scale_ptr,
++    kv_indices_ptr,
++    kv_indptr_ptr,
++    out_ptr,
++    m_partial_ptr,
++    l_partial_ptr,
++    acc_partial_ptr,
++    q_stride_t: gl.constexpr,
++    q_stride_h: gl.constexpr,
++    q_stride_d: gl.constexpr,
++    kv_stride_n: gl.constexpr,
++    kv_stride_d: gl.constexpr,
++    out_stride_t: gl.constexpr,
++    out_stride_h: gl.constexpr,
++    out_stride_d: gl.constexpr,
++    mp_stride_t: gl.constexpr,
++    mp_stride_s: gl.constexpr,
++    mp_stride_h: gl.constexpr,
++    lp_stride_t: gl.constexpr,
++    lp_stride_s: gl.constexpr,
++    lp_stride_h: gl.constexpr,
++    ap_stride_t: gl.constexpr,
++    ap_stride_s: gl.constexpr,
++    ap_stride_h: gl.constexpr,
++    ap_stride_d: gl.constexpr,
++    num_kv,
++    H: gl.constexpr,
++    D: gl.constexpr,
++    KV_SPLITS: gl.constexpr,
++    softmax_scale: gl.constexpr,
++    FP8_KV: gl.constexpr,
++    BLOCK_H: gl.constexpr,
++    BLOCK_D: gl.constexpr,
++    BLOCK_K: gl.constexpr,
++    num_warps: gl.constexpr,
++):
++    """One query/head tile and one contiguous split of its sparse KV list."""
++    WARP_SIZE: gl.constexpr = 32
++
++    if num_warps == 1:
++        qk_warp_bases: gl.constexpr = []
++        pv_warp_bases: gl.constexpr = []
++    elif num_warps == 2:
++        qk_warp_bases: gl.constexpr = [[1, 0]]
++        pv_warp_bases: gl.constexpr = [[0, 1]]
++    else:
++        qk_warp_bases: gl.constexpr = [[1, 0], [2, 0]]
++        pv_warp_bases: gl.constexpr = [[0, 1], [0, 2]]
++
++    qk_layout: gl.constexpr = gl.amd.AMDWMMALayout(
++        version=3,
++        transposed=True,
++        instr_shape=[16, 16, 32],
++        warp_bases=qk_warp_bases,
++    )
++    pv_layout: gl.constexpr = gl.amd.AMDWMMALayout(
++        version=3,
++        transposed=True,
++        instr_shape=[16, 16, 32],
++        warp_bases=pv_warp_bases,
++    )
++    dot_q_layout: gl.constexpr = gl.DotOperandLayout(
++        operand_index=0, parent=qk_layout, k_width=8
++    )
++    dot_k_layout: gl.constexpr = gl.DotOperandLayout(
++        operand_index=1, parent=qk_layout, k_width=8
++    )
++    dot_p_layout: gl.constexpr = gl.DotOperandLayout(
++        operand_index=0, parent=pv_layout, k_width=8
++    )
++    dot_v_layout: gl.constexpr = gl.DotOperandLayout(
++        operand_index=1, parent=pv_layout, k_width=8
++    )
++
++    d_inner: gl.constexpr = BLOCK_D // 8
++    qkv_warps_h: gl.constexpr = 2 if num_warps >= 2 else 1
++    qkv_warps_d: gl.constexpr = num_warps // qkv_warps_h
++    blocked_layout: gl.constexpr = gl.BlockedLayout(
++        size_per_thread=[1, 8],
++        threads_per_warp=[WARP_SIZE // (d_inner // 2), d_inner // 2],
++        warps_per_cta=[qkv_warps_h, qkv_warps_d],
++        order=[1, 0],
++    )
++    row_layout: gl.constexpr = gl.SliceLayout(1, blocked_layout)
++    col_layout: gl.constexpr = gl.SliceLayout(0, blocked_layout)
++    score_row_layout: gl.constexpr = gl.SliceLayout(1, qk_layout)
++    score_col_layout: gl.constexpr = gl.SliceLayout(0, qk_layout)
++
++    t = gl.program_id(0)
++    pid_h = gl.program_id(1)
++    pid_s = gl.program_id(2)
++    h_base = pid_h * BLOCK_H
++
++    h_offs = gl.arange(0, BLOCK_H, layout=row_layout)
++    d_offs = gl.arange(0, BLOCK_D, layout=col_layout)
++    h_eff = h_base + h_offs
++    h_mask = h_eff < H
++    q = gl.load(
++        q_ptr
++        + t * q_stride_t
++        + h_eff[:, None] * q_stride_h
++        + d_offs[None, :] * q_stride_d,
++        mask=h_mask[:, None],
++        other=0.0,
++        cache_modifier=".cg",
++    )
++    q_dot = gl.convert_layout(q, dot_q_layout)
++
++    kv_start = gl.load(kv_indptr_ptr + t)
++    kv_end = gl.load(kv_indptr_ptr + t + 1)
++    kv_len = kv_end - kv_start
++    num_tiles = gl.cdiv(kv_len, BLOCK_K)
++    tiles_per_split = gl.cdiv(num_tiles, KV_SPLITS)
++    tile_lo = pid_s * tiles_per_split
++    tile_hi = gl.minimum(tile_lo + tiles_per_split, num_tiles)
++    if tile_lo >= tile_hi:
++        return
++
++    m_i = gl.full([BLOCK_H], float("-inf"), gl.float32, layout=score_row_layout)
++    l_i = gl.full([BLOCK_H], 0.0, gl.float32, layout=score_row_layout)
++    acc = gl.zeros([BLOCK_H, BLOCK_D], dtype=gl.float32, layout=pv_layout)
++
++    kv_layout: gl.constexpr = blocked_layout
++    kv_row_layout: gl.constexpr = gl.SliceLayout(1, kv_layout)
++    kv_col_layout: gl.constexpr = gl.SliceLayout(0, kv_layout)
++    k_offs = gl.arange(0, BLOCK_K, layout=kv_row_layout)
++    kv_d_offs = gl.arange(0, BLOCK_D, layout=kv_col_layout)
++
++    for tile in tl.range(tile_lo, tile_hi):
++        k_pos = tile * BLOCK_K + k_offs
++        in_range = k_pos < kv_len
++        slot = gl.load(
++            kv_indices_ptr + kv_start + k_pos,
++            mask=in_range,
++            other=-1,
++            cache_modifier=".cg",
++        )
++        valid = in_range & (slot >= 0) & (slot < num_kv)
++        safe_slot = gl.where(valid, slot, 0)
++        kv = gl.load(
++            kv_ptr
++            + safe_slot[:, None].to(gl.int64) * kv_stride_n
++            + kv_d_offs[None, :] * kv_stride_d,
++            mask=valid[:, None],
++            other=0.0,
++            cache_modifier=".cg",
++        )
++        if FP8_KV:
++            kv_scale = gl.load(kv_scale_ptr).to(gl.float32)
++            kv = (kv.to(gl.float32) * kv_scale).to(gl.bfloat16)
++
++        k_dot = gl.convert_layout(kv.permute(1, 0), dot_k_layout)
++        scores = gl.amd.rdna4.wmma(
++            q_dot,
++            k_dot,
++            gl.zeros([BLOCK_H, BLOCK_K], dtype=gl.float32, layout=qk_layout),
++        )
++        scores = scores * softmax_scale
++        valid_col = gl.convert_layout(valid, score_col_layout)
++        scores = gl.where(valid_col[None, :], scores, float("-inf"))
++
++        m_block = gl.max(scores, axis=1)
++        m_new = gl.maximum(m_i, m_block)
++        alpha = gl.exp(m_i - m_new)
++        p = gl.exp(scores - m_new[:, None])
++        p = gl.where(valid_col[None, :], p, 0.0)
++        l_i = l_i * alpha + gl.sum(p, axis=1)
++
++        p_dot = gl.convert_layout(p.to(gl.bfloat16), dot_p_layout)
++        v_dot = gl.convert_layout(kv, dot_v_layout)
++        acc = acc * gl.convert_layout(alpha[:, None], pv_layout)
++        acc = gl.amd.rdna4.wmma(p_dot, v_dot, acc)
++        m_i = m_new
++
++    m_store = gl.convert_layout(m_i, row_layout)
++    l_store = gl.convert_layout(l_i, row_layout)
++    acc_store = gl.convert_layout(acc, blocked_layout)
++    if KV_SPLITS == 1:
++        denom = gl.convert_layout(l_i[:, None], pv_layout)
++        out_value = gl.convert_layout(acc / gl.maximum(denom, 1.0e-30), blocked_layout)
++        gl.store(
++            out_ptr
++            + t * out_stride_t
++            + h_eff[:, None] * out_stride_h
++            + d_offs[None, :] * out_stride_d,
++            out_value.to(out_ptr.dtype.element_ty),
++            mask=h_mask[:, None],
++        )
++    else:
++        gl.store(
++            m_partial_ptr
++            + t * mp_stride_t
++            + pid_s * mp_stride_s
++            + h_eff * mp_stride_h,
++            m_store,
++            mask=h_mask,
++        )
++        gl.store(
++            l_partial_ptr
++            + t * lp_stride_t
++            + pid_s * lp_stride_s
++            + h_eff * lp_stride_h,
++            l_store,
++            mask=h_mask,
++        )
++        gl.store(
++            acc_partial_ptr
++            + t * ap_stride_t
++            + pid_s * ap_stride_s
++            + h_eff[:, None] * ap_stride_h
++            + d_offs[None, :] * ap_stride_d,
++            acc_store.to(acc_partial_ptr.dtype.element_ty),
++            mask=h_mask[:, None],
++        )
++
++
++@gluon.jit
++def _sparse_mla_reduce_gfx1201(
++    m_partial_ptr,
++    l_partial_ptr,
++    acc_partial_ptr,
++    out_ptr,
++    mp_stride_t: gl.constexpr,
++    mp_stride_s: gl.constexpr,
++    mp_stride_h: gl.constexpr,
++    lp_stride_t: gl.constexpr,
++    lp_stride_s: gl.constexpr,
++    lp_stride_h: gl.constexpr,
++    ap_stride_t: gl.constexpr,
++    ap_stride_s: gl.constexpr,
++    ap_stride_h: gl.constexpr,
++    ap_stride_d: gl.constexpr,
++    out_stride_t: gl.constexpr,
++    out_stride_h: gl.constexpr,
++    out_stride_d: gl.constexpr,
++    H: gl.constexpr,
++    D: gl.constexpr,
++    KV_SPLITS: gl.constexpr,
++    BLOCK_D: gl.constexpr,
++    num_warps: gl.constexpr,
++):
++    """Combine split softmax state; one program handles one output D tile."""
++    layout: gl.constexpr = gl.BlockedLayout(
++        size_per_thread=[1],
++        threads_per_warp=[32],
++        warps_per_cta=[num_warps],
++        order=[0],
++    )
++    t = gl.program_id(0)
++    h = gl.program_id(1)
++    d = gl.program_id(2) * BLOCK_D + gl.arange(0, BLOCK_D, layout=layout)
++    d_mask = d < D
++
++    m_max = gl.full([BLOCK_D], float("-inf"), gl.float32, layout=layout)
++    for s in range(KV_SPLITS):
++        m_s = gl.load(m_partial_ptr + t * mp_stride_t + s * mp_stride_s + h * mp_stride_h)
++        m_max = gl.maximum(m_max, m_s)
++
++    denom = gl.zeros([BLOCK_D], gl.float32, layout=layout)
++    acc = gl.zeros([BLOCK_D], gl.float32, layout=layout)
++    for s in range(KV_SPLITS):
++        m_s = gl.load(m_partial_ptr + t * mp_stride_t + s * mp_stride_s + h * mp_stride_h)
++        l_s = gl.load(l_partial_ptr + t * lp_stride_t + s * lp_stride_s + h * lp_stride_h)
++        weight = gl.where(m_s == float("-inf"), 0.0, gl.exp(m_s - m_max))
++        denom += weight * l_s
++        a_s = gl.load(
++            acc_partial_ptr
++            + t * ap_stride_t
++            + s * ap_stride_s
++            + h * ap_stride_h
++            + d * ap_stride_d,
++            mask=d_mask,
++            other=0.0,
++        ).to(gl.float32)
++        acc += weight * a_s
++
++    result = gl.where(denom > 0.0, acc / gl.maximum(denom, 1.0e-30), 0.0)
++    gl.store(
++        out_ptr + t * out_stride_t + h * out_stride_h + d * out_stride_d,
++        result.to(out_ptr.dtype.element_ty),
++        mask=d_mask,
++    )
+diff --git a/aiter/ops/triton/attention/sparse_mla.py b/aiter/ops/triton/attention/sparse_mla.py
+index 87cb661..e76a9fe 100644
+--- a/aiter/ops/triton/attention/sparse_mla.py
++++ b/aiter/ops/triton/attention/sparse_mla.py
+@@ -239,7 +239,30 @@ def sparse_mla_fwd(
+         [C, H, kv_lora_rank] bf16 (the latent V), lse is None unless return_lse.
+     """
+     assert q.ndim == 3, f"expected q=[b,h,d], got {q.shape}"
+-    assert arch_info.get_arch() == "gfx950", "sparse_mla_fwd is gfx950-only"
++    device_arch = arch_info.get_arch()
++    if device_arch == "gfx1201":
++        from aiter.ops.triton.attention.sparse_mla_rdna4 import (
++            sparse_mla_fwd_rdna4,
++        )
++
++        return sparse_mla_fwd_rdna4(
++            q,
++            kv_buffer,
++            kv_indptr,
++            kv_indices,
++            softmax_scale,
++            kv_scale=kv_scale,
++            kv_lora_rank=kv_lora_rank,
++            qk_rope_head_dim=qk_rope_head_dim,
++            kv_splits=kv_splits,
++            skip_reduce=skip_reduce,
++            has_invalid=has_invalid,
++            dot_precision=dot_precision,
++            q_scale=q_scale,
++            out=out,
++            return_lse=return_lse,
++        )
++    assert device_arch == "gfx950", "sparse_mla_fwd supports gfx950 and gfx1201"
+     q_is_fp8 = q.dtype == torch.float8_e4m3fn
+     if q.dtype not in (torch.bfloat16, torch.float8_e4m3fn):
+         raise ValueError(
+diff --git a/aiter/ops/triton/attention/sparse_mla_rdna4.py b/aiter/ops/triton/attention/sparse_mla_rdna4.py
+new file mode 100644
+index 0000000..616b0d7
+--- /dev/null
++++ b/aiter/ops/triton/attention/sparse_mla_rdna4.py
+@@ -0,0 +1,188 @@
++# SPDX-License-Identifier: MIT
++# Copyright (C) 2024-2026, Advanced Micro Devices, Inc. All rights reserved.
++
++"""Rope-free sparse MLA launcher for gfx1201 Gluon/WMMA experiments."""
++
++import math
++
++import torch
++import triton
++
++from aiter.ops.triton._gluon_kernels.gfx1201.attention.sparse_mla import (
++    _sparse_mla_gfx1201,
++    _sparse_mla_reduce_gfx1201,
++)
++
++
++_FP8_DTYPES = (torch.float8_e4m3fn, torch.float8_e4m3fnuz)
++
++
++def _as_i32_1d(x: torch.Tensor) -> torch.Tensor:
++    if x.dtype == torch.int32 and x.ndim == 1 and x.is_contiguous():
++        return x
++    return x.to(torch.int32).contiguous()
++
++
++def sparse_mla_fwd_rdna4(
++    q: torch.Tensor,
++    kv_buffer: torch.Tensor,
++    kv_indptr: torch.Tensor,
++    kv_indices: torch.Tensor,
++    softmax_scale: float,
++    kv_scale: torch.Tensor | None = None,
++    kv_lora_rank: int = 512,
++    qk_rope_head_dim: int = 0,
++    kv_splits: int | None = None,
++    skip_reduce: bool = False,
++    has_invalid: bool = False,
++    dot_precision: str = "bf16",
++    q_scale: torch.Tensor | None = None,
++    out: torch.Tensor | None = None,
++    return_lse: bool = False,
++) -> tuple[torch.Tensor, None]:
++    """Run the first gfx1201 sparse-MLA kernel for GLM-5.3-Flash.
++
++    Scope is deliberately narrow: rope-free, BF16 query and BF16 WMMA dots,
++    with either BF16 KV or OCP/FNUZ FP8 KV plus a scalar cache scale.
++    """
++    if qk_rope_head_dim != 0:
++        raise ValueError("gfx1201 sparse MLA currently supports rope-free GLM-5.3 only")
++    if skip_reduce or return_lse:
++        raise ValueError("gfx1201 sparse MLA does not expose partials or LSE yet")
++    if dot_precision != "bf16" or q_scale is not None:
++        raise ValueError("gfx1201 sparse MLA currently uses BF16 WMMA dots")
++    if q.ndim != 3 or q.dtype != torch.bfloat16:
++        raise ValueError(f"q must be [C,H,D] BF16, got {tuple(q.shape)} {q.dtype}")
++    if q.shape[2] != kv_lora_rank or kv_lora_rank != 512:
++        raise ValueError("gfx1201 sparse MLA currently requires D=kv_lora_rank=512")
++
++    if kv_buffer.ndim == 4:
++        if kv_buffer.shape[1:3] != (1, 1):
++            raise ValueError(f"unsupported KV shape {tuple(kv_buffer.shape)}")
++        kv = kv_buffer.reshape(kv_buffer.shape[0], kv_buffer.shape[3])
++    elif kv_buffer.ndim == 3:
++        kv = kv_buffer.reshape(-1, kv_buffer.shape[-1])
++    elif kv_buffer.ndim == 2:
++        kv = kv_buffer
++    else:
++        raise ValueError(f"unsupported KV shape {tuple(kv_buffer.shape)}")
++    if kv.shape[1] != kv_lora_rank or kv.stride(1) != 1:
++        raise ValueError("gfx1201 sparse MLA needs contiguous 512-element KV rows")
++
++    fp8_kv = kv.dtype in _FP8_DTYPES
++    if fp8_kv:
++        if kv_scale is None or kv_scale.dtype != torch.float32 or kv_scale.numel() != 1:
++            raise ValueError("FP8 KV requires one float32 kv_scale")
++        kv_scale_arg = kv_scale.reshape(1).contiguous()
++    elif kv.dtype == torch.bfloat16:
++        kv_scale_arg = torch.empty(1, dtype=torch.float32, device=q.device)
++    else:
++        raise ValueError(f"unsupported KV dtype {kv.dtype}")
++
++    indices = _as_i32_1d(kv_indices)
++    indptr = _as_i32_1d(kv_indptr)
++    c, h, d = q.shape
++    if indptr.numel() != c + 1:
++        raise ValueError(f"indptr must have {c + 1} elements")
++
++    block_h = 16
++    block_d = 512
++    block_k = 16
++    num_warps = 4
++    heads_blocks = triton.cdiv(h, block_h)
++    average_topk = indices.numel() / max(1, c)
++    max_splits = max(1, math.ceil(average_topk / block_k))
++    if kv_splits is None:
++        occupancy_splits = max(1, 256 // max(1, c * heads_blocks))
++        split_limit = min(32, max_splits, triton.next_power_of_2(occupancy_splits))
++    else:
++        split_limit = min(max_splits, max(1, int(kv_splits)))
++    # The reducer requires a power-of-two split count, but rounding upward can
++    # exceed max_splits and leave an unwritten partial buffer. Round down.
++    splits = 1 << (split_limit.bit_length() - 1)
++
++    if out is None:
++        out = torch.empty((c, h, d), dtype=torch.bfloat16, device=q.device)
++    elif out.shape[:2] != (c, h) or out.shape[2] < d:
++        raise ValueError(f"out shape {tuple(out.shape)} is incompatible with {(c, h, d)}")
++
++    if splits == 1:
++        m_partial = l_partial = acc_partial = out
++        mp = lp = (0, 0, 0)
++        ap = (0, 0, 0, 0)
++    else:
++        m_partial = torch.empty((c, splits, h), dtype=torch.float32, device=q.device)
++        l_partial = torch.empty_like(m_partial)
++        acc_partial = torch.empty(
++            (c, splits, h, d), dtype=torch.bfloat16, device=q.device
++        )
++        mp = m_partial.stride()
++        lp = l_partial.stride()
++        ap = acc_partial.stride()
++
++    _sparse_mla_gfx1201[(c, heads_blocks, splits)](
++        q,
++        kv,
++        kv_scale_arg,
++        indices,
++        indptr,
++        out,
++        m_partial,
++        l_partial,
++        acc_partial,
++        q.stride(0),
++        q.stride(1),
++        q.stride(2),
++        kv.stride(0),
++        kv.stride(1),
++        out.stride(0),
++        out.stride(1),
++        out.stride(2),
++        mp[0],
++        mp[1],
++        mp[2],
++        lp[0],
++        lp[1],
++        lp[2],
++        ap[0],
++        ap[1],
++        ap[2],
++        ap[3],
++        kv.shape[0],
++        H=h,
++        D=d,
++        KV_SPLITS=splits,
++        softmax_scale=float(softmax_scale),
++        FP8_KV=fp8_kv,
++        BLOCK_H=block_h,
++        BLOCK_D=block_d,
++        BLOCK_K=block_k,
++        num_warps=num_warps,
++    )
++    if splits > 1:
++        reduce_block_d = 128
++        _sparse_mla_reduce_gfx1201[(c, h, triton.cdiv(d, reduce_block_d))](
++            m_partial,
++            l_partial,
++            acc_partial,
++            out,
++            mp[0],
++            mp[1],
++            mp[2],
++            lp[0],
++            lp[1],
++            lp[2],
++            ap[0],
++            ap[1],
++            ap[2],
++            ap[3],
++            out.stride(0),
++            out.stride(1),
++            out.stride(2),
++            H=h,
++            D=d,
++            KV_SPLITS=splits,
++            BLOCK_D=reduce_block_d,
++            num_warps=4,
++        )
++    return out, None
+diff --git a/op_tests/triton_tests/attention/test_sparse_mla_rdna4.py b/op_tests/triton_tests/attention/test_sparse_mla_rdna4.py
+new file mode 100644
+index 0000000..e3dfd18
+--- /dev/null
++++ b/op_tests/triton_tests/attention/test_sparse_mla_rdna4.py
+@@ -0,0 +1,57 @@
++# SPDX-License-Identifier: MIT
++
++import pytest
++import torch
++
++from aiter.ops.triton.utils._triton import arch_info
++
++
++def _reference(q, kv, indices, indptr, scale):
++    rows = []
++    for row in range(q.shape[0]):
++        selected = kv[indices[indptr[row] : indptr[row + 1]].long()].float()
++        scores = torch.einsum("hd,td->ht", q[row].float(), selected) * scale
++        rows.append(torch.einsum("ht,td->hd", scores.softmax(-1), selected))
++    return torch.stack(rows)
++
++
++@pytest.mark.parametrize("fp8_kv", [False, True])
++@pytest.mark.parametrize("topk", [17, 256, 2048])
++def test_sparse_mla_rdna4_rope_free(fp8_kv, topk):
++    if arch_info.get_arch() != "gfx1201":
++        pytest.skip("RDNA4 sparse MLA test requires gfx1201")
++
++    from aiter.ops.triton.attention.sparse_mla import sparse_mla_fwd
++
++    torch.manual_seed(7)
++    c, h, d, pool = 2, 12, 512, 4096
++    scale = d**-0.5
++    q = torch.randn(c, h, d, dtype=torch.bfloat16, device="cuda") * 0.125
++    truth = torch.randn(pool, d, dtype=torch.bfloat16, device="cuda") * 0.125
++    indices = torch.stack(
++        [torch.randperm(pool, device="cuda")[:topk] for _ in range(c)]
++    ).to(torch.int32)
++    flat_indices = indices.flatten()
++    indptr = torch.arange(0, (c + 1) * topk, topk, dtype=torch.int32, device="cuda")
++
++    if fp8_kv:
++        kv_scale = (truth.float().abs().amax() / 448.0).clamp_min(1e-30).reshape(1)
++        kv = (truth.float() / kv_scale).clamp(-448, 448).to(torch.float8_e4m3fn)
++        ref_kv = kv.float() * kv_scale
++    else:
++        kv_scale = None
++        kv = truth
++        ref_kv = truth.float()
++
++    out, _ = sparse_mla_fwd(
++        q,
++        kv,
++        indptr,
++        flat_indices,
++        scale,
++        kv_scale=kv_scale,
++        qk_rope_head_dim=0,
++    )
++    ref = _reference(q, ref_kv, flat_indices, indptr, scale)
++    rel = (out.float() - ref).abs().max() / ref.abs().max().clamp_min(1e-6)
++    assert rel.item() < (0.035 if fp8_kv else 0.02)
+-- 
+2.53.0
+

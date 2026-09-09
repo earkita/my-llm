@@ -10,7 +10,7 @@ dedykowanym magazynie modeli wskazanym przez profile produkcyjne.
 | Profil | Backend | GPU | Równoległość | Kontekst | Spekulacja |
 |---|---|---:|---|---:|---|
 | `deepseek-v4-flash` | vLLM 0.28 | 6 | TP1/PP6 | 1,048,576 | DSpark K5 |
-| `glm53-flash` | vLLM `main` `7fbd44c`, ROCm 10 | 8 | TP8/EP8 | 1,048,576 | packed MXFP4 GEMV + DFlash2 K7, FP8 KV |
+| `glm53-flash` | vLLM `main` `7fbd44c`, ROCm 10 | 8 | TP8/no-EP | 1,048,576 | packed MXFP4 GEMV + DFlash2 K4, FP8 KV |
 | `qwen38-flash` | vLLM 0.28 | 8 | TP8/EP8 | 262,144 | MTP K2 |
 
 Każdy deployment jest jednym plikiem w `profiles/production/`. Plik zawiera
@@ -55,7 +55,7 @@ checkoutów.
 ./run install --profile glm53-flash
 ./run model verify glm53-flash
 
-# domyślnie: MRV2, TP8/EP8, packed MXFP4 GEMV, DFlash2 K7, FP8 KV, 1M
+# domyślnie: MRV2, TP8/no-EP, packed MXFP4 GEMV, DFlash2 K4, FP8 KV, 1M
 ./run launcher start glm53-flash
 
 # jawny fallback BF16 KV, 256K
@@ -100,12 +100,13 @@ checkpoint. GLM dodatkowo przypina i sprawdza rozmiar oraz SHA-256 draftera
 DFlash2. Serwis nie wystartuje, jeżeli którykolwiek wymagany artefakt ma inną
 tożsamość.
 
-Domyślny `glm53-flash` używa izolowanej recepty ROCm 10, MRV2, TP8/EP8,
-packed RDNA4 MXFP4 decode GEMV, DFlash2 K7, FP8 KV oraz kontekstu 1,048,576
-tokenów; prefix cache i CPU offload są wyłączone. Dokładna próba graniczna
-`1,048,560 + 16` zakończyła się poprawnie, a NIAH przeszedł 4/4 położeń igły
-na pełnym kontekście. Jedynym jawnym trybem alternatywnym jest packed GEMV z
-BF16 KV i kontekstem 262,144 tokenów.
+Domyślny `glm53-flash` używa izolowanej recepty ROCm 10, MRV2, TP8 bez Expert
+Parallel, packed RDNA4 MXFP4 decode GEMV, DFlash2 K4, FP8 KV oraz kontekstu
+1,048,576 tokenów; prefix cache i CPU offload są wyłączone. K4 osiągnął 29.28
+tok/s wobec 27.03 tok/s dla K3 w reprezentatywnym teście decode. Próba
+graniczna `1,048,560 + 16` oraz NIAH 4/4 na pełnym kontekście zostały wykonane
+wcześniej z K7 przy tej samej geometrii FP8 KV. Jawne tryby diagnostyczne
+zachowują K3 i K7 jako rollback oraz BF16 KV z kontekstem 262,144 tokenów.
 
 Szczegóły: [architektura](docs/architecture.md),
 [operacje](docs/operations.md), [dowody i ograniczenia](docs/verification.md).

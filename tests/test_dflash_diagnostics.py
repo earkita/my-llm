@@ -57,6 +57,11 @@ vllm:spec_decode_num_accepted_tokens_per_pos_total{engine="0",position="0"} 4
 vllm:spec_decode_num_accepted_tokens_per_pos_total{engine="1",position="0"} 2
 vllm:spec_decode_num_accepted_tokens_per_pos_total{engine="0",position="1"} 1
 vllm:spec_decode_num_accepted_tokens_per_pos_total{position="2",engine="0"} 1
+vllm:request_generation_tokens_sum{engine="0"} 18
+vllm:request_decode_time_seconds_sum{engine="0"} 2
+vllm:request_decode_time_seconds_count{engine="0"} 1
+vllm:inter_token_latency_seconds_sum{engine="0"} 2
+vllm:inter_token_latency_seconds_count{engine="0"} 6
 """
         )
         self.assertTrue(payload["available"])
@@ -66,6 +71,8 @@ vllm:spec_decode_num_accepted_tokens_per_pos_total{position="2",engine="0"} 1
         self.assertEqual(
             payload["accepted_tokens_per_position"], {"0": 6, "1": 1, "2": 1}
         )
+        self.assertEqual(payload["performance"]["request_generation_tokens"], 18)
+        self.assertEqual(payload["performance"]["target_steps"], 6)
 
     def test_metric_delta_calculates_acceptance(self) -> None:
         before = {
@@ -74,6 +81,13 @@ vllm:spec_decode_num_accepted_tokens_per_pos_total{position="2",engine="0"} 1
             "num_draft_tokens": 70,
             "num_accepted_tokens": 14,
             "accepted_tokens_per_position": {"0": 8, "1": 4},
+            "performance": {
+                "request_generation_tokens": 10,
+                "request_decode_seconds": 1,
+                "completed_requests": 1,
+                "target_steps": 4,
+                "target_step_seconds": 1,
+            },
         }
         after = {
             "available": True,
@@ -81,6 +95,13 @@ vllm:spec_decode_num_accepted_tokens_per_pos_total{position="2",engine="0"} 1
             "num_draft_tokens": 98,
             "num_accepted_tokens": 21,
             "accepted_tokens_per_position": {"0": 12, "1": 6},
+            "performance": {
+                "request_generation_tokens": 28,
+                "request_decode_seconds": 3,
+                "completed_requests": 2,
+                "target_steps": 10,
+                "target_step_seconds": 3,
+            },
         }
         delta = metric_delta(before, after)
         self.assertEqual(delta["num_drafts"], 4)
@@ -88,6 +109,8 @@ vllm:spec_decode_num_accepted_tokens_per_pos_total{position="2",engine="0"} 1
         self.assertEqual(delta["num_accepted_tokens"], 7)
         self.assertEqual(delta["draft_acceptance_rate"], 0.25)
         self.assertEqual(delta["mean_acceptance_length"], 2.75)
+        self.assertEqual(delta["performance"]["decode_tokens_per_second"], 8.5)
+        self.assertEqual(delta["performance"]["target_steps_per_second"], 3)
 
     def test_compare_reports_first_exact_token_divergence(self) -> None:
         baseline = _capture("target", [20, 21, 22, 23])

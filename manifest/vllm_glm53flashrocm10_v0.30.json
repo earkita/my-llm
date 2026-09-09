@@ -7,8 +7,8 @@
     "reference_gpu_count": 8
   },
   "environment": {
-    "venv": ".runtime/recipes/vllm_glm53flashrocm10_v0.29/venv",
-    "source_root": ".runtime/recipes/vllm_glm53flashrocm10_v0.29/src",
+    "venv": ".runtime/recipes/vllm_glm53flashrocm10_v0.30/venv",
+    "source_root": ".runtime/recipes/vllm_glm53flashrocm10_v0.30/src",
     "constraints": "constraints/rocm-10.0-py312.txt",
     "constraints_sha256": "5b658cd3e1fdc7566014624017b4884136e86c24878f85410c6ead76ac5b59b3",
     "constraint_overlays": [
@@ -38,15 +38,24 @@
   "sources": {
     "aiter": {
       "repository": "https://github.com/ROCm/aiter.git",
-      "commit": "7ff5155f3ba772e534b6cf8dddc0099932327b9b",
-      "version": "0.1.21+git.7ff5155f3",
-      "expected_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "patches": []
+      "commit": "83075b6701d554cf096e35fae71777ffe3ef3aac",
+      "version": "0.1.21+git.83075b670",
+      "upstream_sparse_mla_pr": "https://github.com/ROCm/aiter/pull/4919",
+      "upstream_sparse_mla_scope": "gfx950 Gluon sparse MLA; local patch adds the unqualified gfx1201 wave32/WMMA prototype",
+      "expected_diff_sha256": "b696d88ff8ceb0fe7709bc8f44ae1e78872c8e9562795c2af76d2a7693f8d792",
+      "full_index_diff": true,
+      "apply_intent_to_add": true,
+      "patches": [
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.30/1001-perf-add-gfx1201-gluon-sparse-mla-prototype.patch",
+          "sha256": "fa8f2857d68b2d18ddf8c3bdcf7223d0424fc8f7bce085de7d3a20dca0b26847"
+        }
+      ]
     },
     "vllm": {
       "repository": "https://github.com/vllm-project/vllm.git",
       "commit": "7fbd44cbe0a90b9c8fd3a94a0f0401ac4b1bc719",
-      "version": "v0.29-main-7fbd44cbe",
+      "version": "v0.30-main-7fbd44cbe",
       "upstream_pr": "https://github.com/vllm-project/vllm/pull/55423",
       "upstream_pr_head": "374e367e2b87ee65332b03468b76dc4c40e69519",
       "triton_mla_noncausal_commit": "7e2d79176f5bb56153cbae8224d37256355d39e7",
@@ -93,7 +102,7 @@
       "glm_moe_router_dedup_head": "0c2b5ad442672ea2efbf62df4a3df1cce01b946e",
       "glm_required_first_tools_pr": "https://github.com/vllm-project/vllm/pull/55558",
       "glm_required_first_tools_head": "bcca85b9083512bccdb039a1770834ee6e246646",
-      "expected_diff_sha256": "8ccf39951c3be3a098af50a17991fa4ac86840710ba39a08352e538d810ac9b4",
+      "expected_diff_sha256": "5e729afd0edf5dce961e21590cda0588928f9732d0cff2d8118f4a7bb866191e",
       "full_index_diff": true,
       "apply_intent_to_add": true,
       "accepted_previous_images": [
@@ -124,104 +133,108 @@
       ],
       "patches": [
         {
-          "path": "patches/vllm_glm53flashrocm10_v0.29/0001-fix-enable-GLM-5.3-DFlash2-on-current-vLLM-main.patch",
+          "path": "patches/vllm_glm53flashrocm10_v0.30/0001-fix-enable-GLM-5.3-DFlash2-on-current-vLLM-main.patch",
           "sha256": "b71d410e567cb4d397c56c6153838c2fcf113129dac838d946d251f54be513ee"
         },
         {
-          "path": "patches/vllm_glm53flashrocm10_v0.29/0002-fix-load-GLM-Quark-weight_scale-tensors.patch",
+          "path": "patches/vllm_glm53flashrocm10_v0.30/0002-fix-load-GLM-Quark-weight_scale-tensors.patch",
           "sha256": "591ad2fda27201caf2d807e5237b48943a43005849623ea6257ce078440c8192"
         },
         {
-          "path": "patches/vllm_glm53flashrocm10_v0.29/0003-fix-honor-explicit-accelerator-platform-target.patch",
+          "path": "patches/vllm_glm53flashrocm10_v0.30/0003-fix-honor-explicit-accelerator-platform-target.patch",
           "sha256": "164753b752dfe894a5747892ca9883c3202f817ad7f5cc6071a259721ba38e16"
         },
         {
-          "path": "patches/vllm_glm53flashrocm10_v0.29/0004-fix-match-GLM-packed-projections-to-Quark-overrides.patch",
+          "path": "patches/vllm_glm53flashrocm10_v0.30/0004-fix-match-GLM-packed-projections-to-Quark-overrides.patch",
           "sha256": "605479403779cbddb43271e808aa26a191276222075c7b94fcf386c9cb574c34"
         },
         {
-          "path": "patches/vllm_glm53flashrocm10_v0.29/0005-fix-enable-the-AITER-kpool-indexer-on-RDNA4.patch",
+          "path": "patches/vllm_glm53flashrocm10_v0.30/0005-fix-enable-the-AITER-kpool-indexer-on-RDNA4.patch",
           "sha256": "4aae0e9f767eba523cf5b92c740988d159896b2abedead82313085d06c658d7c"
         },
         {
-          "path": "patches/vllm_glm53flashrocm10_v0.29/0006-fix-route-GLM-speculative-verify-through-ragged-spar.patch",
+          "path": "patches/vllm_glm53flashrocm10_v0.30/0006-fix-route-GLM-speculative-verify-through-ragged-spar.patch",
           "sha256": "9cc2edaf5537619233c537cb27ce563379dfae1fcdb078bf7140284fcb5b5e8e"
         },
         {
-          "path": "patches/vllm_glm53flashrocm10_v0.29/0007-fix-preserve-GLM-kpool-state-across-speculative-roll.patch",
+          "path": "patches/vllm_glm53flashrocm10_v0.30/0007-fix-preserve-GLM-kpool-state-across-speculative-roll.patch",
           "sha256": "9630e44697fea57113c7df1bd877d19dab5feafeed499f5b9af599bc191cf3a0"
         },
         {
-          "path": "patches/vllm_glm53flashrocm10_v0.29/0008-fix-reject-invalid-GLM-kpool-indices.patch",
+          "path": "patches/vllm_glm53flashrocm10_v0.30/0008-fix-reject-invalid-GLM-kpool-indices.patch",
           "sha256": "faf40aaddd8bb359aba7adbdcc85765dad01b45481fa73fb9735eb0c0350c2fe"
         },
         {
-          "path": "patches/vllm_glm53flashrocm10_v0.29/0009-fix-bound-the-sparse-indexer-prefill-workspace.patch",
+          "path": "patches/vllm_glm53flashrocm10_v0.30/0009-fix-bound-the-sparse-indexer-prefill-workspace.patch",
           "sha256": "d02e319663d76a0236fee5e6f4a0d029997a02fea4fba8ab5ef320058bef40e1"
         },
         {
-          "path": "patches/vllm_glm53flashrocm10_v0.29/0010-fix-align-ROCm-GLM-kpool-pages-to-kernel-geometry.patch",
+          "path": "patches/vllm_glm53flashrocm10_v0.30/0010-fix-align-ROCm-GLM-kpool-pages-to-kernel-geometry.patch",
           "sha256": "e1b2c57418890f4ac44e2f713f79f5e03b926c78dda75435b3111cf9ebbf4a26"
         },
         {
-          "path": "patches/vllm_glm53flashrocm10_v0.29/0011-fix-advertise-actual-GLM-kpool-kernel-page-sizes.patch",
+          "path": "patches/vllm_glm53flashrocm10_v0.30/0011-fix-advertise-actual-GLM-kpool-kernel-page-sizes.patch",
           "sha256": "f855a6b3b21776244d7f5cda5473f78829ef8823eefbec347244cfe6ab8393ca"
         },
         {
-          "path": "patches/vllm_glm53flashrocm10_v0.29/0012-fix-guard-block-table-loads-in-slot-mapping.patch",
+          "path": "patches/vllm_glm53flashrocm10_v0.30/0012-fix-guard-block-table-loads-in-slot-mapping.patch",
           "sha256": "3760db7bdc00cdf765907549d4d6148a0ce628557752499cf1eb1fc2af664b71"
         },
         {
-          "path": "patches/vllm_glm53flashrocm10_v0.29/0013-fix-right-size-the-GLM-indexer-prefill-workspace.patch",
+          "path": "patches/vllm_glm53flashrocm10_v0.30/0013-fix-right-size-the-GLM-indexer-prefill-workspace.patch",
           "sha256": "04df66a39baf44c350f626044cd934d3309de8ad970470f7752bb8136ea98a8d"
         },
         {
-          "path": "patches/vllm_glm53flashrocm10_v0.29/0014-fix-compress-the-GLM-indexer-decode-workspace.patch",
+          "path": "patches/vllm_glm53flashrocm10_v0.30/0014-fix-compress-the-GLM-indexer-decode-workspace.patch",
           "sha256": "f3ca0acd0a6e887c154f30e7ae6561570d0202ad71d40de2a50139ecc2653269"
         },
         {
-          "path": "patches/vllm_glm53flashrocm10_v0.29/0015-fix-shard-the-DFlash-auxiliary-projection.patch",
+          "path": "patches/vllm_glm53flashrocm10_v0.30/0015-fix-shard-the-DFlash-auxiliary-projection.patch",
           "sha256": "26abb7877a6d4af56c0c8154751d310069abeed3a48cbb494721d46b3a69478b"
         },
         {
-          "path": "patches/vllm_glm53flashrocm10_v0.29/0016-fix-stage-OCP-MX-expert-dequantization.patch",
+          "path": "patches/vllm_glm53flashrocm10_v0.30/0016-fix-stage-OCP-MX-expert-dequantization.patch",
           "sha256": "ce560c5ba773db4b06fb27da9dc50d2d2e2d3a4170195e9667d0b9945e375287"
         },
         {
-          "path": "patches/vllm_glm53flashrocm10_v0.29/0017-fix-load-Quark-block-FP8-MoE-layers.patch",
+          "path": "patches/vllm_glm53flashrocm10_v0.30/0017-fix-load-Quark-block-FP8-MoE-layers.patch",
           "sha256": "e9a6858e401ae8b26f09dc24288f0661663c17882d4fd82a68223def94d568f1"
         },
         {
-          "path": "patches/vllm_glm53flashrocm10_v0.29/0018-fix-route-RDNA4-FP8-sparse-MLA-through-Triton.patch",
+          "path": "patches/vllm_glm53flashrocm10_v0.30/0018-fix-route-RDNA4-FP8-sparse-MLA-through-Triton.patch",
           "sha256": "ba03f592c7635c3bfccef3c80428ab953160488f408a2ff5bec5ea27512d0d21"
         },
         {
-          "path": "patches/vllm_glm53flashrocm10_v0.29/0019-fix-disable-persistent-sparse-MLA-for-prefill-continuations.patch",
+          "path": "patches/vllm_glm53flashrocm10_v0.30/0019-fix-disable-persistent-sparse-MLA-for-prefill-continuations.patch",
           "sha256": "4ee972ed2e7f71a53308833ee7e0216872f3b82ebe9e1e5b349dcc46c0050565"
         },
         {
-          "path": "patches/vllm_glm53flashrocm10_v0.29/0020-fix-route-RDNA4-full-BF16-sparse-MLA-through-Triton.patch",
+          "path": "patches/vllm_glm53flashrocm10_v0.30/0020-fix-route-RDNA4-full-BF16-sparse-MLA-through-Triton.patch",
           "sha256": "e3aa3d5974ec567dcd000f7b0744f7a0bf923d43d4b8650e852f11d7dbc6b763"
         },
         {
-          "path": "patches/vllm_glm53flashrocm10_v0.29/0021-fix-read-shuffled-RDNA4-kpool-cache.patch",
+          "path": "patches/vllm_glm53flashrocm10_v0.30/0021-fix-read-shuffled-RDNA4-kpool-cache.patch",
           "sha256": "b15e2b995f2d0b5aefe6effb8df92b2d8052c54c6ca2417255ac5a8df1626dcf"
         },
         {
-          "path": "patches/vllm_glm53flashrocm10_v0.29/0022-perf-add-packed-RDNA4-MXFP4-decode-GEMV.patch",
+          "path": "patches/vllm_glm53flashrocm10_v0.30/0022-perf-add-packed-RDNA4-MXFP4-decode-GEMV.patch",
           "sha256": "15b73faf1397b21f8a775d07df3b3e24f3e55abe5743888962dd8f37b3b7fa0c"
         },
         {
-          "path": "patches/vllm_glm53flashrocm10_v0.29/0023-perf-avoid-duplicate-GLM-MoE-router-GEMM.patch",
+          "path": "patches/vllm_glm53flashrocm10_v0.30/0023-perf-avoid-duplicate-GLM-MoE-router-GEMM.patch",
           "sha256": "8c403e10b7828da302c1eb161a67fcd142cf7c2d3fdaa5737808b3e96a282a31"
         },
         {
-          "path": "patches/vllm_glm53flashrocm10_v0.29/0024-fix-render-GLM-tool-schemas-required-first.patch",
+          "path": "patches/vllm_glm53flashrocm10_v0.30/0024-fix-render-GLM-tool-schemas-required-first.patch",
           "sha256": "371ac21f063b7b68d7452493e7b60bbaac345cbcf8858029ab364f7a7d5de565"
         },
         {
-          "path": "patches/vllm_glm53flashrocm10_v0.29/0025-fix-align-GLM-strict-tool-schema-order.patch",
+          "path": "patches/vllm_glm53flashrocm10_v0.30/0025-fix-align-GLM-strict-tool-schema-order.patch",
           "sha256": "2108ae2d0afabb6ed82730574271d222ade2ab38b75ddfba3fe2ff9ed2fd4948"
+        },
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.30/0026-perf-gate-gfx1201-gluon-sparse-mla-dispatch.patch",
+          "sha256": "151a142e83335e0c21e775f778d4e0fcf894f7635707aee23d3a01b60c8b1089"
         }
       ],
       "rocm_sparse_verify_head": "0f1d78db4495fed10384a2b048e70367e61d3dd1",

@@ -1,0 +1,250 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Sat, 5 Sep 2026 13:58:00 +0200
+Subject: [PATCH 01/16] fix: enable GLM-5.3 DFlash2 on current vLLM main
+
+---
+ vllm/models/glm5next/nvidia/model.py | 30 +++++++++++---
+ vllm/v1/core/kv_cache_utils.py       | 58 +++++++++++++++++++++++-----
+ 2 files changed, 73 insertions(+), 15 deletions(-)
+
+diff --git a/vllm/models/glm5next/nvidia/model.py b/vllm/models/glm5next/nvidia/model.py
+index 5d632df1..830dfeae 100644
+--- a/vllm/models/glm5next/nvidia/model.py
++++ b/vllm/models/glm5next/nvidia/model.py
+@@ -60,9 +60,11 @@ from vllm.model_executor.models.glm4_1v import (
+     Glm4vForConditionalGeneration,
+ )
+ from vllm.model_executor.models.interfaces import (
++    EagleModelMixin,
+     HasInnerState,
+     IsHybrid,
+     MixtureOfExperts,
++    SupportsEagle3,
+     SupportsPP,
+ )
+ from vllm.model_executor.models.utils import (
+@@ -575,7 +577,7 @@ class Glm5NextDecoderLayer(nn.Module):
+         )
+ 
+ 
+-class Glm5NextModel(nn.Module):
++class Glm5NextModel(nn.Module, EagleModelMixin):
+     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
+         super().__init__()
+ 
+@@ -660,7 +662,7 @@ class Glm5NextModel(nn.Module):
+         intermediate_tensors: IntermediateTensors | None,
+         inputs_embeds: torch.Tensor | None = None,
+         **kwargs,
+-    ) -> torch.Tensor:
++    ) -> torch.Tensor | IntermediateTensors | tuple[torch.Tensor, list[torch.Tensor]]:
+         if get_pp_group().is_first_rank:
+             if inputs_embeds is not None:
+                 hidden_states = inputs_embeds
+@@ -679,13 +681,25 @@ class Glm5NextModel(nn.Module):
+             comb = None
+ 
+         full_num_tokens = positions.shape[0]
++        aux_hidden_states = self._maybe_add_hidden_state([], 0, hidden_states, None)
+         if self.is_sequence_parallel:
+             hidden_states = sp_shard(hidden_states)
+ 
+-        for layer in self._active_layers:
++        for layer_idx, layer in enumerate(self._active_layers, self.start_layer):
+             hidden_states, residual, post, comb = layer(
+                 positions, hidden_states, residual, post, comb
+             )
++            if layer_idx + 1 in self.aux_hidden_state_layers:
++                aux = hidden_states
++                if post is not None:
++                    # Materialize the deferred mHC output for the drafter only;
++                    # leave the target's fused post/pre state untouched.
++                    aux = hc_contract(
++                        layer.hc_post(hidden_states, residual, post, comb), layer.n
++                    )
++                if self.is_sequence_parallel:
++                    aux = sp_all_gather(aux)[:full_num_tokens]
++                aux_hidden_states.append(aux)
+ 
+         if not get_pp_group().is_last_rank:
+             # PP is gated off for GLM-5.3-Flash (no make_empty_intermediate_tensors),
+@@ -701,6 +715,8 @@ class Glm5NextModel(nn.Module):
+             hidden_states = sp_all_gather(hidden_states)[:full_num_tokens]
+ 
+         hidden_states = self.norm(hidden_states)
++        if aux_hidden_states:
++            return hidden_states, aux_hidden_states
+         return hidden_states
+ 
+     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
+@@ -887,7 +903,7 @@ class Glm5NextModel(nn.Module):
+ 
+ 
+ class Glm5NextForCausalLM(
+-    nn.Module, HasInnerState, SupportsPP, MixtureOfExperts, IsHybrid
++    nn.Module, HasInnerState, SupportsPP, MixtureOfExperts, IsHybrid, SupportsEagle3
+ ):
+     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
+         super().__init__()
+@@ -983,7 +999,11 @@ class Glm5NextForCausalLM(
+     dummy_inputs=Glm4vDummyInputsBuilder,
+ )
+ class Glm5NextForConditionalGeneration(
+-    Glm4vForConditionalGeneration, HasInnerState, IsHybrid, MixtureOfExperts
++    Glm4vForConditionalGeneration,
++    HasInnerState,
++    IsHybrid,
++    MixtureOfExperts,
++    SupportsEagle3,
+ ):
+     # The text model (KDA + dense-MLA + MoE) is a hybrid mamba model. The
+     # multimodal wrapper must declare the same interfaces so vLLM treats it as
+diff --git a/vllm/v1/core/kv_cache_utils.py b/vllm/v1/core/kv_cache_utils.py
+index 2fce0c0f..a8672628 100644
+--- a/vllm/v1/core/kv_cache_utils.py
++++ b/vllm/v1/core/kv_cache_utils.py
+@@ -1177,10 +1177,16 @@ def _get_kv_cache_groups_glm5_next(
+         for name, spec in kv_cache_spec.items()
+         if isinstance(spec, KpoolTailSpec)
+     }
++    sliding_specs = {
++        name: spec
++        for name, spec in kv_cache_spec.items()
++        if type(spec) is SlidingWindowSpec
++    }
+     attn_specs = {
+         name: spec
+         for name, spec in kv_cache_spec.items()
+         if not isinstance(spec, (MambaSpec, KpoolTailSpec))
++        and name not in sliding_specs
+     }
+     if not mamba_specs or not all(
+         type(spec) is MLAAttentionSpec for spec in attn_specs.values()
+@@ -1200,6 +1206,8 @@ def _get_kv_cache_groups_glm5_next(
+     mla_pages = {mla_specs[name].page_size_bytes for name in mla_names}
+     assert len(mla_pages) == 1
+     mla_page = mla_pages.pop()
++    if any(spec.page_size_bytes > mla_page for spec in sliding_specs.values()):
++        return None
+     uniform_spec = UniformTypeKVCacheSpecs.from_specs(attn_specs)
+     assert uniform_spec is not None
+ 
+@@ -1237,10 +1245,31 @@ def _get_kv_cache_groups_glm5_next(
+     for index, name in enumerate(mamba_specs):
+         mamba_grouped_names[index % num_groups].append(name)
+ 
++    # External sliding-window drafts can use the same physical slot shape as
++    # the target's Mamba groups, with independent logical block tables.
++    sliding_buckets: dict[SlidingWindowSpec, list[str]] = defaultdict(list)
++    for name, spec in sliding_specs.items():
++        # A tiny draft block padded to an MLA page wastes most of the pool.
++        # Match the target's logical span before padding the physical page.
++        spec = replace(spec, block_size=mla_specs[mla_names[0]].block_size)
++        if spec.page_size_bytes > mla_page:
++            return None
++        sliding_buckets[replace(spec, page_size_padded=mla_page)].append(name)
++    sliding_groups: list[KVCacheGroupSpec] = []
++    spec_config = vllm_config.speculative_config
++    drop_draft_block = spec_config is not None and spec_config.use_eagle_block_drop()
++    for spec, names in sliding_buckets.items():
++        count = cdiv(len(names), len(mla_names))
++        sliding_groups.extend(
++            KVCacheGroupSpec(names[i::count], spec, is_eagle_group=drop_draft_block)
++            for i in range(count)
++        )
++
+     return (
+         [KVCacheGroupSpec(list(attn_specs), uniform_spec)]
+         + ([tail_group] if tail_group is not None else [])
+         + create_kv_cache_group_specs(padded_specs, mamba_grouped_names)
++        + sliding_groups
+     )
+ 
+ 
+@@ -1265,8 +1294,11 @@ def _glm5_next_tensor_layout(
+         for group in kv_cache_groups
+         if isinstance(group.kv_cache_spec, UniformTypeKVCacheSpecs)
+     ]
+-    mamba_groups = [
+-        group for group in kv_cache_groups if isinstance(group.kv_cache_spec, MambaSpec)
++    slot_groups = [
++        group
++        for group in kv_cache_groups
++        if isinstance(group.kv_cache_spec, MambaSpec)
++        or type(group.kv_cache_spec) is SlidingWindowSpec
+     ]
+     attn_group: KVCacheGroupSpec | None = None
+     tail_group: KVCacheGroupSpec | None = None
+@@ -1276,9 +1308,11 @@ def _glm5_next_tensor_layout(
+             attn_group = group
+         elif all(isinstance(spec, KpoolTailSpec) for spec in inner.values()):
+             tail_group = group
+-    if attn_group is None or not mamba_groups:
++    if attn_group is None or not any(
++        isinstance(group.kv_cache_spec, MambaSpec) for group in slot_groups
++    ):
+         return None
+-    if len(uniform_groups) + len(mamba_groups) != len(kv_cache_groups):
++    if len(uniform_groups) + len(slot_groups) != len(kv_cache_groups):
+         return None
+ 
+     attn_uniform = cast(UniformTypeKVCacheSpecs, attn_group.kv_cache_spec)
+@@ -1300,7 +1334,11 @@ def _glm5_next_tensor_layout(
+         return None
+     mla_page = mla_pages.pop()
+     idx_page = idx_pages.pop()
+-    if any(group.kv_cache_spec.page_size_bytes != mla_page for group in mamba_groups):
++    if any(
++        group.kv_cache_spec.page_size_bytes != mla_page
++        or len(group.layer_names) > len(mla_names)
++        for group in slot_groups
++    ):
+         return None
+ 
+     tail_names: list[str] = []
+@@ -1322,7 +1360,7 @@ def _glm5_next_tensor_layout(
+ 
+     return (
+         attn_group,
+-        mamba_groups,
++        slot_groups,
+         mla_names,
+         idx_names,
+         mla_page,
+@@ -1639,7 +1677,7 @@ def get_kv_cache_config_from_groups(
+     if (glm5_layout := _glm5_next_tensor_layout(kv_cache_groups)) is not None:
+         (
+             attn_group,
+-            mamba_groups,
++            slot_groups,
+             mla_names,
+             idx_names,
+             mla_page,
+@@ -1672,7 +1710,7 @@ def get_kv_cache_config_from_groups(
+         for index, mla_name in enumerate(mla_names):
+             offset = index * mla_page * num_blocks
+             add_tensor(mla_name, attn_specs[mla_name], offset)
+-            for group in mamba_groups:
++            for group in slot_groups:
+                 if index < len(group.layer_names):
+                     add_tensor(group.layer_names[index], group.kv_cache_spec, offset)
+ 
+@@ -2338,7 +2376,7 @@ def _max_memory_usage_bytes_from_groups(
+     if (glm5_layout := _glm5_next_tensor_layout(kv_cache_groups)) is not None:
+         (
+             attn_group,
+-            mamba_groups,
++            slot_groups,
+             mla_names,
+             idx_names,
+             mla_page,
+@@ -2353,7 +2391,7 @@ def _max_memory_usage_bytes_from_groups(
+                 group.kv_cache_spec.max_memory_usage_bytes(vllm_config),
+                 group.kv_cache_spec.page_size_bytes,
+             )
+-            for group in mamba_groups
++            for group in slot_groups
+         )
+         if tail_names:
+             total_blocks += 1

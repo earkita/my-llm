@@ -189,10 +189,7 @@
   "stack": {
     "description": "Production DeepSeek V4 Flash coding stack",
     "litellm_aliases": [
-      "deepseek-v4-flash-0731",
-      "deepseek-v4-flash",
-      "deepseek-v4-flash-thinking",
-      "deepseek-v4-flash-fast"
+      "deepseek-v4-flash-thinking"
     ],
     "claude_settings": {
       "apiKeyHelper": "bash -c 'exec \"${MY_LLM_REPO_ROOT:-$HOME/ai/my-llm}/scripts/claude-litellm-key.sh\"'",
@@ -200,10 +197,10 @@
         "defaultMode": "acceptEdits"
       },
       "env": {
-        "ANTHROPIC_BASE_URL": "http://127.0.0.1:4000",
-        "ANTHROPIC_MODEL": "deepseek-v4-flash-thinking",
-        "ANTHROPIC_SMALL_FAST_MODEL": "deepseek-v4-flash-fast",
-        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-v4-flash-fast",
+      "ANTHROPIC_BASE_URL": "http://127.0.0.1:4000",
+      "ANTHROPIC_MODEL": "deepseek-v4-flash-thinking",
+      "ANTHROPIC_SMALL_FAST_MODEL": "deepseek-v4-flash-thinking",
+      "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-v4-flash-thinking",
         "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-v4-flash-thinking",
         "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4-flash-thinking",
         "DISABLE_PROMPT_CACHING": "1",

@@ -31,7 +31,7 @@ Dla istniejących wag:
 ./run model verify qwen38-flash
 ```
 
-`glm53-flash` przypina target Quark/MXFP4 oraz domyślny drafter DFlash2 K7.
+`glm53-flash` przypina target Quark/MXFP4 oraz domyślny drafter DFlash2 K4.
 Plikiem draftera jest
 `/mnt/ai/models/glm/GLM-5.3-Flash-DFlash2-HF-bf582e4/model.safetensors`.
 Download pobiera go automatycznie, a adopt i start wymagają poprawnego rozmiaru
@@ -87,9 +87,9 @@ Bezpieczne zatrzymanie:
 skills/stop-r9700-runtime/scripts/stop-runtime.sh
 ```
 
-Zwykły start GLM uruchamia produkcyjny profil ROCm 10 z MRV2, TP8/EP8,
-packed RDNA4 MXFP4 decode GEMV, DFlash2 K7, FP8 KV i kontekstem 1M. Pozostaje
-jeden jawny fallback z tym samym GEMV i DFlash2, ale BF16 KV oraz 256K:
+Zwykły start GLM uruchamia produkcyjny profil ROCm 10 z MRV2, TP8 bez Expert
+Parallel, packed RDNA4 MXFP4 decode GEMV, DFlash2 K4, FP8 KV i kontekstem 1M.
+Jawny fallback zachowuje DFlash2 K7, BF16 KV oraz 256K:
 
 ```bash
 ./run launcher start glm53-flash
@@ -97,9 +97,10 @@ jeden jawny fallback z tym samym GEMV i DFlash2, ale BF16 KV oraz 256K:
   --runtime-mode mxfp4-gemv-dflash2-k7-256k
 ```
 
-Po testach zatrzymaj usługę przed zmianą trybu. Produkcyjny runtime przeszedł
-dokładny test graniczny `1,048,560 + 16 = 1,048,576` oraz NIAH 4/4 na pełnym
-kontekście.
+Po testach zatrzymaj usługę przed zmianą trybu. Dokładny test graniczny
+`1,048,560 + 16 = 1,048,576` oraz NIAH 4/4 na pełnym kontekście wykonano z K7
+przy tej samej geometrii FP8 KV; K4 został wybrany jako domyślny po teście
+decode 29.28 tok/s wobec 27.03 tok/s dla K3.
 
 Skrypt startowy wymaga PPT0 najwyżej 285 W na wszystkich widocznych GPU i
 wykonuje host preflight. Niższy limit przechodzi kontrolę. Nie zastępuje

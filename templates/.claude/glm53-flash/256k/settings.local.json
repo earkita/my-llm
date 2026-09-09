@@ -1,0 +1,24 @@
+{
+  "apiKeyHelper": "bash -c 'exec \"${MY_LLM_REPO_ROOT:-$HOME/ai/my-llm}/scripts/claude-litellm-key.sh\"'",
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "Read",
+      "Bash"
+    ]
+  },
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:4000",
+    "ANTHROPIC_MODEL": "glm-5.3-flash-high",
+    "ANTHROPIC_SMALL_FAST_MODEL": "glm-5.3-flash-high",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-5.3-flash-high",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.3-flash-high",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.3-flash-high",
+    "DISABLE_PROMPT_CACHING": "1",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
+    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "262144",
+    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "262144",
+    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "90"
+  }
+}

@@ -29,6 +29,8 @@ PROXY_ROOT = ROOT / ".runtime" / "litellm"
 VENV = PROXY_ROOT / "venv"
 STATE_PATH = PROXY_ROOT / "service.json"
 CONFIG_PATH = ROOT / "config" / "litellm.yaml"
+HOOKS_PATH = ROOT / "config" / "litellm_hooks.py"
+CONFIG_INPUTS = (CONFIG_PATH, HOOKS_PATH)
 REQUIREMENTS_PATH = ROOT / "constraints" / "litellm-py312.txt"
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 4000
@@ -36,7 +38,13 @@ DEFAULT_BACKEND_URL = "http://127.0.0.1:8000"
 
 
 def _config_sha256() -> str:
-    return hashlib.sha256(CONFIG_PATH.read_bytes()).hexdigest()
+    digest = hashlib.sha256()
+    for path in CONFIG_INPUTS:
+        digest.update(path.relative_to(ROOT).as_posix().encode())
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
 
 
 def _config_matches(state: dict[str, Any]) -> bool:
@@ -255,6 +263,8 @@ def start(
             "PORT": str(port),
             "LITELLM_MASTER_KEY": master_key,
             "HOSTED_INFERENCE_API_BASE": backend_url.rstrip("/") + "/v1",
+            "HOSTED_INFERENCE_ANTHROPIC_BASE": backend_url.rstrip("/"),
+            "HOSTED_INFERENCE_API_KEY": "local-inference",
         }
     )
     with log_path.open("w") as log:

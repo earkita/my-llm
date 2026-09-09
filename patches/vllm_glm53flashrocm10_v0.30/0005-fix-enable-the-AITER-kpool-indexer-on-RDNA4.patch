@@ -1,0 +1,25 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Sat, 5 Sep 2026 13:58:54 +0200
+Subject: [PATCH 05/16] fix: enable the AITER kpool indexer on RDNA4
+
+---
+ vllm/model_executor/layers/sparse_attn_indexer_kpool.py | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/vllm/model_executor/layers/sparse_attn_indexer_kpool.py b/vllm/model_executor/layers/sparse_attn_indexer_kpool.py
+index ba7a5adf..a995bb98 100644
+--- a/vllm/model_executor/layers/sparse_attn_indexer_kpool.py
++++ b/vllm/model_executor/layers/sparse_attn_indexer_kpool.py
+@@ -1019,7 +1019,10 @@ class SparseAttnIndexerKpool(CustomOp):
+         assert isinstance(q_quant, torch.Tensor), (
+             "AMD sparse_attn_indexer expects a single FP8 q_quant tensor"
+         )
+-        if rocm_aiter_ops.is_enabled():
++        if (
++            rocm_aiter_ops.is_enabled()
++            or rocm_aiter_ops.is_rdna_aiter_enabled()
++        ):
+             if index_kpool <= 1:
+                 return torch.ops.vllm.rocm_aiter_sparse_attn_indexer(
+                     hidden_states,

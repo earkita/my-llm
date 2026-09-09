@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Sat, 5 Sep 2026 13:59:17 +0200
+Subject: [PATCH 13/16] fix: right-size the GLM indexer prefill workspace
+
+---
+ vllm/models/glm5next/nvidia/attention.py | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/vllm/models/glm5next/nvidia/attention.py b/vllm/models/glm5next/nvidia/attention.py
+index fce7d619..85f71856 100644
+--- a/vllm/models/glm5next/nvidia/attention.py
++++ b/vllm/models/glm5next/nvidia/attention.py
+@@ -330,7 +330,12 @@ class Indexer(nn.Module):
+         self.prefix = prefix
+         from vllm.v1.attention.backends.mla.indexer import get_max_prefill_buffer_size
+ 
+-        self.max_total_seq_len = get_max_prefill_buffer_size(vllm_config)
++        # Right-size the indexer prefill workspace: it is sized in tokens but
++        # this indexer KV is pool-granular (compress_ratio == index_kpool),
++        # same as deepseek_v4/attention.py already does. Thread #53906.
++        self.max_total_seq_len = (
++            get_max_prefill_buffer_size(vllm_config) // self.index_kpool
++        )
+         self.indexer_op = SparseAttnIndexerKpool(
+             self.k_cache,
+             self.quant_block_size,

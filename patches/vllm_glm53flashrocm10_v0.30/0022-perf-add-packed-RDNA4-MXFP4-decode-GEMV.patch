@@ -1,0 +1,881 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Codex <codex@local>
+Date: Mon, 7 Sep 2026 11:22:01 +0200
+Subject: [PATCH 22/22] perf: add packed RDNA4 MXFP4 decode GEMV
+
+---
+ .../quantization/test_rocm_mxfp4_gemv.py      | 208 +++++++++++
+ vllm/envs.py                                  |   6 +
+ .../kernels/linear/mxfp4/emulation.py         |  39 +-
+ .../kernels/linear/mxfp4/rocm_gemv.py         | 339 ++++++++++++++++++
+ .../fused_moe/experts/ocp_mx_emulation_moe.py | 158 +++++++-
+ 5 files changed, 742 insertions(+), 8 deletions(-)
+ create mode 100644 tests/kernels/quantization/test_rocm_mxfp4_gemv.py
+ create mode 100644 vllm/model_executor/kernels/linear/mxfp4/rocm_gemv.py
+
+diff --git a/tests/kernels/quantization/test_rocm_mxfp4_gemv.py b/tests/kernels/quantization/test_rocm_mxfp4_gemv.py
+new file mode 100644
+index 0000000..748fdd7
+--- /dev/null
++++ b/tests/kernels/quantization/test_rocm_mxfp4_gemv.py
+@@ -0,0 +1,208 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""Correctness tests for the RDNA4 packed MXFP4 decode GEMV."""
++
++import pytest
++import torch
++import torch.nn.functional as F
++
++from vllm.model_executor.kernels.linear.mxfp4.rocm_gemv import (
++    rocm_mxfp4_row_gemv,
++)
++from vllm.model_executor.layers.quantization.utils.mxfp4_utils import (
++    dequant_mxfp4,
++    downcast_to_mxfp,
++)
++from vllm.platforms import current_platform
++from vllm.utils.import_utils import has_quark
++
++if not current_platform.is_rocm():
++    pytest.skip("packed MXFP4 GEMV is ROCm-only", allow_module_level=True)
++
++from vllm.platforms.rocm import on_rdna4
++
++pytestmark = [
++    pytest.mark.skipif(not on_rdna4(), reason="packed MXFP4 GEMV targets RDNA4"),
++    pytest.mark.skipif(not has_quark(), reason="amd-quark reference is required"),
++]
++
++
++@pytest.mark.parametrize("shape", [(1, 64, 256), (4, 96, 512)])
++def test_rocm_mxfp4_row_gemv_dense(shape: tuple[int, int, int]) -> None:
++    rows, output_size, input_size = shape
++    torch.manual_seed(7)
++    x = torch.randn((rows, input_size), device="cuda", dtype=torch.bfloat16) * 0.2
++    source_weight = (
++        torch.randn((output_size, input_size), device="cuda", dtype=torch.bfloat16)
++        * 0.2
++    )
++    bias = torch.randn((output_size,), device="cuda", dtype=torch.bfloat16) * 0.1
++    weight, weight_scale, _ = downcast_to_mxfp(source_weight, axis=-1)
++
++    actual = rocm_mxfp4_row_gemv(
++        x,
++        weight,
++        weight_scale,
++        bias=bias,
++    )
++    expected = F.linear(
++        x,
++        dequant_mxfp4(weight, weight_scale, torch.bfloat16),
++        bias,
++    )
++
++    torch.testing.assert_close(actual, expected, atol=0.0625, rtol=0.02)
++
++
++def test_rocm_mxfp4_row_gemv_expert_routing() -> None:
++    rows, experts, topk, output_size, input_size = 2, 3, 2, 64, 256
++    torch.manual_seed(11)
++    x = torch.randn((rows, input_size), device="cuda", dtype=torch.bfloat16) * 0.2
++    source_weight = (
++        torch.randn(
++            (experts, output_size, input_size),
++            device="cuda",
++            dtype=torch.bfloat16,
++        )
++        * 0.2
++    )
++    bias = (
++        torch.randn((experts, output_size), device="cuda", dtype=torch.bfloat16) * 0.1
++    )
++    weight, weight_scale, _ = downcast_to_mxfp(source_weight, axis=-1)
++    expert_ids = torch.tensor([0, 2, 1, -1], device="cuda", dtype=torch.int64)
++    route_weights = torch.tensor(
++        [0.25, 0.75, 0.6, 0.4], device="cuda", dtype=torch.float32
++    )
++
++    actual = rocm_mxfp4_row_gemv(
++        x,
++        weight,
++        weight_scale,
++        expert_ids=expert_ids,
++        route_weights=route_weights,
++        bias=bias,
++        routes_per_input=topk,
++    )
++
++    dequantized = dequant_mxfp4(weight, weight_scale, torch.bfloat16)
++    reference_routes = []
++    for route, expert in enumerate(expert_ids.tolist()):
++        if expert < 0:
++            reference_routes.append(
++                torch.zeros(output_size, device="cuda", dtype=torch.bfloat16)
++            )
++        else:
++            value = F.linear(x[route // topk], dequantized[expert], bias[expert])
++            reference_routes.append(value * route_weights[route])
++    expected = torch.stack(reference_routes)
++
++    torch.testing.assert_close(actual, expected, atol=0.0625, rtol=0.02)
++
++
++@torch.inference_mode()
++def test_rocm_mxfp4_gemv_moe_matches_emulation(
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    from vllm.config import VllmConfig, set_current_vllm_config
++    from vllm.model_executor.layers.fused_moe import FusedMoEConfig
++    from vllm.model_executor.layers.fused_moe.activation import MoEActivation
++    from vllm.model_executor.layers.fused_moe.config import (
++        FusedMoEParallelConfig,
++        RoutingMethodType,
++        ocp_mx_moe_quant_config,
++    )
++    from vllm.model_executor.layers.fused_moe.experts.ocp_mx_emulation_moe import (
++        OCP_MXQuantizationEmulationTritonExperts,
++    )
++    from vllm.model_executor.layers.fused_moe.oracle.mxfp4 import (
++        Mxfp4MoeBackend,
++        make_mxfp4_moe_kernel,
++    )
++    from vllm.model_executor.layers.quantization.utils.mxfp4_utils import (
++        mxfp4_quantize,
++    )
++    from vllm.v1.worker.workspace import init_workspace_manager
++
++    init_workspace_manager(torch.accelerator.current_device_index())
++    num_tokens, num_experts, topk = 2, 4, 2
++    hidden_size, intermediate_size = 256, 256
++    dtype, device = torch.bfloat16, "cuda:0"
++
++    torch.manual_seed(17)
++    w1, w1_scale = mxfp4_quantize(
++        torch.randn(
++            num_experts,
++            2 * intermediate_size,
++            hidden_size,
++            dtype=dtype,
++            device=device,
++        )
++        / 8
++    )
++    w2, w2_scale = mxfp4_quantize(
++        torch.randn(
++            num_experts,
++            hidden_size,
++            intermediate_size,
++            dtype=dtype,
++            device=device,
++        )
++        / 8
++    )
++    hidden_states = torch.randn(num_tokens, hidden_size, dtype=dtype, device=device)
++    topk_weights, topk_ids = torch.topk(
++        torch.randn(num_tokens, num_experts, device=device), k=topk, dim=-1
++    )
++    topk_weights = torch.softmax(topk_weights, dim=-1).to(dtype)
++    topk_ids = topk_ids.to(torch.int32)
++    moe_config = FusedMoEConfig(
++        num_experts=num_experts,
++        experts_per_token=topk,
++        hidden_dim=hidden_size,
++        intermediate_size=intermediate_size,
++        num_local_experts=num_experts,
++        num_logical_experts=num_experts,
++        moe_parallel_config=FusedMoEParallelConfig.make_no_parallel(),
++        activation=MoEActivation.SILU,
++        in_dtype=dtype,
++        device=device,
++        routing_method=RoutingMethodType.Renormalize,
++    )
++
++    def run(use_packed_gemv: bool) -> torch.Tensor:
++        monkeypatch.setenv(
++            "VLLM_ROCM_USE_TRITON_MXFP4_GEMV",
++            "1" if use_packed_gemv else "0",
++        )
++        quant_config = ocp_mx_moe_quant_config(
++            quant_dtype="mxfp4",
++            weight_dtype="mxfp4",
++            w1_scale=w1_scale,
++            w2_scale=w2_scale,
++        )
++        with set_current_vllm_config(VllmConfig()):
++            kernel = make_mxfp4_moe_kernel(
++                moe_quant_config=quant_config,
++                moe_config=moe_config,
++                mxfp4_backend=Mxfp4MoeBackend.EMULATION,
++                experts_cls=OCP_MXQuantizationEmulationTritonExperts,
++                routing_tables=None,
++            )
++            assert kernel.fused_experts.use_rocm_gemv is use_packed_gemv
++            return kernel.apply(
++                hidden_states=hidden_states,
++                w1=w1,
++                w2=w2,
++                topk_weights=topk_weights,
++                topk_ids=topk_ids,
++                activation=MoEActivation.SILU,
++                global_num_experts=num_experts,
++                expert_map=None,
++                apply_router_weight_on_input=False,
++            ).clone()
++
++    expected = run(False)
++    actual = run(True)
++
++    torch.testing.assert_close(actual, expected, atol=0.125, rtol=0.04)
+diff --git a/vllm/envs.py b/vllm/envs.py
+index a3ef86d..388c6a1 100755
+--- a/vllm/envs.py
++++ b/vllm/envs.py
+@@ -153,6 +153,7 @@ if TYPE_CHECKING:
+     VLLM_ROCM_FP8_PADDING: bool = True
+     VLLM_ROCM_MOE_PADDING: bool = True
+     VLLM_ROCM_SHUFFLE_KV_CACHE_LAYOUT: bool = False
++    VLLM_ROCM_USE_TRITON_MXFP4_GEMV: bool = False
+     VLLM_ENABLE_V1_MULTIPROCESSING: bool = True
+     VLLM_LOG_BATCHSIZE_INTERVAL: float = -1
+     VLLM_DISABLE_COMPILE_CACHE: bool = False
+@@ -1366,6 +1367,11 @@ environment_variables: dict[str, Callable[[], Any]] = {
+     "VLLM_ROCM_SHUFFLE_KV_CACHE_LAYOUT": lambda: (
+         os.getenv("VLLM_ROCM_SHUFFLE_KV_CACHE_LAYOUT", "False").lower() in ("true", "1")
+     ),
++    # Experimental decode-only packed MXFP4 GEMV for RDNA4. It avoids
++    # materializing the complete BF16 weight matrix on every token.
++    "VLLM_ROCM_USE_TRITON_MXFP4_GEMV": lambda: (
++        os.getenv("VLLM_ROCM_USE_TRITON_MXFP4_GEMV", "False").lower() in ("true", "1")
++    ),
+     # Custom quick allreduce kernel for MI3* cards
+     # Choice of quantization level: FP, INT8, INT6, INT4, INT3 or NONE
+     # Recommended for large models to get allreduce
+diff --git a/vllm/model_executor/kernels/linear/mxfp4/emulation.py b/vllm/model_executor/kernels/linear/mxfp4/emulation.py
+index ddd0143..13ff9c2 100644
+--- a/vllm/model_executor/kernels/linear/mxfp4/emulation.py
++++ b/vllm/model_executor/kernels/linear/mxfp4/emulation.py
+@@ -8,7 +8,12 @@ import torch
+ import torch.nn.functional as F
+ from torch.nn.parameter import Parameter
+ 
++import vllm.envs as envs
+ from vllm.logger import init_logger
++from vllm.model_executor.kernels.linear.mxfp4.rocm_gemv import (
++    ROCM_MXFP4_GEMV_MAX_ROWS,
++    rocm_mxfp4_row_gemv,
++)
+ from vllm.model_executor.layers.quantization.utils.mxfp4_utils import (
+     dequant_mxfp4,
+     quant_dequant_mxfp4,
+@@ -43,16 +48,31 @@ class EmulationMxfp4LinearKernel(MxFp4LinearKernel):
+ 
+     def __init__(self, config: MxFp4LinearLayerConfig) -> None:
+         super().__init__(config)
++        self.use_rocm_gemv = False
++        if current_platform.is_rocm() and envs.VLLM_ROCM_USE_TRITON_MXFP4_GEMV:
++            from vllm.platforms.rocm import on_rdna4
++
++            self.use_rocm_gemv = on_rdna4()
++            if self.use_rocm_gemv:
++                logger.info_once(
++                    "Using experimental packed Triton MXFP4 GEMV for RDNA4 "
++                    "linear decode batches up to %d rows.",
++                    ROCM_MXFP4_GEMV_MAX_ROWS,
++                )
+         if config.activation_quant_key is None:
+             # no input Q/DQ for weight-only
+             self.quant_dequant_func: Callable[[torch.Tensor], torch.Tensor] = (
+-                lambda x: x
++                self._identity
+             )
+         else:
+             self.quant_dequant_func = _ACTIVATION_QUANT_DEQUANT_FUNCS[
+                 config.activation_quant_key
+             ]
+ 
++    @staticmethod
++    def _identity(x: torch.Tensor) -> torch.Tensor:
++        return x
++
+     @classmethod
+     def is_supported(
+         cls, compute_capability: int | None = None
+@@ -105,6 +125,21 @@ class EmulationMxfp4LinearKernel(MxFp4LinearKernel):
+         x: torch.Tensor,
+         bias: torch.Tensor | None = None,
+     ) -> torch.Tensor:
+-        dq_w = dequant_mxfp4(layer.weight, layer.weight_scale, x.dtype)
+         qdq_x = self.quant_dequant_func(x)
++        input_shape = qdq_x.shape
++        flat_x = qdq_x.reshape(-1, input_shape[-1])
++        if (
++            self.use_rocm_gemv
++            and flat_x.shape[0] <= ROCM_MXFP4_GEMV_MAX_ROWS
++            and flat_x.dtype in (torch.float16, torch.bfloat16)
++        ):
++            out = rocm_mxfp4_row_gemv(
++                flat_x,
++                layer.weight,
++                layer.weight_scale,
++                bias=bias,
++            )
++            return out.reshape(*input_shape[:-1], out.shape[-1])
++
++        dq_w = dequant_mxfp4(layer.weight, layer.weight_scale, x.dtype)
+         return F.linear(qdq_x, dq_w, bias)
+diff --git a/vllm/model_executor/kernels/linear/mxfp4/rocm_gemv.py b/vllm/model_executor/kernels/linear/mxfp4/rocm_gemv.py
+new file mode 100644
+index 0000000..3205dcf
+--- /dev/null
++++ b/vllm/model_executor/kernels/linear/mxfp4/rocm_gemv.py
+@@ -0,0 +1,339 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++"""Packed MXFP4 GEMV for small-batch ROCm inference.
++
++The decode path is bandwidth bound and does not benefit from materializing an
++entire BF16 expert matrix before every GEMM.  This kernel reads the checkpoint's
++row-major E2M1 weights and E8M0 block scales directly, expands only the values
++used by the selected rows, and accumulates in FP32.
++
++The implementation is intentionally limited to GEMV-sized batches.  Larger
++batches continue to use the regular emulation GEMM until a separately tuned
++RDNA4 prefill kernel is qualified.  The design follows the public Apache-2.0
++FreeToken MXFP4 split-K decode work, adapted here for vLLM's native Quark weight
++layout and expert-parallel routing.
++"""
++
++from __future__ import annotations
++
++import torch
++
++from vllm.triton_utils import tl, triton
++from vllm.utils.torch_utils import direct_register_custom_op
++
++ROCM_MXFP4_GEMV_MAX_ROWS = 16
++ROCM_MXFP4_GEMV_MAX_ROUTES = 64
++_MXFP4_GROUP_SIZE = 32
++_PACK_FACTOR = 2
++
++
++@triton.jit
++def _e2m1_to_f32(nibble):
++    payload = nibble & 0x7
++    magnitude = tl.where(
++        payload == 0,
++        0.0,
++        tl.where(
++            payload == 1,
++            0.5,
++            tl.where(
++                payload == 2,
++                1.0,
++                tl.where(
++                    payload == 3,
++                    1.5,
++                    tl.where(
++                        payload == 4,
++                        2.0,
++                        tl.where(payload == 5, 3.0, tl.where(payload == 6, 4.0, 6.0)),
++                    ),
++                ),
++            ),
++        ),
++    )
++    return tl.where((nibble & 0x8) != 0, -magnitude, magnitude)
++
++
++@triton.jit
++def _e8m0_to_f32(scale):
++    # E8M0 uses the byte as an IEEE-754 exponent.  255 is reserved; clamp it
++    # so malformed data cannot manufacture a NaN in the accumulator.
++    exponent = tl.minimum(scale.to(tl.int32), 254)
++    return (exponent << 23).to(tl.float32, bitcast=True)
++
++
++@triton.jit
++def _rocm_mxfp4_row_gemv_kernel(
++    x_ptr,
++    weight_ptr,
++    weight_scale_ptr,
++    expert_ids_ptr,
++    route_weights_ptr,
++    bias_ptr,
++    out_ptr,
++    K: tl.constexpr,
++    num_experts,
++    routes_per_input: tl.constexpr,
++    stride_xm,
++    stride_xk,
++    stride_we,
++    stride_wn,
++    stride_wk,
++    stride_wse,
++    stride_wsn,
++    stride_wsk,
++    stride_be,
++    stride_bn,
++    stride_om,
++    stride_on,
++    HAS_EXPERT_IDS: tl.constexpr,
++    HAS_ROUTE_WEIGHTS: tl.constexpr,
++    HAS_BIAS: tl.constexpr,
++    BLOCK_K: tl.constexpr,
++):
++    route = tl.program_id(0).to(tl.int64)
++    out_col = tl.program_id(1).to(tl.int64)
++
++    expert = tl.load(expert_ids_ptr + route).to(tl.int64) if HAS_EXPERT_IDS else 0
++    valid_expert = (expert >= 0) & (expert < num_experts)
++    safe_expert = tl.maximum(expert, 0)
++    input_row = route // routes_per_input
++
++    offsets = tl.arange(0, BLOCK_K)
++    acc = tl.zeros((BLOCK_K,), dtype=tl.float32)
++    for k_start in range(0, K, BLOCK_K):
++        k = k_start + offsets
++        valid_k = k < K
++        packed = tl.load(
++            weight_ptr
++            + safe_expert * stride_we
++            + out_col * stride_wn
++            + (k // 2) * stride_wk,
++            mask=valid_expert & valid_k,
++            other=0,
++        ).to(tl.int32)
++        nibble = tl.where((k & 1) == 0, packed & 0xF, (packed >> 4) & 0xF)
++        scale = tl.load(
++            weight_scale_ptr
++            + safe_expert * stride_wse
++            + out_col * stride_wsn
++            + (k // 32) * stride_wsk,
++            mask=valid_expert & valid_k,
++            other=0,
++        )
++        x = tl.load(
++            x_ptr + input_row * stride_xm + k * stride_xk,
++            mask=valid_expert & valid_k,
++            other=0.0,
++        ).to(tl.float32)
++        acc += x * _e2m1_to_f32(nibble) * _e8m0_to_f32(scale)
++
++    value = tl.sum(acc, axis=0)
++    if HAS_BIAS:
++        value += tl.load(
++            bias_ptr + safe_expert * stride_be + out_col * stride_bn,
++            mask=valid_expert,
++            other=0.0,
++        ).to(tl.float32)
++    if HAS_ROUTE_WEIGHTS:
++        value *= tl.load(route_weights_ptr + route).to(tl.float32)
++    value = tl.where(valid_expert, value, 0.0)
++    tl.store(out_ptr + route * stride_om + out_col * stride_on, value)
++
++
++def _normalize_weight_strides(
++    tensor: torch.Tensor,
++) -> tuple[int, int, int, int]:
++    if tensor.ndim == 2:
++        return 1, 0, tensor.stride(0), tensor.stride(1)
++    if tensor.ndim == 3:
++        return tensor.shape[0], tensor.stride(0), tensor.stride(1), tensor.stride(2)
++    raise ValueError(f"MXFP4 GEMV weights must be 2D or 3D, got {tensor.shape}")
++
++
++def _normalize_bias_strides(
++    bias: torch.Tensor | None,
++) -> tuple[int, int]:
++    if bias is None:
++        return 0, 0
++    if bias.ndim == 1:
++        return 0, bias.stride(0)
++    if bias.ndim == 2:
++        return bias.stride(0), bias.stride(1)
++    raise ValueError(f"MXFP4 GEMV bias must be 1D or 2D, got {bias.shape}")
++
++
++def _rocm_mxfp4_row_gemv(
++    x: torch.Tensor,
++    weight: torch.Tensor,
++    weight_scale: torch.Tensor,
++    expert_ids: torch.Tensor | None,
++    route_weights: torch.Tensor | None,
++    bias: torch.Tensor | None,
++    out: torch.Tensor,
++    routes_per_input: int,
++) -> None:
++    if x.ndim != 2:
++        raise ValueError(f"MXFP4 GEMV input must be 2D, got {x.shape}")
++    if out.ndim != 2:
++        raise ValueError(f"MXFP4 GEMV output must be 2D, got {out.shape}")
++    if weight.dtype != torch.uint8 or weight_scale.dtype != torch.uint8:
++        raise TypeError("MXFP4 GEMV requires uint8 packed weights and E8M0 scales")
++    if x.dtype not in (torch.float16, torch.bfloat16):
++        raise TypeError("MXFP4 GEMV input must be float16 or bfloat16")
++    if out.dtype != x.dtype:
++        raise TypeError("MXFP4 GEMV output dtype must match the input dtype")
++    if not (x.is_cuda and weight.is_cuda and weight_scale.is_cuda and out.is_cuda):
++        raise ValueError("MXFP4 GEMV tensors must reside on the GPU")
++    if not (x.device == weight.device == weight_scale.device == out.device):
++        raise ValueError("MXFP4 GEMV tensors must reside on the same GPU")
++    if routes_per_input < 1:
++        raise ValueError("routes_per_input must be positive")
++
++    routes, output_size = out.shape
++    input_size = x.shape[1]
++    if input_size % _MXFP4_GROUP_SIZE != 0:
++        raise ValueError(
++            f"MXFP4 GEMV input size must be divisible by 32, got {input_size}"
++        )
++    if routes != x.shape[0] * routes_per_input:
++        raise ValueError(
++            f"output has {routes} routes, expected {x.shape[0] * routes_per_input}"
++        )
++    if weight.shape[-2:] != (output_size, input_size // _PACK_FACTOR):
++        raise ValueError(
++            "packed weight shape mismatch: "
++            f"got {weight.shape}, expected (..., {output_size}, {input_size // 2})"
++        )
++    if weight_scale.shape[-2:] != (
++        output_size,
++        input_size // _MXFP4_GROUP_SIZE,
++    ):
++        raise ValueError(
++            "weight scale shape mismatch: "
++            f"got {weight_scale.shape}, expected "
++            f"(..., {output_size}, {input_size // _MXFP4_GROUP_SIZE})"
++        )
++    if expert_ids is not None and expert_ids.numel() != routes:
++        raise ValueError("expert_ids must contain one entry per route")
++    if expert_ids is not None and expert_ids.dtype not in (torch.int32, torch.int64):
++        raise TypeError("expert_ids must use int32 or int64")
++    if expert_ids is not None and not expert_ids.is_contiguous():
++        raise ValueError("expert_ids must be contiguous")
++    if route_weights is not None and route_weights.numel() != routes:
++        raise ValueError("route_weights must contain one entry per route")
++    if route_weights is not None and not route_weights.is_contiguous():
++        raise ValueError("route_weights must be contiguous")
++    optional_tensors = (expert_ids, route_weights, bias)
++    if any(t is not None and t.device != x.device for t in optional_tensors):
++        raise ValueError("MXFP4 GEMV optional tensors must reside on the input GPU")
++
++    num_experts, stride_we, stride_wn, stride_wk = _normalize_weight_strides(weight)
++    scale_experts, stride_wse, stride_wsn, stride_wsk = _normalize_weight_strides(
++        weight_scale
++    )
++    if scale_experts != num_experts:
++        raise ValueError("weight and scale expert dimensions differ")
++    stride_be, stride_bn = _normalize_bias_strides(bias)
++    if bias is not None:
++        expected_bias_shape = (
++            (output_size,) if bias.ndim == 1 else (num_experts, output_size)
++        )
++        if bias.shape != expected_bias_shape:
++            raise ValueError(
++                f"bias shape mismatch: got {bias.shape}, expected {expected_bias_shape}"
++            )
++
++    # Unused optional pointers are still passed a valid allocation.  Their
++    # branches are compile-time eliminated by the HAS_* constexprs.
++    expert_ids_ptr = weight if expert_ids is None else expert_ids
++    route_weights_ptr = x if route_weights is None else route_weights
++    bias_ptr = x if bias is None else bias
++    grid = (routes, output_size)
++    _rocm_mxfp4_row_gemv_kernel[grid](
++        x,
++        weight,
++        weight_scale,
++        expert_ids_ptr,
++        route_weights_ptr,
++        bias_ptr,
++        out,
++        K=input_size,
++        num_experts=num_experts,
++        routes_per_input=routes_per_input,
++        stride_xm=x.stride(0),
++        stride_xk=x.stride(1),
++        stride_we=stride_we,
++        stride_wn=stride_wn,
++        stride_wk=stride_wk,
++        stride_wse=stride_wse,
++        stride_wsn=stride_wsn,
++        stride_wsk=stride_wsk,
++        stride_be=stride_be,
++        stride_bn=stride_bn,
++        stride_om=out.stride(0),
++        stride_on=out.stride(1),
++        HAS_EXPERT_IDS=expert_ids is not None,
++        HAS_ROUTE_WEIGHTS=route_weights is not None,
++        HAS_BIAS=bias is not None,
++        BLOCK_K=256,
++        num_warps=4,
++        num_stages=1,
++    )
++
++
++def _rocm_mxfp4_row_gemv_fake(
++    x: torch.Tensor,
++    weight: torch.Tensor,
++    weight_scale: torch.Tensor,
++    expert_ids: torch.Tensor | None,
++    route_weights: torch.Tensor | None,
++    bias: torch.Tensor | None,
++    out: torch.Tensor,
++    routes_per_input: int,
++) -> None:
++    return None
++
++
++direct_register_custom_op(
++    op_name="rocm_mxfp4_row_gemv",
++    op_func=_rocm_mxfp4_row_gemv,
++    mutates_args=["out"],
++    fake_impl=_rocm_mxfp4_row_gemv_fake,
++)
++
++
++def rocm_mxfp4_row_gemv(
++    x: torch.Tensor,
++    weight: torch.Tensor,
++    weight_scale: torch.Tensor,
++    *,
++    expert_ids: torch.Tensor | None = None,
++    route_weights: torch.Tensor | None = None,
++    bias: torch.Tensor | None = None,
++    routes_per_input: int = 1,
++    out: torch.Tensor | None = None,
++) -> torch.Tensor:
++    """Apply packed row-major MXFP4 weights without full dequantization."""
++    output_size = weight.shape[-2]
++    routes = x.shape[0] * routes_per_input
++    if out is None:
++        out = torch.empty((routes, output_size), dtype=x.dtype, device=x.device)
++    torch.ops.vllm.rocm_mxfp4_row_gemv(
++        x,
++        weight,
++        weight_scale,
++        expert_ids,
++        route_weights,
++        bias,
++        out,
++        routes_per_input,
++    )
++    return out
++
++
++__all__ = [
++    "ROCM_MXFP4_GEMV_MAX_ROUTES",
++    "ROCM_MXFP4_GEMV_MAX_ROWS",
++    "rocm_mxfp4_row_gemv",
++]
+diff --git a/vllm/model_executor/layers/fused_moe/experts/ocp_mx_emulation_moe.py b/vllm/model_executor/layers/fused_moe/experts/ocp_mx_emulation_moe.py
+index 8b454d1..3a00bb0 100644
+--- a/vllm/model_executor/layers/fused_moe/experts/ocp_mx_emulation_moe.py
++++ b/vllm/model_executor/layers/fused_moe/experts/ocp_mx_emulation_moe.py
+@@ -13,14 +13,24 @@ is applied on activations via `moe_kernel_quantize_input`.
+ 
+ import torch
+ 
++import vllm.envs as envs
+ import vllm.model_executor.layers.fused_moe.modular_kernel as mk
+ from vllm.logger import init_logger
++from vllm.model_executor.kernels.linear.mxfp4.rocm_gemv import (
++    ROCM_MXFP4_GEMV_MAX_ROUTES,
++    ROCM_MXFP4_GEMV_MAX_ROWS,
++    rocm_mxfp4_row_gemv,
++)
+ from vllm.model_executor.layers.fused_moe.activation import MoEActivation
+ from vllm.model_executor.layers.fused_moe.config import (
+     FusedMoEConfig,
+     FusedMoEQuantConfig,
+ )
+ from vllm.model_executor.layers.fused_moe.experts.triton_moe import TritonExperts
++from vllm.model_executor.layers.fused_moe.utils import (
++    _resize_cache,
++    moe_kernel_quantize_input,
++)
+ from vllm.model_executor.layers.quantization.utils.mxfp4_utils import dequant_mxfp4
+ from vllm.model_executor.layers.quantization.utils.mxfp6_utils import dequant_mxfp6
+ from vllm.model_executor.layers.quantization.utils.ocp_mx_utils import (
+@@ -121,6 +131,23 @@ class OCP_MXQuantizationEmulationTritonExperts(TritonExperts):
+ 
+         self._quant_dtype = activation_quant_dtype(self.ocp_mx_scheme)
+ 
++        self.use_rocm_gemv = False
++        if (
++            self.ocp_mx_scheme.startswith("w_mxfp4")  # type: ignore[union-attr]
++            and current_platform.is_rocm()
++            and envs.VLLM_ROCM_USE_TRITON_MXFP4_GEMV
++        ):
++            from vllm.platforms.rocm import on_rdna4
++
++            self.use_rocm_gemv = on_rdna4()
++            if self.use_rocm_gemv:
++                logger.info_once(
++                    "Using experimental packed Triton MXFP4 GEMV for RDNA4 "
++                    "MoE decode batches up to %d tokens and %d routes.",
++                    ROCM_MXFP4_GEMV_MAX_ROWS,
++                    ROCM_MXFP4_GEMV_MAX_ROUTES,
++                )
++
+     @staticmethod
+     def is_supported_config(
+         cls: type["mk.FusedMoEExperts"],
+@@ -173,14 +200,10 @@ class OCP_MXQuantizationEmulationTritonExperts(TritonExperts):
+         else:
+             raise NotImplementedError(f"Unsupported ocp_mx_scheme={self.ocp_mx_scheme}")
+ 
+-    def _prepare_w1_for_gemm(
+-        self, w: torch.Tensor, dtype: torch.dtype
+-    ) -> torch.Tensor:
++    def _prepare_w1_for_gemm(self, w: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
+         return self._dequantize_weights(w, self.w1_scale_val, dtype)
+ 
+-    def _prepare_w2_for_gemm(
+-        self, w: torch.Tensor, dtype: torch.dtype
+-    ) -> torch.Tensor:
++    def _prepare_w2_for_gemm(self, w: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
+         return self._dequantize_weights(w, self.w2_scale_val, dtype)
+ 
+     def _w2_shape_for_config(self, w: torch.Tensor) -> torch.Size:
+@@ -193,6 +216,111 @@ class OCP_MXQuantizationEmulationTritonExperts(TritonExperts):
+             raise NotImplementedError(f"Unsupported ocp_mx_scheme={self.ocp_mx_scheme}")
+         return torch.Size((*w.shape[:-1], unpacked_size))
+ 
++    def _can_use_rocm_gemv(
++        self,
++        hidden_states: torch.Tensor,
++        w1: torch.Tensor,
++        w2: torch.Tensor,
++        topk_ids: torch.Tensor,
++        activation: MoEActivation,
++        expert_tokens_meta: mk.ExpertTokensMetadata | None,
++    ) -> bool:
++        return (
++            self.use_rocm_gemv
++            and hidden_states.ndim == 2
++            and 0 < hidden_states.shape[0] <= ROCM_MXFP4_GEMV_MAX_ROWS
++            and hidden_states.shape[0] * topk_ids.shape[1] <= ROCM_MXFP4_GEMV_MAX_ROUTES
++            and hidden_states.dtype in (torch.float16, torch.bfloat16)
++            and hidden_states.is_contiguous()
++            and w1.dtype == torch.uint8
++            and w2.dtype == torch.uint8
++            and isinstance(self.w1_scale_val, torch.Tensor)
++            and isinstance(self.w2_scale_val, torch.Tensor)
++            and self.w1_scale_val.dtype == torch.uint8
++            and self.w2_scale_val.dtype == torch.uint8
++            and activation == MoEActivation.SILU
++            and expert_tokens_meta is None
++            and self._lora_context is None
++        )
++
++    @staticmethod
++    def _local_expert_ids(
++        topk_ids: torch.Tensor,
++        expert_map: torch.Tensor | None,
++    ) -> torch.Tensor:
++        expert_ids = topk_ids.reshape(-1)
++        if expert_map is not None:
++            expert_ids = expert_map[expert_ids.to(torch.long)]
++        return expert_ids.contiguous()
++
++    def _apply_rocm_gemv(
++        self,
++        output: torch.Tensor,
++        hidden_states: torch.Tensor,
++        w1: torch.Tensor,
++        w2: torch.Tensor,
++        topk_weights: torch.Tensor,
++        topk_ids: torch.Tensor,
++        activation: MoEActivation,
++        expert_map: torch.Tensor | None,
++        workspace13: torch.Tensor,
++        workspace2: torch.Tensor,
++        apply_router_weight_on_input: bool,
++    ) -> None:
++        num_tokens, hidden_size = hidden_states.shape
++        topk = topk_ids.shape[1]
++        gate_up_size = w1.shape[1]
++        intermediate_size = self.adjust_N_for_activation(gate_up_size, activation)
++        route_count = num_tokens * topk
++
++        intermediate_cache1 = _resize_cache(workspace2, (route_count, gate_up_size))
++        intermediate_cache2 = _resize_cache(
++            workspace13, (route_count, intermediate_size)
++        )
++        intermediate_cache3 = _resize_cache(workspace2, (num_tokens, topk, hidden_size))
++        local_expert_ids = self._local_expert_ids(topk_ids, expert_map)
++
++        qhidden_states, _ = moe_kernel_quantize_input(
++            hidden_states,
++            None,
++            self.quant_dtype,
++            self.per_act_token_quant,
++            self.block_shape,
++            quantization_emulation=True,
++        )
++        rocm_mxfp4_row_gemv(
++            qhidden_states,
++            w1,
++            self.w1_scale_val,
++            expert_ids=local_expert_ids,
++            routes_per_input=topk,
++            bias=self.w1_bias,
++            out=intermediate_cache1,
++        )
++        self.activation(activation, intermediate_cache2, intermediate_cache1)
++
++        qintermediate_cache2, _ = moe_kernel_quantize_input(
++            intermediate_cache2,
++            None,
++            self.quant_dtype,
++            self.per_act_token_quant,
++            self.block_shape,
++            quantization_emulation=True,
++        )
++        route_weights = None
++        if not apply_router_weight_on_input:
++            route_weights = topk_weights.reshape(-1).contiguous()
++        rocm_mxfp4_row_gemv(
++            qintermediate_cache2,
++            w2,
++            self.w2_scale_val,
++            expert_ids=local_expert_ids,
++            route_weights=route_weights,
++            bias=self.w2_bias,
++            out=intermediate_cache3.view(route_count, hidden_size),
++        )
++        self.moe_sum(intermediate_cache3, output)
++
+     def apply(
+         self,
+         output: torch.Tensor,
+@@ -220,6 +348,24 @@ class OCP_MXQuantizationEmulationTritonExperts(TritonExperts):
+         assert w1.dtype == torch.uint8
+         assert w2.dtype == torch.uint8
+ 
++        if not apply_router_weight_on_input and self._can_use_rocm_gemv(
++            hidden_states, w1, w2, topk_ids, activation, expert_tokens_meta
++        ):
++            self._apply_rocm_gemv(
++                output=output,
++                hidden_states=hidden_states,
++                w1=w1,
++                w2=w2,
++                topk_weights=topk_weights,
++                topk_ids=topk_ids,
++                activation=activation,
++                expert_map=expert_map,
++                workspace13=workspace13,
++                workspace2=workspace2,
++                apply_router_weight_on_input=apply_router_weight_on_input,
++            )
++            return
++
+         # Activation quantization/dequantization is deferred to
+         # `moe_kernel_quantize_input` in TritonExperts.apply. Its staged
+         # materialization hooks dequantize w1 for GEMM1, release it, and only
+-- 
+2.53.0
+

@@ -147,9 +147,6 @@
   "stack": {
     "description": "Production Qwen3.8 Flash-Next MTP2 coding stack",
     "litellm_aliases": [
-      "qwen3.8-flash-next-fp8",
-      "qwen3.8-flash-next",
-      "qwen3.8-flash-next-thinking",
       "qwen3.8-flash-next-fast"
     ],
     "claude_settings": {

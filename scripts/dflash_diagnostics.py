@@ -39,6 +39,15 @@ PROM_METRICS = {
     "num_draft_tokens": "vllm:spec_decode_num_draft_tokens_total",
     "num_accepted_tokens": "vllm:spec_decode_num_accepted_tokens_total",
 }
+PERFORMANCE_METRICS = {
+    "request_generation_tokens": "vllm:request_generation_tokens_sum",
+    "request_decode_seconds": "vllm:request_decode_time_seconds_sum",
+    "request_prefill_seconds": "vllm:request_prefill_time_seconds_sum",
+    "request_inference_seconds": "vllm:request_inference_time_seconds_sum",
+    "completed_requests": "vllm:request_decode_time_seconds_count",
+    "target_steps": "vllm:inter_token_latency_seconds_count",
+    "target_step_seconds": "vllm:inter_token_latency_seconds_sum",
+}
 PER_POSITION_METRIC = "vllm:spec_decode_num_accepted_tokens_per_pos_total"
 
 
@@ -127,6 +136,7 @@ def _post_json(
 def parse_prometheus(text: str) -> dict[str, Any]:
     """Return summed speculative counters from Prometheus exposition text."""
     totals = {name: 0.0 for name in PROM_METRICS}
+    performance = {name: 0.0 for name in PERFORMANCE_METRICS}
     per_position: dict[str, float] = {}
     found = False
     for raw_line in text.splitlines():
@@ -147,6 +157,11 @@ def parse_prometheus(text: str) -> dict[str, Any]:
                 totals[short_name] += value
                 found = True
                 break
+        for short_name, expected in PERFORMANCE_METRICS.items():
+            if metric == expected:
+                performance[short_name] += value
+                found = True
+                break
         if metric == PER_POSITION_METRIC:
             match = re.search(r'(?:^|[,{])position="([^"\\]+)"', metric_and_labels)
             if match:
@@ -156,6 +171,7 @@ def parse_prometheus(text: str) -> dict[str, Any]:
     return {
         "available": found,
         **{name: int(value) for name, value in totals.items()},
+        "performance": performance,
         "accepted_tokens_per_position": {
             key: int(value)
             for key, value in sorted(
@@ -193,6 +209,27 @@ def metric_delta(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any
         - int(before.get("accepted_tokens_per_position", {}).get(position, 0))
         for position in sorted(positions, key=int)
     }
+    before_performance = before.get("performance", {})
+    after_performance = after.get("performance", {})
+    performance = {
+        name: float(after_performance.get(name, 0.0))
+        - float(before_performance.get(name, 0.0))
+        for name in PERFORMANCE_METRICS
+    }
+    completed_requests = performance["completed_requests"]
+    decode_seconds = performance["request_decode_seconds"]
+    decode_tokens = max(
+        performance["request_generation_tokens"] - completed_requests,
+        0.0,
+    )
+    performance["decode_tokens_per_second"] = (
+        decode_tokens / decode_seconds if decode_seconds > 0 else None
+    )
+    step_seconds = performance["target_step_seconds"]
+    performance["target_steps_per_second"] = (
+        performance["target_steps"] / step_seconds if step_seconds > 0 else None
+    )
+    result["performance"] = performance
     drafts = result["num_drafts"]
     draft_tokens = result["num_draft_tokens"]
     accepted = result["num_accepted_tokens"]
@@ -220,19 +257,35 @@ def _validate_prompt_ids(token_ids: Any) -> list[int]:
 
 
 def prepare_case(args: argparse.Namespace) -> dict[str, Any]:
-    prompt = args.prompt
-    if args.prompt_file:
-        prompt = args.prompt_file.read_text(encoding="utf-8")
-    if len(prompt) > MAX_PROMPT_CHARACTERS:
+    if args.messages_file:
+        try:
+            chat = json.loads(args.messages_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise DiagnosticError(
+                f"cannot read chat case {args.messages_file}: {exc}"
+            ) from exc
+        if not isinstance(chat, dict) or not isinstance(chat.get("messages"), list):
+            raise DiagnosticError("chat case must be an object with a messages list")
+        source = json.dumps(
+            chat, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        )
+        body = {"model": args.model, **chat}
+        body.setdefault("add_generation_prompt", True)
+    else:
+        prompt = args.prompt
+        if args.prompt_file:
+            prompt = args.prompt_file.read_text(encoding="utf-8")
+        source = prompt
+        body = {
+            "model": args.model,
+            "prompt": prompt,
+            "add_special_tokens": True,
+        }
+    if len(source) > MAX_PROMPT_CHARACTERS:
         raise DiagnosticError(
-            f"source prompt has {len(prompt)} characters; cap is "
+            f"source prompt has {len(source)} characters; cap is "
             f"{MAX_PROMPT_CHARACTERS}"
         )
-    body = {
-        "model": args.model,
-        "prompt": prompt,
-        "add_special_tokens": True,
-    }
     response, elapsed = _post_json(
         args.url.rstrip("/") + "/tokenize",
         body,
@@ -245,7 +298,7 @@ def prepare_case(args: argparse.Namespace) -> dict[str, Any]:
         "artifact_type": "dflash_case",
         "created_at": datetime.now().astimezone().isoformat(),
         "model": args.model,
-        "source_prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
+        "source_prompt_sha256": hashlib.sha256(source.encode()).hexdigest(),
         "prompt_token_ids": token_ids,
         "prompt_token_ids_sha256": _sha256_json(token_ids),
         "tokenize_elapsed_seconds": elapsed,
@@ -602,6 +655,7 @@ def parser() -> argparse.ArgumentParser:
     prompt_source = prepare.add_mutually_exclusive_group()
     prompt_source.add_argument("--prompt", default=DEFAULT_PROMPT)
     prompt_source.add_argument("--prompt-file", type=Path)
+    prompt_source.add_argument("--messages-file", type=Path)
     prepare.add_argument("--timeout", type=float, default=120)
     prepare.add_argument("--api-key-env", default="VLLM_API_KEY")
     prepare.add_argument("--output", type=Path, required=True)

@@ -23,6 +23,10 @@ from r9700.install import (
     _make_venv_entrypoints_relocatable,
     install,
 )
+from r9700.litellm_tools import (
+    enforce_glm53_strict_tools,
+    local_anthropic_count_tokens_endpoint,
+)
 from r9700.manifest import (
     recipe_artifact_path,
     recipe_names,
@@ -141,6 +145,7 @@ class ProductionProfileTests(unittest.TestCase):
         expected = {
             "vllm_deepseekv4flash_v0.28",
             "vllm_glm53flashrocm10_v0.29",
+            "vllm_glm53flashrocm10_v0.30",
             "vllm_qwen38flash_pr53896",
         }
         self.assertEqual(set(recipe_names()), expected)
@@ -219,6 +224,114 @@ class ProductionProfileTests(unittest.TestCase):
             )
         )
         self.assertEqual(configured, expected)
+
+    def test_litellm_glm_aliases_declare_one_million_token_context(self) -> None:
+        config = (ROOT / "config" / "litellm.yaml").read_text()
+        block = config.split("- model_name: glm-5.3-flash-high", 1)[1].split(
+            "\n  - model_name:", 1
+        )[0]
+        self.assertIn("model: anthropic/glm-5.3-flash-quark-mxfp4", block)
+        self.assertIn("max_input_tokens: 1048576", block)
+
+    def test_litellm_forces_strict_glm_tools_without_rewriting_schemas(self) -> None:
+        schema = {
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "additionalProperties": False,
+        }
+        request = {
+            "model": "glm-5.3-flash-high",
+            "tools": [
+                {"name": "Read", "input_schema": schema},
+                {"type": "web_search_20250305", "name": "web_search"},
+            ],
+        }
+
+        updated = enforce_glm53_strict_tools(request)
+
+        self.assertIsNot(updated, request)
+        self.assertTrue(updated["tools"][0]["strict"])
+        self.assertFalse(
+            updated["tools"][0]["input_schema"]["additionalProperties"]
+        )
+        self.assertNotIn("strict", updated["tools"][1])
+        self.assertNotIn("strict", request["tools"][0])
+
+    def test_litellm_does_not_force_strict_tools_for_other_models(self) -> None:
+        request = {
+            "model": "qwen3.8-flash-next",
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {"name": "probe", "parameters": {}},
+                }
+            ],
+        }
+
+        self.assertIs(enforce_glm53_strict_tools(request), request)
+
+    def test_litellm_anthropic_token_counting_stays_on_local_backend(self) -> None:
+        self.assertEqual(
+            local_anthropic_count_tokens_endpoint("http://127.0.0.1:8000/"),
+            "http://127.0.0.1:8000/v1/messages/count_tokens",
+        )
+
+    def test_claude_templates_cover_every_runtime_context_variant(self) -> None:
+        variant_names = {
+            262144: "256k",
+            786432: "768k-vision",
+            1048576: "1m",
+        }
+        expected_variants: dict[tuple[str, str], tuple[dict, int]] = {}
+        for profile_name in PROFILE_NAMES:
+            profile = load_profile(profile_name)
+            runtimes = [profile["runtime"]]
+            runtimes.extend(
+                load_runtime(profile_name, mode_name)
+                for mode_name in profile["runtime"].get(
+                    "experimental_modes", {}
+                )
+            )
+            for runtime in runtimes:
+                context_tokens = runtime["limits"]["max_model_len"]
+                variant_name = variant_names[context_tokens]
+                expected_variants[(profile_name, variant_name)] = (
+                    profile,
+                    context_tokens,
+                )
+
+        templates_root = ROOT / "templates" / ".claude"
+        actual_variants = {
+            (path.parent.parent.name, path.parent.name)
+            for path in templates_root.glob("*/*/settings.local.json")
+        }
+        self.assertEqual(actual_variants, set(expected_variants))
+        self.assertFalse((templates_root / "settings.local.json").exists())
+
+        for (profile_name, variant_name), (
+            profile,
+            context_tokens,
+        ) in expected_variants.items():
+            with self.subTest(profile=profile_name, variant=variant_name):
+                template = json.loads(
+                    (
+                        templates_root
+                        / profile_name
+                        / variant_name
+                        / "settings.local.json"
+                    ).read_text()
+                )
+                expected = json.loads(
+                    json.dumps(profile["stack"]["claude_settings"])
+                )
+                expected["env"]["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = str(
+                    context_tokens
+                )
+                expected["env"]["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = str(
+                    min(context_tokens, 1_000_000)
+                )
+                expected["env"]["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"] = "90"
+                self.assertEqual(template, expected)
 
     def test_qwen_claude_stack_disables_unstable_long_context_thinking(self) -> None:
         settings = load_profile("qwen38-flash")["stack"]["claude_settings"]
@@ -332,8 +445,8 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(default_runtime["cache"]["dtype"], "fp8")
         self.assertEqual(speculative["model_artifact"], "dflash2-drafter")
         self.assertEqual(speculative["method"], "dflash")
-        # The checkpoint block size is eight: one anchor plus seven drafts.
-        self.assertEqual(speculative["num_speculative_tokens"], 7)
+        # K4 won the representative decode A/B; the checkpoint still supports K7.
+        self.assertEqual(speculative["num_speculative_tokens"], 4)
         self.assertEqual(speculative["draft_tensor_parallel_size"], 8)
         self.assertEqual(speculative["attention_backend"], "TRITON_ATTN")
         self.assertEqual(speculative["kv_cache_dtype"], "fp8")
@@ -343,7 +456,7 @@ class ProductionProfileTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            default_runtime["required_patches"][-14:],
+            default_runtime["required_patches"][-17:],
             [
                 "0009",
                 "0010",
@@ -359,6 +472,9 @@ class ProductionProfileTests(unittest.TestCase):
                 "0020",
                 "0021",
                 "0022",
+                "0023",
+                "0024",
+                "0025",
             ],
         )
         self.assertTrue(
@@ -381,8 +497,26 @@ class ProductionProfileTests(unittest.TestCase):
                 "0020",
                 "0021",
                 "0022",
+                "0023",
+                "0024",
+                "0025",
             }.issubset(default_runtime["required_patches"])
         )
+
+    def test_glm_gluon_sparse_mla_stays_isolated_and_opt_in(self) -> None:
+        profile = load_profile(
+            str(ROOT / "profiles/dev/glm53-flash-rocm10-gluon.json")
+        )
+        runtime = profile["runtime"]
+        self.assertEqual(profile["status"], "development")
+        self.assertEqual(runtime["status"], "diagnostic-only")
+        self.assertEqual(runtime["recipe"], "vllm_glm53flashrocm10_v0.30")
+        self.assertEqual(runtime["environment"]["VLLM_ROCM_USE_GLUON_SPARSE_MLA"], "1")
+        self.assertTrue({"0026", "1001"}.issubset(runtime["required_patches"]))
+
+        production = load_profile(GLM_PROFILE)["runtime"]
+        self.assertEqual(production["recipe"], "vllm_glm53flashrocm10_v0.29")
+        self.assertNotIn("VLLM_ROCM_USE_GLUON_SPARSE_MLA", production["environment"])
 
     def test_glm_long_context_safety_patches_cover_page_sizes_and_bounds(
         self,
@@ -489,14 +623,109 @@ class ProductionProfileTests(unittest.TestCase):
             rdna4_shuffled_kpool_decode,
         )
 
-    def test_glm_keeps_only_qualified_diagnostic_modes(self) -> None:
+        router_dedup = (
+            ROOT
+            / "patches/vllm_glm53flashrocm10_v0.29/"
+            "0023-perf-avoid-duplicate-GLM-MoE-router-GEMM.patch"
+        ).read_text()
+        self.assertIn("router_logits=hidden_states", router_dedup)
+        self.assertIn(
+            "-        router_logits, _ = self.gate(hidden_states)", router_dedup
+        )
+        self.assertNotIn(
+            "+        router_logits, _ = self.gate(hidden_states)", router_dedup
+        )
+
+        required_first_tools = (
+            ROOT
+            / "patches/vllm_glm53flashrocm10_v0.29/"
+            "0024-fix-render-GLM-tool-schemas-required-first.patch"
+        ).read_text()
+        self.assertIn(
+            "def reorder_properties_required_first(schema: Any) -> Any:",
+            required_first_tools,
+        )
+        self.assertIn("reorder_tool_schema_required_first = True", required_first_tools)
+
+        strict_tool_order = (
+            ROOT
+            / "patches/vllm_glm53flashrocm10_v0.29/"
+            "0025-fix-align-GLM-strict-tool-schema-order.patch"
+        ).read_text()
+        self.assertIn("def reorder_tools_required_first", strict_tool_order)
+        self.assertIn("tools = reorder_tools_required_first(tools)", strict_tool_order)
+
+    def test_glm_keeps_explicit_diagnostic_modes(self) -> None:
         baseline = load_runtime(GLM_PROFILE)
         self.assertEqual(
             set(baseline["experimental_modes"]),
             {
                 "mxfp4-gemv-dflash2-k7-256k",
                 "mxfp4-gemv-dflash2-k7-fp8-1m-tp8-noep",
+                "mxfp4-gemv-dflash2-k3-fp8-1m-tp8-noep",
+                "mxfp4-gemv-dflash2-k4-fp8-1m-bt2048-async",
+                "mxfp4-gemv-dflash2-k4-fp8-1m-bt1024",
+                "mxfp4-gemv-dflash2-k4-fp8-768k-vision-weights",
+                "mxfp4-gemv-dflash2-k2-fp8-256k-c4-tp8-noep",
+                "mxfp4-gemv-dflash2-k2-fp8-256k-c4-tp8-noep-async",
             },
+        )
+
+        async_scheduler = load_runtime(
+            GLM_PROFILE,
+            "mxfp4-gemv-dflash2-k4-fp8-1m-bt2048-async",
+        )
+        self.assertTrue(async_scheduler["scheduler"]["async"])
+        self.assertTrue(async_scheduler["scheduler"]["enforce_eager"])
+        self.assertEqual(async_scheduler["limits"], baseline["limits"])
+        self.assertEqual(
+            async_scheduler["speculative_config"],
+            baseline["speculative_config"],
+        )
+
+        bt1024 = load_runtime(
+            GLM_PROFILE, "mxfp4-gemv-dflash2-k4-fp8-1m-bt1024"
+        )
+        self.assertEqual(bt1024["limits"]["max_model_len"], 1048576)
+        self.assertEqual(bt1024["limits"]["max_num_seqs"], 1)
+        self.assertEqual(bt1024["limits"]["max_num_batched_tokens"], 1024)
+        self.assertEqual(bt1024["speculative_config"]["num_speculative_tokens"], 4)
+        self.assertEqual(bt1024["cache"]["dtype"], "fp8")
+
+        vision = load_runtime(
+            GLM_PROFILE,
+            "mxfp4-gemv-dflash2-k4-fp8-768k-vision-weights",
+        )
+        self.assertEqual(vision["limits"]["max_model_len"], 786432)
+        self.assertEqual(vision["limits"]["max_num_batched_tokens"], 4096)
+        self.assertEqual(vision["limits"]["kv_cache_memory_bytes"], 4960000000)
+        self.assertFalse(vision["multimodal"]["language_model_only"])
+        self.assertEqual(
+            vision["multimodal"]["encoder_attention_backend"],
+            "TRITON_ATTN",
+        )
+        self.assertEqual(vision["multimodal"]["encoder_tp_mode"], "weights")
+        self.assertEqual(
+            vision["multimodal"]["limit_per_prompt"],
+            {"image": 8, "video": 0},
+        )
+        self.assertEqual(
+            vision["multimodal"]["processor_kwargs"]["max_image_tokens"],
+            4096,
+        )
+
+        profile = load_profile(GLM_PROFILE)
+        vision_command = build_command(
+            profile["model"], vision, Path("/models/glm"), "127.0.0.1", 8000
+        )
+        self.assertNotIn("--language-model-only", vision_command)
+        self.assertEqual(
+            vision_command[vision_command.index("--mm-encoder-attn-backend") + 1],
+            "TRITON_ATTN",
+        )
+        self.assertEqual(
+            vision_command[vision_command.index("--mm-encoder-tp-mode") + 1],
+            "weights",
         )
 
         fallback = load_runtime(
@@ -505,6 +734,7 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(fallback["limits"]["max_model_len"], 262144)
         self.assertNotIn("kv_cache_memory_bytes", fallback["limits"])
         self.assertEqual(fallback["cache"]["dtype"], "bfloat16")
+        self.assertTrue(fallback["parallel"]["enable_expert_parallel"])
         self.assertEqual(
             fallback["speculative_config"]["kv_cache_dtype"], "bfloat16"
         )
@@ -520,17 +750,53 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(tp_noep["parallel"]["tensor"], 8)
         self.assertFalse(tp_noep["parallel"]["enable_expert_parallel"])
         self.assertEqual(tp_noep["limits"]["max_model_len"], 1048576)
+        self.assertEqual(tp_noep["limits"]["max_num_batched_tokens"], 512)
         self.assertEqual(tp_noep["cache"]["dtype"], "fp8")
         self.assertEqual(
             tp_noep["speculative_config"]["num_speculative_tokens"], 7
         )
+
+        k3 = load_runtime(
+            GLM_PROFILE, "mxfp4-gemv-dflash2-k3-fp8-1m-tp8-noep"
+        )
+        self.assertEqual(k3["parallel"], baseline["parallel"])
+        self.assertEqual(k3["limits"]["max_num_batched_tokens"], 512)
+        self.assertEqual(k3["cache"], baseline["cache"])
+        self.assertEqual(k3["speculative_config"]["num_speculative_tokens"], 3)
+
+        workflow_c4 = load_runtime(
+            GLM_PROFILE,
+            "mxfp4-gemv-dflash2-k2-fp8-256k-c4-tp8-noep",
+        )
+        self.assertEqual(workflow_c4["parallel"], baseline["parallel"])
+        self.assertEqual(workflow_c4["limits"]["max_model_len"], 262144)
+        self.assertEqual(workflow_c4["limits"]["max_num_seqs"], 4)
+        self.assertEqual(
+            workflow_c4["limits"]["max_num_batched_tokens"], 512
+        )
+        self.assertEqual(
+            workflow_c4["limits"]["kv_cache_memory_bytes"], 6591622400
+        )
+        self.assertEqual(workflow_c4["cache"]["dtype"], "fp8")
+        self.assertEqual(
+            workflow_c4["speculative_config"]["num_speculative_tokens"], 2
+        )
+
+        workflow_c4_async = load_runtime(
+            GLM_PROFILE,
+            "mxfp4-gemv-dflash2-k2-fp8-256k-c4-tp8-noep-async",
+        )
+        self.assertTrue(workflow_c4_async["scheduler"]["async"])
+        self.assertTrue(workflow_c4_async["scheduler"]["enforce_eager"])
+        for key in ("parallel", "limits", "cache", "speculative_config"):
+            self.assertEqual(workflow_c4_async[key], workflow_c4[key])
 
     def test_rocm10_glm_defaults_to_packed_gemv_fp8_1m(self) -> None:
         profile = load_profile(GLM_PROFILE)
         baseline = profile["runtime"]
         self.assertEqual(baseline["speculative_config"]["method"], "dflash")
         self.assertEqual(
-            baseline["speculative_config"]["num_speculative_tokens"], 7
+            baseline["speculative_config"]["num_speculative_tokens"], 4
         )
         self.assertEqual(
             baseline["speculative_config"]["kv_cache_dtype"], "fp8"
@@ -538,7 +804,7 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(baseline["limits"]["max_model_len"], 1048576)
         self.assertEqual(baseline["limits"]["max_num_seqs"], 1)
         self.assertEqual(
-            baseline["limits"]["max_num_batched_tokens"], 512
+            baseline["limits"]["max_num_batched_tokens"], 2048
         )
         self.assertEqual(
             baseline["limits"]["gpu_memory_utilization"], 0.995
@@ -590,7 +856,7 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(runtime["cache"]["dtype"], "fp8")
         self.assertEqual(runtime["speculative_config"]["method"], "dflash")
         self.assertEqual(
-            runtime["speculative_config"]["num_speculative_tokens"], 7
+            runtime["speculative_config"]["num_speculative_tokens"], 4
         )
         self.assertEqual(runtime["environment"]["VLLM_USE_V2_MODEL_RUNNER"], "1")
         self.assertEqual(runtime["moe_backend"], "emulation")
