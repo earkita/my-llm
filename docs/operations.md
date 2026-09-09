@@ -111,6 +111,45 @@ Nie wykonuj tej komendy tylko po to, aby sprawdzić konfigurację. Bez zatrzyman
 działającego modelu użyj `--dry-run`; pełna kwalifikacja musi porównać cold miss,
 warm hit tego samego prefiksu oraz poprawność odpowiedzi.
 
+### Trwały prefix cache przez OffloadingConnector
+
+Tryb `prefix-cache-offload` zachowuje konfigurację modelu, DFlash, Vision i
+limit 768K z trybu produkcyjnego. Dodaje automatic prefix caching oraz natywny
+vLLM `OffloadingConnector` z `TieringOffloadingSpec`:
+
+- 32 GiB współdzielonego cache RAM w `/dev/shm`;
+- filesystem tier w `/mnt/ai/r9700-kv-cache/glm53-flash-v031`;
+- limit 128 GiB pełnych bloków KV i rezerwę 192 GiB wolnego miejsca;
+- usuwanie najstarszych zapisanych bloków przed kolejnym zapisem, z ochroną
+  bloków używanych przez aktywne transfery.
+
+Przygotowanie katalogu i inspekcja nie zmieniają działającego modelu:
+
+```bash
+./run cache prepare --profile glm53-flash --runtime-mode prefix-cache-offload
+./run cache status --profile glm53-flash --runtime-mode prefix-cache-offload
+./run launcher switch glm53-flash --runtime-mode prefix-cache-offload \
+  --with-litellm --dry-run
+```
+
+Późniejsze usunięcie trwałej warstwy wykonuje:
+
+```bash
+./run cache clear --profile glm53-flash --runtime-mode prefix-cache-offload
+```
+
+`cache clear` usuwa tylko warstwę filesystem. Odmawia działania, gdy dokładnie
+ten tryb jest aktywny; cache GPU/RAM żywego procesu pozostaje bez zmian. Pełne
+wyczyszczenie wszystkich poziomów wymaga łagodnego zatrzymania runtime, użycia
+`cache clear`, a następnie ponownego startu. Katalog jest przygotowywany także
+automatycznie podczas startu tego trybu.
+
+Natywny XFS `/mnt/ai` jest zamontowany z `noquota`, dlatego limit jest
+egzekwowany przez pojedynczego aktywnego writera tieru, a nie przez quota
+filesystemu. Nie uruchamiaj równolegle drugiego procesu zapisującego do tego
+samego katalogu. Tryb pozostaje diagnostyczny do czasu testów cold/warm,
+restart/warm, poprawności odpowiedzi i regresji decode.
+
 Po testach zatrzymaj usługę przed zmianą profilu. Kwalifikacja v0.31 objęła
 Vision smoke, NIAH 256K 4/4 i dokładny test graniczny
 `786,368 + 64 = 786,432` z telemetrią.

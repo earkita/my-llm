@@ -198,6 +198,39 @@
           }
         }
       },
+      "prefix-cache-offload": {
+        "status": "diagnostic-only",
+        "runtime_name": "glm53-flash-quark-mxfp4-rocm10-mrv2-8xr9700-tp8-noep-mxfp4gemv-tiledbn8-dflash2-k4-fp8kv-768k-vision-prefixcache-offload32g-fs128g",
+        "reason": "Persistent prefix-cache qualification candidate with a 32 GiB CPU primary tier and capacity-guarded 128 GiB filesystem tier.",
+        "runtime_overrides": {
+          "cache": {
+            "dtype": "fp8",
+            "block_size": 16,
+            "prefix_cache": true,
+            "cpu_offload_gb": 0
+          },
+          "kv_transfer_config": {
+            "kv_connector": "OffloadingConnector",
+            "kv_role": "kv_both",
+            "kv_connector_extra_config": {
+              "cpu_bytes_to_use": 34359738368,
+              "spec_name": "TieringOffloadingSpec",
+              "eviction_policy": "lru",
+              "secondary_tiers": [
+                {
+                  "type": "BoundedFileSystemTierManager",
+                  "module_path": "r9700.vllm_bootstrap.bounded_fs_tier",
+                  "root_dir": "/mnt/ai/r9700-kv-cache/glm53-flash-v031",
+                  "max_bytes": 137438953472,
+                  "min_free_bytes": 206158430208,
+                  "n_read_threads": 16,
+                  "n_write_threads": 16
+                }
+              ]
+            }
+          }
+        }
+      },
       "scalar-gemv-rollback": {
         "status": "diagnostic-only",
         "runtime_name": "glm53-flash-quark-mxfp4-rocm10-mrv2-8xr9700-tp8-noep-mxfp4gemv-scalar-dflash2-k4-fp8kv-768k-vision-weights",

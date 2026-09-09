@@ -113,6 +113,11 @@ def command(
             "--prefix-cache-retention-interval",
             str(cache["prefix_cache_retention_interval"]),
         ]
+    if runtime.get("kv_transfer_config") is not None:
+        args += [
+            "--kv-transfer-config",
+            json.dumps(runtime["kv_transfer_config"], separators=(",", ":")),
+        ]
     if scheduler.get("enforce_eager"):
         args.append("--enforce-eager")
     if scheduler.get("async") is True:

@@ -42,7 +42,7 @@
         "glm_required_first_tools_pr55558_head": "bcca85b9083512bccdb039a1770834ee6e246646"
       },
       "target_profile": "profiles/production/glm53-flash.json",
-      "target_profile_sha256": "6ddbef76a3adfc36852d9606103ac4785b65a4bfc13bfb5a87718947d94a8409",
+      "target_profile_sha256": "461992c4e2dbe8237cfdeb08eff8a08aaa017f3cfa9a27ede760159d2fa78171",
       "intentional_changes": [
         "replaced the llama.cpp GGUF deployment with the AMD Quark MXFP4 checkpoint",
         "migrated the isolated native recipe to ROCm SDK 10.0.0, PyTorch 2.13.0+rocm10.0.0, AITER v0.1.21 and vLLM main 7fbd44cbe",
@@ -60,7 +60,8 @@
       "configured Claude Code auto-compaction at 90 percent of the qualified 768K context window",
       "consolidated LiteLLM and every Claude Code model role on the single 768K glm-5.3-flash-high alias",
       "preserved the prior v0.29 deployment as the self-contained glm53-flash-v029-rollback profile",
-      "added an opt-in deployment-exact prefix-cache qualification mode without changing the production default"
+      "added an opt-in deployment-exact prefix-cache qualification mode without changing the production default",
+      "added a separate diagnostic OffloadingConnector mode with 32 GiB RAM and a capacity-guarded 128 GiB filesystem tier"
       ]
     },
     "glm53-flash-v029-rollback": {

@@ -24,6 +24,7 @@ from .config import (
     load_runtime,
 )
 from .install import install
+from . import kv_cache
 from .lifecycle import gate as lifecycle_gate
 from .models import adopt_model, download_model, verify_model
 from .service import logs, start, status, stop, wait
@@ -319,6 +320,17 @@ def parser() -> argparse.ArgumentParser:
     proxy_test = proxy_commands.add_parser("test")
     proxy_test.add_argument("--timeout", type=float, default=120)
 
+    cache_parser = commands.add_parser(
+        "cache", help="manage the persistent KV filesystem tier"
+    )
+    cache_commands = cache_parser.add_subparsers(
+        dest="cache_command", required=True
+    )
+    for action in ("prepare", "status", "clear"):
+        item = cache_commands.add_parser(action)
+        _common_profile(item)
+        item.add_argument("--runtime-mode", default="prefix-cache-offload")
+
     stack_parser = commands.add_parser(
         "stack", help="manage a preset coding stack"
     )
@@ -493,6 +505,19 @@ def main(argv: list[str] | None = None) -> int:
                 proxy.test(timeout=args.timeout)
             else:
                 proxy.logs(follow=args.follow, lines=args.lines)
+        elif args.command == "cache":
+            action = {
+                "prepare": kv_cache.prepare,
+                "status": kv_cache.status,
+                "clear": kv_cache.clear,
+            }[args.cache_command]
+            print(
+                json.dumps(
+                    action(args.profile, args.runtime_mode),
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
         elif args.command == "test":
             _tests(args)
         elif args.command == "stack":

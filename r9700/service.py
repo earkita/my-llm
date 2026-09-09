@@ -181,6 +181,15 @@ def start(
         )
     if existing:
         STATE_PATH.unlink(missing_ok=True)
+    if runtime.get("kv_transfer_config") is not None:
+        from . import kv_cache
+
+        if runtime_mode is None:
+            raise ConfigurationError(
+                "persistent KV cache must be selected through an explicit "
+                "runtime mode"
+            )
+        kv_cache.prepare(deployment["name"], runtime_mode)
     dotenv = read_dotenv()
     host = host or os.environ.get("TARGET_HOST") or dotenv.get("TARGET_HOST", "127.0.0.1")
     port = port or int(os.environ.get("TARGET_PORT") or dotenv.get("TARGET_PORT", "8000"))

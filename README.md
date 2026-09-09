@@ -112,6 +112,13 @@ Jawny tryb diagnostyczny `prefix-cache` przygotowuje identyczną topologię v0.3
 z automatic prefix caching; nie jest aktywowany przez zwykły start profilu,
 dopóki nie przejdzie osobnej kwalifikacji cold/warm.
 
+Drugi tryb diagnostyczny `prefix-cache-offload` dodaje natywny vLLM
+`OffloadingConnector`: 32 GiB współdzielonego tieru RAM oraz trwały tier NVMe
+ograniczony do 128 GiB, z rezerwą 192 GiB wolnego miejsca na `/mnt/ai`.
+Katalog można przygotować i sprawdzić bez zatrzymywania modelu przez
+`./run cache prepare` oraz `./run cache status`. Tryb nie jest włączany
+automatycznie i wymaga osobnej kwalifikacji przed promocją.
+
 Podczas pracy Claude Code można bez restartu obserwować kolejkę, zajęcie KV i
 estymowany postęp prefillu, a po zakończeniu żądania dokładny server-side
 prefill, decode, TTFT i E2E:

@@ -611,6 +611,41 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertIn("--enable-prefix-caching", prefix_cache_command)
         self.assertNotIn("--no-enable-prefix-caching", prefix_cache_command)
 
+        offload = runtime["experimental_modes"]["prefix-cache-offload"]
+        self.assertEqual(offload["status"], "diagnostic-only")
+        self.assertEqual(
+            set(offload["runtime_overrides"]),
+            {"cache", "kv_transfer_config"},
+        )
+        resolved_offload = load_runtime(GLM_PROFILE, "prefix-cache-offload")
+        self.assertTrue(resolved_offload["cache"]["prefix_cache"])
+        self.assertEqual(resolved_offload["limits"], runtime["limits"])
+        self.assertEqual(
+            resolved_offload["speculative_config"], runtime["speculative_config"]
+        )
+        transfer = resolved_offload["kv_transfer_config"]
+        self.assertEqual(transfer["kv_connector"], "OffloadingConnector")
+        self.assertEqual(transfer["kv_role"], "kv_both")
+        extra = transfer["kv_connector_extra_config"]
+        self.assertEqual(extra["cpu_bytes_to_use"], 32 * 1024**3)
+        self.assertEqual(extra["spec_name"], "TieringOffloadingSpec")
+        tier = extra["secondary_tiers"][0]
+        self.assertEqual(tier["max_bytes"], 128 * 1024**3)
+        self.assertEqual(tier["min_free_bytes"], 192 * 1024**3)
+        self.assertEqual(tier["type"], "BoundedFileSystemTierManager")
+        offload_command = build_command(
+            profile["model"],
+            resolved_offload,
+            Path("/models/glm"),
+            "127.0.0.1",
+            8000,
+        )
+        self.assertIn("--enable-prefix-caching", offload_command)
+        transfer_json = offload_command[
+            offload_command.index("--kv-transfer-config") + 1
+        ]
+        self.assertEqual(json.loads(transfer_json), transfer)
+
         rollback = load_profile(GLM_ROLLBACK_PROFILE)["runtime"]
         self.assertEqual(rollback["recipe"], "vllm_glm53flashrocm10_v0.29")
         self.assertNotIn("VLLM_ROCM_MXFP4_GEMV_BLOCK_N", rollback["environment"])

@@ -375,6 +375,90 @@ def validate_runtime(profile: dict[str, Any]) -> None:
             raise ConfigurationError(
                 "cache.prefix_cache_retention_interval requires prefix_cache"
             )
+    kv_transfer = profile.get("kv_transfer_config")
+    if kv_transfer is not None:
+        if backend != "vllm" or not isinstance(kv_transfer, dict):
+            raise ConfigurationError(
+                "kv_transfer_config is supported only as an object for vLLM"
+            )
+        allowed_transfer_keys = {
+            "kv_connector",
+            "kv_role",
+            "kv_connector_extra_config",
+        }
+        if set(kv_transfer) != allowed_transfer_keys:
+            raise ConfigurationError(
+                "kv_transfer_config must contain exactly kv_connector, kv_role "
+                "and kv_connector_extra_config"
+            )
+        if kv_transfer.get("kv_connector") != "OffloadingConnector":
+            raise ConfigurationError(
+                "only the managed OffloadingConnector boundary is supported"
+            )
+        if kv_transfer.get("kv_role") != "kv_both":
+            raise ConfigurationError("OffloadingConnector requires kv_role=kv_both")
+        if not cache.get("prefix_cache"):
+            raise ConfigurationError("OffloadingConnector requires prefix_cache")
+        extra = kv_transfer.get("kv_connector_extra_config")
+        if not isinstance(extra, dict):
+            raise ConfigurationError(
+                "OffloadingConnector requires kv_connector_extra_config"
+            )
+        cpu_bytes = extra.get("cpu_bytes_to_use")
+        if (
+            isinstance(cpu_bytes, bool)
+            or not isinstance(cpu_bytes, int)
+            or cpu_bytes <= 0
+        ):
+            raise ConfigurationError("cpu_bytes_to_use must be a positive integer")
+        if extra.get("spec_name") != "TieringOffloadingSpec":
+            raise ConfigurationError(
+                "persistent OffloadingConnector requires TieringOffloadingSpec"
+            )
+        if extra.get("eviction_policy", "lru") not in {"lru", "arc"}:
+            raise ConfigurationError("unsupported CPU-tier eviction policy")
+        secondary_tiers = extra.get("secondary_tiers")
+        if not isinstance(secondary_tiers, list) or len(secondary_tiers) != 1:
+            raise ConfigurationError(
+                "persistent OffloadingConnector requires one bounded filesystem tier"
+            )
+        tier = secondary_tiers[0]
+        if not isinstance(tier, dict):
+            raise ConfigurationError("filesystem KV tier must be an object")
+        if (
+            tier.get("type") != "BoundedFileSystemTierManager"
+            or tier.get("module_path")
+            != "r9700.vllm_bootstrap.bounded_fs_tier"
+        ):
+            raise ConfigurationError(
+                "filesystem KV tier must use the R9700 capacity guard"
+            )
+        root_dir = tier.get("root_dir")
+        if (
+            not isinstance(root_dir, str)
+            or not root_dir
+            or not Path(root_dir).is_absolute()
+            or Path(root_dir).resolve() == Path("/mnt/ai/r9700-kv-cache")
+            or not Path(root_dir).resolve().is_relative_to(
+                Path("/mnt/ai/r9700-kv-cache")
+            )
+        ):
+            raise ConfigurationError("filesystem KV root_dir must be a safe absolute path")
+        for key, allow_zero in (("max_bytes", False), ("min_free_bytes", True)):
+            value = tier.get(key)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or value < int(not allow_zero)
+            ):
+                qualifier = "non-negative" if allow_zero else "positive"
+                raise ConfigurationError(f"{key} must be a {qualifier} integer")
+        for key in ("n_read_threads", "n_write_threads"):
+            value = tier.get(key)
+            if value is not None and (
+                isinstance(value, bool) or not isinstance(value, int) or value < 1
+            ):
+                raise ConfigurationError(f"{key} must be a positive integer")
     gpu_bdfs = profile.get("gpu_bdfs")
     if gpu_bdfs is not None:
         if (

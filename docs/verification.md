@@ -34,6 +34,13 @@ Tryb diagnostyczny `prefix-cache` zachowuje całą tę topologię i przełącza 
 automatic prefix caching. Został przygotowany bez zmiany aktywnego procesu;
 nie jest jeszcze wynikiem kwalifikacji ani domyślną konfiguracją produkcyjną.
 
+Tryb `prefix-cache-offload` rozszerza ten kandydat o natywny vLLM
+`OffloadingConnector`, 32 GiB RAM i ograniczony do 128 GiB tier filesystem z
+rezerwą 192 GiB wolnego miejsca. Konfiguracja, generator komendy, import tieru
+w środowisku przypiętej recepty oraz zarządzanie katalogiem mogą zostać
+zweryfikowane bez restartu. Odzyskanie KV po restarcie i wpływ na TTFT/decode
+pozostają bramkami GPU przed aktywacją produkcyjną.
+
 Kwalifikacja 9 września 2026 dała następujące wyniki:
 
 - focused kernel gate przeszedł 16/16, a każdy wariant tiled był zgodny ze
