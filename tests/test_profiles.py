@@ -236,8 +236,20 @@ class ProductionProfileTests(unittest.TestCase):
         block = config.split("- model_name: glm-5.3-flash-high", 1)[1].split(
             "\n  - model_name:", 1
         )[0]
-        self.assertIn("model: anthropic/glm-5.3-flash-quark-mxfp4", block)
+        self.assertIn(
+            "model: os.environ/HOSTED_INFERENCE_ANTHROPIC_MODEL", block
+        )
         self.assertIn("max_input_tokens: 786432", block)
+
+    def test_litellm_binds_the_shared_glm_alias_to_the_active_profile(self) -> None:
+        profile_name, model = proxy._active_anthropic_model(
+            {"profile": "glm53-flash-uncensored"}
+        )
+
+        self.assertEqual(profile_name, "glm53-flash-uncensored")
+        self.assertEqual(
+            model, "anthropic/glm-5.3-flash-uncensored-quark-mxfp4"
+        )
 
     def test_litellm_forces_strict_glm_tools_without_rewriting_schemas(self) -> None:
         schema = {
@@ -358,9 +370,6 @@ class ProductionProfileTests(unittest.TestCase):
                     min(context_tokens, 1_000_000)
                 )
                 expected["env"]["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"] = "90"
-                if model_directory == "glm53-flash":
-                    for key in model_keys:
-                        expected["env"][key] = "glm-5.3-flash-high"
                 self.assertEqual(template, expected)
                 aliases = profile["stack"]["litellm_aliases"]
                 model_names = {template["env"][key] for key in model_keys}

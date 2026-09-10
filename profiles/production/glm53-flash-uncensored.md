@@ -24,7 +24,7 @@ aktualizować w tym samym commicie co profil.
 | KV cache | FP8, 4 960 000 000 bajtów (`4960000000`), bloki po 16 tokenów |
 | DFlash | DFlash2, K=4, draft TP8 |
 | Vision | włączone, do 8 obrazów, do 4096 tokenów na obraz |
-| Alias LiteLLM | `glm-5.3-flash-uncensored-high` |
+| Alias LiteLLM | `glm-5.3-flash-high` |
 
 ## Backend i wykonanie
 

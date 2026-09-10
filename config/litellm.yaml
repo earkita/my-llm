@@ -13,22 +13,7 @@ model_list:
 
   - model_name: glm-5.3-flash-high
     litellm_params:
-      model: anthropic/glm-5.3-flash-quark-mxfp4
-      api_base: os.environ/HOSTED_INFERENCE_ANTHROPIC_BASE
-      api_key: os.environ/HOSTED_INFERENCE_API_KEY
-      reasoning_effort: high
-    model_info:
-      max_input_tokens: 786432
-      supports_reasoning: true
-      supports_adaptive_thinking: true
-      supports_output_config: true
-      supports_low_reasoning_effort: true
-      supports_xhigh_reasoning_effort: true
-      supports_max_reasoning_effort: true
-
-  - model_name: glm-5.3-flash-uncensored-high
-    litellm_params:
-      model: anthropic/glm-5.3-flash-uncensored-quark-mxfp4
+      model: os.environ/HOSTED_INFERENCE_ANTHROPIC_MODEL
       api_base: os.environ/HOSTED_INFERENCE_ANTHROPIC_BASE
       api_key: os.environ/HOSTED_INFERENCE_API_KEY
       reasoning_effort: high

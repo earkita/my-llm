@@ -62,12 +62,12 @@
       "source_runtime": "https://github.com/vllm-project/vllm/commit/7fbd44cbe0a90b9c8fd3a94a0f0401ac4b1bc719",
       "source_runtime_sha256": "7fbd44cbe0a90b9c8fd3a94a0f0401ac4b1bc719",
       "target_profile": "profiles/production/glm53-flash-uncensored.json",
-      "target_profile_sha256": "ee9ed306ba8791557b993673038f416be7dc6ef1997b517b9da72d631562b2a3",
+      "target_profile_sha256": "796392af7fa41d403b8c53319b3fb0a2ea630937a0d06a0d1bc2217e8fd00179",
       "intentional_changes": [
         "converted the local UNCENSORED FP8 checkpoint to AMD Quark MXFP4 with recorded conversion provenance",
         "bound the derived 62-shard checkpoint to exact file hashes and source revision",
         "reused the qualified ROCm 10 v0.29 TP8 DFlash2 K4 FP8-KV 768K Vision runtime without experimental modes",
-        "added a dedicated LiteLLM alias and Claude Code template"
+        "bound the shared glm-5.3-flash-high LiteLLM and Claude Code alias dynamically to the active checkpoint"
       ]
     },
     "glm53-flash-v029-rollback": {
