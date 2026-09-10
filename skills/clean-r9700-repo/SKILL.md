@@ -61,7 +61,9 @@ profiles or reproducibility.
    only when the user explicitly asks to discard them.
 7. Update direct consumers such as LiteLLM limits, Claude templates, profile
    inventories, tests, and `provenance.json`. Recompute profile hashes after
-   the final profile edit.
+   the final profile edit. Keep an existing sibling `<profile>.md` summary in
+   sync; create one for the user-selected default production profile when it
+   is absent so the effective configuration is readable next to its JSON.
 8. Run the auditor again, followed by `git diff --check` and `make check`.
    Review the final diff for unrelated changes and confirm the service state is
    unchanged.

@@ -572,6 +572,23 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertNotIn("experimental_modes", rollback)
         self.assertNotIn("VLLM_ROCM_MXFP4_GEMV_BLOCK_N", rollback["environment"])
 
+    def test_glm_production_profile_has_a_matching_human_summary(self) -> None:
+        profile = load_profile(GLM_PROFILE)
+        runtime = profile["runtime"]
+        summary = (ROOT / "profiles/production/glm53-flash.md").read_text()
+        expected_values = (
+            profile["model"]["name"],
+            profile["model"]["default_directory"],
+            runtime["name"],
+            runtime["recipe"],
+            str(runtime["limits"]["max_model_len"]),
+            str(runtime["limits"]["max_num_batched_tokens"]),
+            str(runtime["limits"]["kv_cache_memory_bytes"]),
+        )
+        for value in expected_values:
+            with self.subTest(value=value):
+                self.assertIn(value, summary)
+
     def test_glm_long_context_safety_patches_cover_page_sizes_and_bounds(
         self,
     ) -> None:
