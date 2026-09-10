@@ -108,6 +108,8 @@ def command(
         if cache.get("prefix_cache")
         else "--no-enable-prefix-caching"
     )
+    if runtime.get("enable_prompt_tokens_details"):
+        args.append("--enable-prompt-tokens-details")
     if cache.get("prefix_cache_retention_interval") is not None:
         args += [
             "--prefix-cache-retention-interval",

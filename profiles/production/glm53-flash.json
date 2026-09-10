@@ -2,7 +2,7 @@
   "schema_version": 1,
   "name": "glm53-flash",
   "status": "production-ready",
-  "description": "Production GLM-5.3-Flash Quark MXFP4 on the stable v0.29 ROCm 10 runtime with DFlash2 K4, FP8 KV, 768K context, and Vision",
+  "description": "Production GLM-5.3-Flash Quark MXFP4 on the stable v0.29 ROCm 10 runtime with DFlash2 K4, FP8 KV, 512K context, and Vision",
   "model": {
     "schema_version": 1,
     "name": "glm53-flash-quark-mxfp4",
@@ -67,10 +67,10 @@
   },
   "runtime": {
     "schema_version": 1,
-    "name": "glm53-flash-quark-mxfp4-rocm10-mrv2-8xr9700-tp8-noep-mxfp4gemv-dflash2-k4-fp8kv-768k-vision-weights",
+    "name": "glm53-flash-quark-mxfp4-rocm10-mrv2-8xr9700-tp8-noep-mxfp4gemv-dflash2-k4-fp8kv-512k-vision-weights",
     "status": "production-ready",
     "recipe": "vllm_glm53flashrocm10_v0.29",
-    "description": "Stable ROCm 10 production runtime with packed RDNA4 MXFP4 GEMV, DFlash2 K4, TP8 without expert parallelism, FP8 KV, 768K context, and TP8-sharded Vision weights",
+    "description": "Stable ROCm 10 production runtime with packed RDNA4 MXFP4 GEMV, DFlash2 K4, TP8 without expert parallelism, FP8 KV, 512K context, and TP8-sharded Vision weights",
     "required_model_family": "glm5next",
     "required_patches": [
       "0001",
@@ -127,7 +127,7 @@
       "disable_custom_all_reduce": true
     },
     "limits": {
-      "max_model_len": 786432,
+      "max_model_len": 524288,
       "max_num_seqs": 1,
       "max_num_batched_tokens": 4096,
       "gpu_memory_utilization": 0.995,
@@ -136,9 +136,11 @@
     "cache": {
       "dtype": "fp8",
       "block_size": 16,
-      "prefix_cache": false,
+      "prefix_cache": true,
+      "prefix_cache_retention_interval": 1280,
       "cpu_offload_gb": 0
     },
+    "enable_prompt_tokens_details": true,
     "scheduler": {
       "async": false,
       "enforce_eager": true
@@ -227,17 +229,17 @@
         "DISABLE_PROMPT_CACHING": "1",
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
         "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
-        "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "786432",
-        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "786432",
+        "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "524288",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "524288",
         "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "90"
       }
     }
   },
   "verification": {
-    "scope": "gfx1201-v029-mxfp4-gemv-768k-vision-production",
-    "verified_context": 786432,
+    "scope": "gfx1201-v029-mxfp4-gemv-512k-vision-production",
+    "verified_context": 524288,
     "verified_on": "2026-09-08",
     "best_runtime_mode": "default",
-    "notes": "Promoted from the self-contained v0.29 rollback profile at operator request as the last known stable deployment. Uses packed RDNA4 MXFP4 GEMV, DFlash2 K4, TP8 without expert parallelism, FP8 KV, a 786432-token context, and TP8-sharded Vision weights. Prefix caching and the v0.31-only output-tiled BN8 path are disabled."
+    "notes": "Stable v0.29 production deployment with packed RDNA4 MXFP4 GEMV, DFlash2 K4, TP8 without expert parallelism, FP8 KV, a 524288-token context, and TP8-sharded Vision weights. Native vLLM automatic prefix caching uses a 1280-token retention interval matching the qualified hybrid cache geometry; LMCache and CPU/NVMe KV offload remain disabled."
   }
 }

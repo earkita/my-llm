@@ -2,7 +2,7 @@
   "schema_version": 1,
   "name": "glm53-flash-uncensored",
   "status": "production-ready",
-  "description": "Production GLM-5.3-Flash UNCENSORED Quark MXFP4 on the stable v0.29 ROCm 10 runtime with DFlash2 K4, FP8 KV, 768K context, and Vision",
+  "description": "Production GLM-5.3-Flash UNCENSORED Quark MXFP4 on the stable v0.29 ROCm 10 runtime with DFlash2 K4, FP8 KV, 512K context, and Vision",
   "model": {
     "schema_version": 1,
     "name": "glm53-flash-uncensored-quark-mxfp4",
@@ -77,10 +77,10 @@
   },
   "runtime": {
     "schema_version": 1,
-    "name": "glm53-flash-uncensored-quark-mxfp4-rocm10-mrv2-8xr9700-tp8-noep-mxfp4gemv-dflash2-k4-fp8kv-768k-vision-weights",
+    "name": "glm53-flash-uncensored-quark-mxfp4-rocm10-mrv2-8xr9700-tp8-noep-mxfp4gemv-dflash2-k4-fp8kv-512k-vision-weights",
     "status": "production-ready",
     "recipe": "vllm_glm53flashrocm10_v0.29",
-    "description": "Stable ROCm 10 production runtime for the locally converted UNCENSORED Quark MXFP4 checkpoint with packed RDNA4 MXFP4 GEMV, DFlash2 K4, TP8 without expert parallelism, FP8 KV, 768K context, and TP8-sharded Vision weights",
+    "description": "Stable ROCm 10 production runtime for the locally converted UNCENSORED Quark MXFP4 checkpoint with packed RDNA4 MXFP4 GEMV, DFlash2 K4, TP8 without expert parallelism, FP8 KV, 512K context, and TP8-sharded Vision weights",
     "required_model_family": "glm5next",
     "required_patches": [
       "0001",
@@ -137,7 +137,7 @@
       "disable_custom_all_reduce": true
     },
     "limits": {
-      "max_model_len": 786432,
+      "max_model_len": 524288,
       "max_num_seqs": 1,
       "max_num_batched_tokens": 4096,
       "gpu_memory_utilization": 0.995,
@@ -146,9 +146,11 @@
     "cache": {
       "dtype": "fp8",
       "block_size": 16,
-      "prefix_cache": false,
+      "prefix_cache": true,
+      "prefix_cache_retention_interval": 1280,
       "cpu_offload_gb": 0
     },
+    "enable_prompt_tokens_details": true,
     "scheduler": {
       "async": false,
       "enforce_eager": true
@@ -237,17 +239,17 @@
         "DISABLE_PROMPT_CACHING": "1",
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
         "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
-        "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "786432",
-        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "786432",
+        "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "524288",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "524288",
         "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "90"
       }
     }
   },
   "verification": {
-    "scope": "gfx1201-v029-uncensored-quark-mxfp4-768k-vision-production",
-    "verified_context": 786432,
+    "scope": "gfx1201-v029-uncensored-quark-mxfp4-512k-vision-production",
+    "verified_context": 524288,
     "verified_on": "2026-09-10",
     "best_runtime_mode": "default",
-    "notes": "Local Quark MXFP4 conversion of dealignai/GLM-5.3-Flash-UNCENSORED-FP8. Offline inventory validation matched 76108 tensors with zero missing, unexpected, shape, or dtype mismatches; 3280 preserved tensor/scale hashes matched the source. Four representative MXFP4 samples reached cosine similarity 0.99284 to 0.99336. The v0.29 runtime reached ready state on 8x R9700 and completed a minimal chat inference on 2026-09-10."
+    "notes": "Local Quark MXFP4 conversion of dealignai/GLM-5.3-Flash-UNCENSORED-FP8. Offline inventory validation matched 76108 tensors with zero missing, unexpected, shape, or dtype mismatches; 3280 preserved tensor/scale hashes matched the source. Four representative MXFP4 samples reached cosine similarity 0.99284 to 0.99336. On 2026-09-10 the v0.29 runtime reached ready state on 8x R9700 with a 524288-token context. Three 10241-token requests sharing a 10240-token prefix reported cached_tokens 0, 8960, and 8960; TTFT was 16.404s, 1.638s, and 1.401s."
   }
 }
