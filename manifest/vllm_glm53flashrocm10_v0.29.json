@@ -58,8 +58,9 @@
       "rocm_mrv2_head": "252ef14859ac6626d8d3bbd27c0682f0594d4236",
       "glm5next_eagle3_issue": "https://github.com/vllm-project/vllm/issues/54451",
       "glm5next_dflash_mhc_reference": "https://github.com/sgl-project/sglang/pull/36755",
-      "excluded_dflash_prefix_cache_patch": "https://github.com/vllm-project/vllm/pull/54163",
-      "excluded_dflash_prefix_cache_head": "ccc71957c46ea5d970c41062e08287e30040939b",
+      "dflash_prefix_cache_patch": "https://github.com/vllm-project/vllm/pull/54163",
+      "dflash_prefix_cache_head": "ccc71957c46ea5d970c41062e08287e30040939b",
+      "dflash_prefix_cache_commit": "be81e304d548e3611cd7fc9a80e4eb17c6416906",
       "dflash_mrv2_issue": "https://github.com/vllm-project/vllm/issues/49559",
       "dflash_greedy_k1_issue": "https://github.com/vllm-project/vllm/issues/54928",
       "mrv2_draft_attention_backend_fix": "https://github.com/vllm-project/vllm/commit/25240513856e9aca9b07e9381f2a4513b6954bd8",
@@ -93,7 +94,7 @@
       "glm_moe_router_dedup_head": "0c2b5ad442672ea2efbf62df4a3df1cce01b946e",
       "glm_required_first_tools_pr": "https://github.com/vllm-project/vllm/pull/55558",
       "glm_required_first_tools_head": "bcca85b9083512bccdb039a1770834ee6e246646",
-      "expected_diff_sha256": "8ccf39951c3be3a098af50a17991fa4ac86840710ba39a08352e538d810ac9b4",
+      "expected_diff_sha256": "1f4f3ef8f6247d6f9081df1973dcd19ffbd77859d52ba509b49e9e57b2be2094",
       "full_index_diff": true,
       "apply_intent_to_add": true,
       "accepted_previous_images": [
@@ -120,6 +121,10 @@
         {
           "sha256": "2b61ddd6dade003b9ccf1a7b79b3a56722bc749e67c7818dcd4b44ac5b55fe6c",
           "patch_count": 22
+        },
+        {
+          "sha256": "8ccf39951c3be3a098af50a17991fa4ac86840710ba39a08352e538d810ac9b4",
+          "patch_count": 25
         }
       ],
       "patches": [
@@ -222,6 +227,10 @@
         {
           "path": "patches/vllm_glm53flashrocm10_v0.29/0025-fix-align-GLM-strict-tool-schema-order.patch",
           "sha256": "2108ae2d0afabb6ed82730574271d222ade2ab38b75ddfba3fe2ff9ed2fd4948"
+        },
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.29/0026-fix-keep-DFlash-prefix-cache-tail-block.patch",
+          "sha256": "4121059d603a4f9c9d957b8b07f408eed6e1a9b13b6f8c990728280975e1866b"
         }
       ],
       "rocm_sparse_verify_head": "0f1d78db4495fed10384a2b048e70367e61d3dd1",
