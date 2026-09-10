@@ -113,7 +113,9 @@ Wiersz `LIVE` jest próbkowany co sekundę. Pokazuje liczbę aktywnych i
 oczekujących żądań, zajęcie KV oraz wygładzoną estymatę wzrostu KV w oknie
 10 sekund; ze względu na chunked prefill wartość chwilowa jest skokowa. Po
 zakończeniu wiersz `COMPLETE` wylicza z delt liczników dokładne server-side
-liczby tokenów, prefill tok/s, decode tok/s, TTFT i E2E. Gdy żądania się
+liczby tokenów, trafienia APC (`cached=HITS/QUERIES`), prefill tok/s, decode
+tok/s, TTFT i E2E. Bieżący wiersz `LIVE` pokazuje tę samą deltę APC od początku
+obserwowanego requestu, gdy licznik lookupów jest już dostępny. Gdy żądania się
 nakładają, wynik `COMPLETE` jest agregatem tych żądań. Pomiar obejmuje również
 ruch przechodzący przez LiteLLM.
 

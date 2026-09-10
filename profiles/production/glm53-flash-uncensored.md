@@ -19,7 +19,7 @@ aktualizować w tym samym commicie co profil.
 | Równoległość | TP8 / PP1 / DP1, bez expert parallelism |
 | Maksymalny kontekst | 524288 tokenów (512K) |
 | Maksymalna liczba sekwencji | 1 |
-| Budżet batchowanego prefilla | 4096 tokenów |
+| Budżet batchowanego prefilla | 2048 tokenów |
 | Wagi | lokalna konwersja AMD Quark MXFP4 |
 | KV cache | FP8, 4 960 000 000 bajtów (`4960000000`), bloki po 16 tokenów, automatic prefix caching |
 | DFlash | DFlash2, K=4, draft TP8 |
@@ -41,6 +41,9 @@ aktualizować w tym samym commicie co profil.
 - `--prefix-cache-retention-interval 1280` zachowuje checkpoint na każdej
   wspólnej stronie cache; domyślne `0` nie dawało trafień w układzie
   Mamba `16` + MLA/DFlash `1280`;
+- szablon Claude Code wymusza `CLAUDE_CODE_TOTAL_TOKENS_REMINDER=off`, ponieważ
+  zmienny licznik w system prompt przerywał identyczny prefiks po 34 560
+  tokenach; ustawienie obowiązuje po uruchomieniu nowej sesji Claude Code;
 - limit kontekstu `524288` zapewnia zapas względem pojemności hybrydowego cache;
   zachowuje dotychczasową rezerwę KV `4960000000`;
 - checkpoint jest ładowany z 62 shardów Safetensors;

@@ -1,18 +1,18 @@
 {
   "schema_version": 1,
-  "name": "glm53-flash-v029-rollback",
-  "status": "production-ready",
-  "description": "Production rollback for GLM-5.3-Flash Quark MXFP4 on the qualified v0.29 ROCm 10 recipe",
+  "name": "glm53-flash-uncensored-v029-experiments",
+  "status": "development",
+  "description": "Development GLM-5.3-Flash UNCENSORED v0.29 runtime experiments",
   "model": {
     "schema_version": 1,
-    "name": "glm53-flash-quark-mxfp4",
+    "name": "glm53-flash-uncensored-quark-mxfp4",
     "family": "glm5next",
     "format": "safetensors",
-    "repository": "amd/GLM-5.3-Flash-Quark-MXFP4",
-    "revision": "b5688f25491202978c19c4d036eef579f61bbe07",
-    "source_profile_sha256": "5619c5424b7bd30e8ae81d921861c0f10b5265f67360a94734118c6f8e8d185f",
-    "default_directory": "/mnt/ai/models/glm/GLM-5.3-Flash-Quark-MXFP4",
-    "served_name": "glm-5.3-flash-quark-mxfp4",
+    "repository": "dealignai/GLM-5.3-Flash-UNCENSORED-FP8",
+    "revision": "3591f3347b44ba8f0cc6769d85a82b10cddcd572",
+    "source_profile_sha256": "b34650495b6cfbad7f1a520224000bfd61d31912ab6259b136e3b40dec92247e",
+    "default_directory": "/mnt/ai/models/glm/GLM-5.3-Flash-UNCENSORED-Quark-MXFP4",
+    "served_name": "glm-5.3-flash-uncensored-quark-mxfp4",
     "expected_shards": 62,
     "index_file": "model.safetensors.index.json",
     "checkpoint_weight_bytes": 185066521464,
@@ -20,6 +20,7 @@
       "README.md",
       "chat_template.jinja",
       "config.json",
+      "conversion-provenance.json",
       "generation_config.json",
       "model.safetensors.index.json",
       "processor_config.json",
@@ -29,6 +30,7 @@
     "allow_patterns": [
       "*.json",
       "*.safetensors",
+      "*.png",
       "chat_template.jinja",
       "README.md"
     ],
@@ -63,14 +65,22 @@
       "enable_auto_tool_choice": true,
       "trust_remote_code": false,
       "language_model_only": true
+    },
+    "file_sha256": {
+      "README.md": "d8630ecf0ecf10f1ed60ca27fba24447cd195de3ba30e52930730995be0eed84",
+      "chat_template.jinja": "34d5ee66b12fa6446cdae131c352b8f68cd85369e0e6fda115583805fada3891",
+      "config.json": "f1254056e7c78f105a559388185a0ee12a635addd11f4e6f0c20987619e23712",
+      "conversion-provenance.json": "654a423e2c55924b872aa1945db86513b35c7faa1146a9ae9ef48ba33e3af611",
+      "model.safetensors.index.json": "f97b7774ceb20b382bbede8d478f71fbe86c9eca08ee4a2cd4a9b728abb47de7",
+      "tokenizer.json": "19e773648cb4e65de8660ea6365e10acca112d42a854923df93db4a6f333a82d"
     }
   },
   "runtime": {
     "schema_version": 1,
-    "name": "glm53-flash-quark-mxfp4-rocm10-mrv2-8xr9700-tp8-noep-mxfp4gemv-dflash2-k4-fp8kv-1m-bt2048",
-    "status": "production-ready",
+    "name": "glm53-flash-uncensored-quark-mxfp4-rocm10-mrv2-8xr9700-tp8-noep-mxfp4gemv-dflash2-k4-fp8kv-512k-vision-weights",
+    "status": "diagnostic-only",
     "recipe": "vllm_glm53flashrocm10_v0.29",
-    "description": "ROCm 10 production runtime with packed RDNA4 MXFP4 decode GEMV, DFlash2 K4, TP8 without expert parallelism, FP8 KV, a 1M context window, and a 2048-token chunked-prefill budget",
+    "description": "Development base matching the production GLM-5.3-Flash UNCENSORED v0.29 runtime",
     "required_model_family": "glm5next",
     "required_patches": [
       "0001",
@@ -127,24 +137,35 @@
       "disable_custom_all_reduce": true
     },
     "limits": {
-      "max_model_len": 1048576,
+      "max_model_len": 524288,
       "max_num_seqs": 1,
-      "max_num_batched_tokens": 2048,
+      "max_num_batched_tokens": 4096,
       "gpu_memory_utilization": 0.995,
-      "kv_cache_memory_bytes": 6591622400
+      "kv_cache_memory_bytes": 4960000000
     },
     "cache": {
       "dtype": "fp8",
       "block_size": 16,
-      "prefix_cache": false,
+      "prefix_cache": true,
+      "prefix_cache_retention_interval": 1280,
       "cpu_offload_gb": 0
     },
+    "enable_prompt_tokens_details": true,
     "scheduler": {
       "async": false,
       "enforce_eager": true
     },
     "multimodal": {
-      "language_model_only": true
+      "language_model_only": false,
+      "encoder_attention_backend": "TRITON_ATTN",
+      "limit_per_prompt": {
+        "image": 8,
+        "video": 0
+      },
+      "encoder_tp_mode": "weights",
+      "processor_kwargs": {
+        "max_image_tokens": 4096
+      }
     },
     "loading": {
       "format": "safetensors",
@@ -192,10 +213,26 @@
       "captured_on": "2026-09-05",
       "motherboard": "ASUS Pro WS WRX90E-SAGE SE",
       "note": "Eight gfx1201 R9700 devices in the measured fast-first order. NVIDIA remains the display adapter and is excluded by explicit ROCm platform selection."
+    },
+    "experimental_modes": {
+      "mxfp4-gemv-dflash2-k4-fp8-512k-vision-apc-bt8192": {
+        "status": "diagnostic-only",
+        "runtime_name": "glm53-flash-uncensored-quark-mxfp4-rocm10-mrv2-8xr9700-tp8-noep-mxfp4gemv-dflash2-k4-fp8kv-512k-vision-apc-bt8192",
+        "reason": "Prefill A/B comparator for the former 4096-token production baseline. max_num_batched_tokens=8192 requires a 4.0 GB fixed KV reservation so the temporary MXFP4 dequantization workspace fits; FP8 KV still covers the full 512K context.",
+        "runtime_overrides": {
+          "limits": {
+            "max_model_len": 524288,
+            "max_num_seqs": 1,
+            "max_num_batched_tokens": 8192,
+            "gpu_memory_utilization": 0.995,
+            "kv_cache_memory_bytes": 4000000000
+          }
+        }
+      }
     }
   },
   "stack": {
-    "description": "Production rollback GLM-5.3 Flash ROCm 10 serving stack",
+    "description": "Development GLM-5.3 Flash UNCENSORED ROCm 10 v0.29 experiments",
     "litellm_aliases": [
       "glm-5.3-flash-high"
     ],
@@ -216,19 +253,20 @@
         "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.3-flash-high",
         "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.3-flash-high",
         "DISABLE_PROMPT_CACHING": "1",
+        "CLAUDE_CODE_TOTAL_TOKENS_REMINDER": "off",
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
         "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
-        "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "1048576",
-        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1048576",
+        "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "524288",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "524288",
         "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "90"
       }
     }
   },
   "verification": {
-    "scope": "rocm10-production-qualification",
-    "verified_context": 1048576,
-    "verified_on": "2026-09-08",
-    "best_runtime_mode": "default",
-    "notes": "Packed RDNA4 MXFP4 decode GEMV with DFlash2 K4, TP8 without expert parallelism, FP8 KV and max_num_batched_tokens=2048 is the default production runtime. On the controlled 32K/128-token C1 benchmark, raising the prefill budget from 512 to 2048 improved client-observed prefill from 728.30 to 1130.62 tok/s and reduced mean TTFT from 44.99 to 28.98 seconds; decode throughput requires separate verification. The exact 1M boundary request and four full-context NIAH placements were qualified with K7 using the same FP8 KV and context geometry; K7 remains an explicit 512-token-budget rollback comparator. The packed GEMV BF16-KV 256K configuration remains available as a fallback mode. A diagnostic K2/FP8/256K/C4 workflow mode passed short-context concurrent API and LiteLLM tool-call smoke tests on 2026-09-08, but remains unqualified for four full 256K contexts and extended thermal stability."
+    "scope": "glm53-flash-uncensored-v029-development-experiments",
+    "verified_context": 524288,
+    "verified_on": "2026-09-10",
+    "best_runtime_mode": null,
+    "notes": "BT8192 with the production 4.96 GB KV reservation failed on the first 65K prefill: MXFP4 dequantization needed 1.12 GiB while only 646 MiB was free. With 4.0 GB FP8 KV the cache retained 615211 tokens of capacity and passed API/APC, but the matched 65536x128 C1 cold A/B regressed prefill from 1097.35 to 1060.79 tok/s (-3.33%) and TTFT from 60.02 to 62.87 s (+4.73%). Rejected for production; retained only as a diagnostic comparator."
   }
 }

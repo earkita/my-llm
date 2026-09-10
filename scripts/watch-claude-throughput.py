@@ -27,6 +27,8 @@ METRICS = {
     "waiting_requests": "vllm:num_requests_waiting",
     "kv_cache_fraction": "vllm:kv_cache_usage_perc",
     "prompt_tokens": "vllm:prompt_tokens_total",
+    "prefix_cache_queries": "vllm:prefix_cache_queries_total",
+    "prefix_cache_hits": "vllm:prefix_cache_hits_total",
     "generation_tokens": "vllm:generation_tokens_total",
     "completed_requests": "vllm:request_success_total",
     "prefill_seconds": "vllm:request_prefill_time_seconds_sum",
@@ -77,6 +79,7 @@ def _completion(
     output_tokens = _delta(current, previous, "generation_tokens")
     prefill_seconds = _delta(current, previous, "prefill_seconds")
     decode_seconds = _delta(current, previous, "decode_seconds")
+    cache = _prefix_cache_delta(current, previous)
     return {
         "completed_requests": completed,
         "prompt_tokens": round(prompt_tokens),
@@ -86,6 +89,19 @@ def _completion(
         / max(decode_seconds, 1e-9),
         "mean_ttft_seconds": _delta(current, previous, "ttft_seconds") / completed,
         "mean_e2e_seconds": _delta(current, previous, "e2e_seconds") / completed,
+        **cache,
+    }
+
+
+def _prefix_cache_delta(
+    current: dict[str, float], previous: dict[str, float]
+) -> dict[str, float | int]:
+    queries = round(_delta(current, previous, "prefix_cache_queries"))
+    hits = min(round(_delta(current, previous, "prefix_cache_hits")), queries)
+    return {
+        "cached_tokens": hits,
+        "cache_query_tokens": queries,
+        "cache_hit_percent": hits / queries * 100 if queries else 0.0,
     }
 
 
@@ -126,6 +142,13 @@ class CompletionAccumulator:
         self.previous_active = active
         return completion, completion_unavailable, active
 
+    def request_cache(
+        self, current: dict[str, float]
+    ) -> dict[str, float | int] | None:
+        if self.request_baseline is None:
+            return None
+        return _prefix_cache_delta(current, self.request_baseline)
+
 
 def _print(payload: dict[str, Any], *, json_lines: bool) -> None:
     if json_lines:
@@ -136,6 +159,8 @@ def _print(payload: dict[str, Any], *, json_lines: bool) -> None:
         print(
             f"{payload['timestamp']}  COMPLETE n={completion['completed_requests']}  "
             f"prompt={completion['prompt_tokens']}  output={completion['output_tokens']}  "
+            f"cached={completion['cached_tokens']}/{completion['cache_query_tokens']} "
+            f"({completion['cache_hit_percent']:.1f}%)  "
             f"prefill={completion['prefill_tokens_per_second']:.1f} tok/s  "
             f"decode={completion['decode_tokens_per_second']:.1f} tok/s  "
             f"TTFT={completion['mean_ttft_seconds']:.3f}s  "
@@ -149,10 +174,19 @@ def _print(payload: dict[str, Any], *, json_lines: bool) -> None:
             "metrics=unavailable (monitor attached after request start)",
             flush=True,
         )
+    live_cache = payload.get("request_cache")
+    live_cache_text = ""
+    if isinstance(live_cache, dict) and live_cache["cache_query_tokens"]:
+        live_cache_text = (
+            f"  cached={live_cache['cached_tokens']}/"
+            f"{live_cache['cache_query_tokens']} "
+            f"({live_cache['cache_hit_percent']:.1f}%)"
+        )
     print(
         f"{payload['timestamp']}  LIVE running={payload['running_requests']}  "
         f"waiting={payload['waiting_requests']}  kv={payload['kv_cache_percent']:6.2f}%  "
-        f"kv-growth~={payload['kv_growth_tokens_per_second']:8.1f} tok/s",
+        f"kv-growth~={payload['kv_growth_tokens_per_second']:8.1f} tok/s"
+        f"{live_cache_text}",
         flush=True,
     )
 
@@ -179,6 +213,7 @@ def follow(
         elapsed = max(now - oldest_time, 1e-9)
         kv_growth = max(current["kv_cache_fraction"] - oldest_kv, 0.0)
         completion, completion_unavailable, active = accumulator.observe(current)
+        request_cache = accumulator.request_cache(current)
         if include_idle or active or completion is not None or completion_unavailable:
             _print(
                 {
@@ -192,6 +227,7 @@ def follow(
                     "kv_growth_window_seconds": elapsed,
                     "completion": completion,
                     "completion_unavailable": completion_unavailable,
+                    "request_cache": request_cache,
                 },
                 json_lines=json_lines,
             )

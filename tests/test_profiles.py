@@ -51,7 +51,6 @@ PROFILE_NAMES = tuple(
     )
 )
 GLM_PROFILE = "glm53-flash"
-GLM_ROLLBACK_PROFILE = "glm53-flash-v029-rollback"
 GLM_V029_EXPERIMENTS = str(
     ROOT / "profiles" / "dev" / "glm53-flash-v029-experiments.json"
 )
@@ -573,7 +572,7 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertNotIn("0026", runtime["required_patches"])
         self.assertNotIn("experimental_modes", runtime)
         self.assertEqual(runtime["limits"]["max_model_len"], 524288)
-        self.assertEqual(runtime["limits"]["max_num_batched_tokens"], 4096)
+        self.assertEqual(runtime["limits"]["max_num_batched_tokens"], 2048)
         self.assertEqual(runtime["limits"]["kv_cache_memory_bytes"], 4960000000)
         self.assertFalse(runtime["multimodal"]["language_model_only"])
         self.assertEqual(
@@ -590,7 +589,7 @@ class ProductionProfileTests(unittest.TestCase):
             command[command.index("--max-model-len") + 1], "524288"
         )
         self.assertEqual(
-            command[command.index("--max-num-batched-tokens") + 1], "4096"
+            command[command.index("--max-num-batched-tokens") + 1], "2048"
         )
         self.assertIn("--enable-prefix-caching", command)
         self.assertEqual(
@@ -611,11 +610,6 @@ class ProductionProfileTests(unittest.TestCase):
             "524288",
         )
 
-        rollback = load_profile(GLM_ROLLBACK_PROFILE)["runtime"]
-        self.assertEqual(rollback["recipe"], "vllm_glm53flashrocm10_v0.29")
-        self.assertNotIn("experimental_modes", rollback)
-        self.assertNotIn("VLLM_ROCM_MXFP4_GEMV_BLOCK_N", rollback["environment"])
-
     def test_uncensored_glm_uses_the_stable_v029_runtime(self) -> None:
         profile = load_profile("glm53-flash-uncensored")
         model = profile["model"]
@@ -629,6 +623,7 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(runtime["recipe"], "vllm_glm53flashrocm10_v0.29")
         self.assertNotIn("experimental_modes", runtime)
         self.assertEqual(runtime["limits"]["max_model_len"], 524288)
+        self.assertEqual(runtime["limits"]["max_num_batched_tokens"], 2048)
         self.assertTrue(runtime["cache"]["prefix_cache"])
         self.assertEqual(
             runtime["cache"]["prefix_cache_retention_interval"], 1280
@@ -971,7 +966,7 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(baseline["limits"]["max_model_len"], 524288)
         self.assertEqual(baseline["limits"]["max_num_seqs"], 1)
         self.assertEqual(
-            baseline["limits"]["max_num_batched_tokens"], 4096
+            baseline["limits"]["max_num_batched_tokens"], 2048
         )
         self.assertEqual(
             baseline["limits"]["gpu_memory_utilization"], 0.995
@@ -1034,6 +1029,16 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(runtime["environment"]["VLLM_USE_V2_MODEL_RUNNER"], "1")
         self.assertEqual(runtime["moe_backend"], "emulation")
         self.assertEqual(runtime["linear_backend"], "emulation")
+
+    def test_glm_claude_disables_changing_total_token_reminder(self) -> None:
+        for profile_name in ("glm53-flash", "glm53-flash-uncensored"):
+            with self.subTest(profile=profile_name):
+                environment = load_profile(profile_name)["stack"][
+                    "claude_settings"
+                ]["env"]
+                self.assertEqual(
+                    environment["CLAUDE_CODE_TOTAL_TOKENS_REMINDER"], "off"
+                )
 
     def test_glm_model_download_includes_its_chat_template(self) -> None:
         model = load_profile(GLM_PROFILE)["model"]
@@ -1186,7 +1191,7 @@ class ProductionProfileTests(unittest.TestCase):
             "unknown experimental runtime mode",
         ):
             launcher.start(
-                GLM_ROLLBACK_PROFILE,
+                GLM_PROFILE,
                 runtime_mode="mxfp4-gemv-dflash2-k7-256k",
                 dry_run=True,
             )

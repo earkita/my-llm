@@ -17,7 +17,7 @@ Ten opis należy aktualizować w tym samym commicie co profil.
 | Równoległość | TP8 / PP1 / DP1, bez expert parallelism |
 | Maksymalny kontekst | 524288 tokenów (512K) |
 | Maksymalna liczba sekwencji | 1 |
-| Budżet batchowanego prefilla | 4096 tokenów |
+| Budżet batchowanego prefilla | 2048 tokenów |
 | Wagi | AMD Quark MXFP4 |
 | KV cache | FP8, 4 960 000 000 bajtów (`4960000000`), bloki po 16 tokenów, automatic prefix caching |
 | DFlash | DFlash2, K=4, draft TP8 |
@@ -34,6 +34,8 @@ Ten opis należy aktualizować w tym samym commicie co profil.
 - scheduler jest synchroniczny i działa z `enforce_eager`;
 - natywny vLLM automatic prefix caching jest włączony przez
   `--enable-prefix-caching` oraz `--prefix-cache-retention-interval 1280`;
+- szablon Claude Code wymusza `CLAUDE_CODE_TOTAL_TOKENS_REMINDER=off`, aby
+  zmienny licznik w system prompt nie unieważniał dalszej historii APC;
   API raportuje `usage.prompt_tokens_details.cached_tokens`, a `/metrics`
   udostępnia `vllm:prefix_cache_queries_total` i
   `vllm:prefix_cache_hits_total`;

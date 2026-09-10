@@ -42,7 +42,7 @@
         "glm_required_first_tools_pr55558_head": "bcca85b9083512bccdb039a1770834ee6e246646"
       },
       "target_profile": "profiles/production/glm53-flash.json",
-      "target_profile_sha256": "0367766c28b08892455b4f7b58a51b743e97c154ad112dff54490ccaa5bc1f32",
+      "target_profile_sha256": "a40276688dff0aaedbcb1893fa9cfaac895459e7b85bc5e3c1dd896619c1bb1b",
       "intentional_changes": [
         "replaced the llama.cpp GGUF deployment with the AMD Quark MXFP4 checkpoint",
         "migrated the isolated native recipe to ROCm SDK 10.0.0, PyTorch 2.13.0+rocm10.0.0, AITER v0.1.21 and vLLM main 7fbd44cbe",
@@ -54,7 +54,9 @@
         "configured Claude Code auto-compaction at 90 percent of the 512K context window",
         "consolidated LiteLLM and every Claude Code model role on the single glm-5.3-flash-high alias, capped at 524288 tokens",
         "enabled native vLLM automatic prefix caching with cached-token details and a 1280-token retention interval, without LMCache or CPU/NVMe KV offload",
-        "kept the v0.31-only output-tiled BN8 setting out of the canonical runtime"
+        "kept the v0.31-only output-tiled BN8 setting out of the canonical runtime",
+        "disabled Claude Code's changing total-token reminder so transparent vLLM APC can retain the conversation prefix",
+        "set max_num_batched_tokens to 2048 based on the controlled 32K prefill and TTFT comparison"
       ]
     },
     "glm53-flash-uncensored": {
@@ -63,26 +65,16 @@
       "source_runtime": "https://github.com/vllm-project/vllm/commit/7fbd44cbe0a90b9c8fd3a94a0f0401ac4b1bc719",
       "source_runtime_sha256": "7fbd44cbe0a90b9c8fd3a94a0f0401ac4b1bc719",
       "target_profile": "profiles/production/glm53-flash-uncensored.json",
-      "target_profile_sha256": "afd4856a1711eb6fc47c964c5e5ef6693b4a77c0e3ed8d5775e9e03ed93a01ce",
+      "target_profile_sha256": "51a3da5c25f1852149232750e670acab11ae59cf7f34ac41900c0521b521ffd3",
       "intentional_changes": [
         "converted the local UNCENSORED FP8 checkpoint to AMD Quark MXFP4 with recorded conversion provenance",
         "bound the derived 62-shard checkpoint to exact file hashes and source revision",
         "reused the qualified ROCm 10 v0.29 TP8 DFlash2 K4 FP8-KV Vision runtime without experimental modes",
         "bound the shared glm-5.3-flash-high LiteLLM and Claude Code alias dynamically to the active checkpoint",
         "enabled native vLLM automatic prefix caching and cached-token API details without LMCache or CPU/NVMe KV offload, setting the production context limit to 524288 while preserving the fixed KV allocation",
-        "set the native prefix-cache retention interval to the 1280-token hybrid page because vLLM v0.29 zero-retention mode did not preserve reusable Mamba and DFlash boundaries"
-      ]
-    },
-    "glm53-flash-v029-rollback": {
-      "source_model": "https://huggingface.co/amd/GLM-5.3-Flash-Quark-MXFP4",
-      "source_model_sha256": "b5688f25491202978c19c4d036eef579f61bbe07",
-      "source_runtime": "https://github.com/vllm-project/vllm/commit/7fbd44cbe0a90b9c8fd3a94a0f0401ac4b1bc719",
-      "source_runtime_sha256": "7fbd44cbe0a90b9c8fd3a94a0f0401ac4b1bc719",
-      "target_profile": "profiles/production/glm53-flash-v029-rollback.json",
-      "target_profile_sha256": "0e18685c267b96a4d05cbae99d2f967cab07101c1d594f87533d16bc4a7a07c8",
-      "intentional_changes": [
-        "renamed the former glm53-flash deployment without changing its v0.29 runtime contract",
-        "moved all experimental runtime modes to profiles/dev/glm53-flash-v029-experiments.json"
+        "set the native prefix-cache retention interval to the 1280-token hybrid page because vLLM v0.29 zero-retention mode did not preserve reusable Mamba and DFlash boundaries",
+        "disabled Claude Code's changing total-token reminder so transparent vLLM APC can retain the conversation prefix",
+        "set max_num_batched_tokens to 2048 based on the controlled 32K prefill and TTFT comparison"
       ]
     },
     "qwen38-flash": {

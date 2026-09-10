@@ -129,7 +129,7 @@
     "limits": {
       "max_model_len": 524288,
       "max_num_seqs": 1,
-      "max_num_batched_tokens": 4096,
+      "max_num_batched_tokens": 2048,
       "gpu_memory_utilization": 0.995,
       "kv_cache_memory_bytes": 4960000000
     },
@@ -227,6 +227,7 @@
         "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.3-flash-high",
         "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.3-flash-high",
         "DISABLE_PROMPT_CACHING": "1",
+        "CLAUDE_CODE_TOTAL_TOKENS_REMINDER": "off",
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
         "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
         "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "524288",

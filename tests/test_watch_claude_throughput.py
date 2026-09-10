@@ -26,6 +26,8 @@ class CompletionAccumulatorTests(unittest.TestCase):
             metrics(
                 running_requests=1,
                 prompt_tokens=100,
+                prefix_cache_queries=100,
+                prefix_cache_hits=80,
                 generation_tokens=1,
                 prefill_seconds=2,
                 ttft_seconds=2,
@@ -38,6 +40,8 @@ class CompletionAccumulatorTests(unittest.TestCase):
         completion, unavailable, active = accumulator.observe(
             metrics(
                 prompt_tokens=100,
+                prefix_cache_queries=100,
+                prefix_cache_hits=80,
                 generation_tokens=21,
                 completed_requests=1,
                 prefill_seconds=2,
@@ -53,6 +57,9 @@ class CompletionAccumulatorTests(unittest.TestCase):
         assert completion is not None
         self.assertEqual(completion["prompt_tokens"], 100)
         self.assertEqual(completion["output_tokens"], 21)
+        self.assertEqual(completion["cached_tokens"], 80)
+        self.assertEqual(completion["cache_query_tokens"], 100)
+        self.assertEqual(completion["cache_hit_percent"], 80)
         self.assertEqual(completion["prefill_tokens_per_second"], 50)
         self.assertEqual(completion["decode_tokens_per_second"], 20)
         self.assertEqual(completion["mean_ttft_seconds"], 2)
@@ -78,6 +85,34 @@ class CompletionAccumulatorTests(unittest.TestCase):
         self.assertIsNone(completion)
         self.assertEqual(unavailable, 1)
         self.assertFalse(active)
+
+    def test_reports_live_request_cache_delta(self) -> None:
+        accumulator = MONITOR.CompletionAccumulator(
+            metrics(prefix_cache_queries=1000, prefix_cache_hits=250)
+        )
+
+        accumulator.observe(
+            metrics(
+                running_requests=1,
+                prefix_cache_queries=1200,
+                prefix_cache_hits=330,
+            )
+        )
+
+        self.assertEqual(
+            accumulator.request_cache(
+                metrics(
+                    running_requests=1,
+                    prefix_cache_queries=1200,
+                    prefix_cache_hits=330,
+                )
+            ),
+            {
+                "cached_tokens": 80,
+                "cache_query_tokens": 200,
+                "cache_hit_percent": 40,
+            },
+        )
 
 
 if __name__ == "__main__":
