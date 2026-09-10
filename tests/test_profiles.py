@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from r9700 import api, launcher, proxy
+from r9700 import api, cli, launcher, proxy
 from r9700.backends import build_command
 from r9700.backends.vllm import environment as vllm_environment
 from r9700.config import (
@@ -1000,6 +1000,20 @@ class ProductionProfileTests(unittest.TestCase):
             self.assertIn(name, result.stdout)
         self.assertIn("MAX CONTEXT", result.stdout)
 
+    def test_launcher_cli_defaults_to_the_full_stack(self) -> None:
+        command_parser = cli.parser()
+        start_args = command_parser.parse_args(
+            ["launcher", "start", "glm53-flash"]
+        )
+        stop_args = command_parser.parse_args(["launcher", "stop"])
+        runtime_only_args = command_parser.parse_args(
+            ["launcher", "start", "glm53-flash", "--runtime-only"]
+        )
+
+        self.assertTrue(start_args.with_litellm)
+        self.assertTrue(stop_args.with_litellm)
+        self.assertFalse(runtime_only_args.with_litellm)
+
     def test_launcher_start_never_replaces_a_running_profile(self) -> None:
         state = {
             "profile": GLM_PROFILE,
@@ -1020,13 +1034,13 @@ class ProductionProfileTests(unittest.TestCase):
             patch("r9700.launcher.subprocess.run") as run,
         ):
             with self.assertRaisesRegex(
-                ConfigurationError, "stop --with-litellm"
+                ConfigurationError, "omit --runtime-only"
             ):
-                launcher.stop()
+                launcher.stop(with_litellm=False)
 
         run.assert_not_called()
 
-    def test_launcher_dry_run_uses_persistent_lifecycle_script(self) -> None:
+    def test_launcher_dry_run_uses_transactional_stack_manager(self) -> None:
         with (
             patch("r9700.launcher.managed_state", return_value=None),
             patch("r9700.launcher.subprocess.run") as run,
@@ -1035,11 +1049,28 @@ class ProductionProfileTests(unittest.TestCase):
             launcher.start("deepseek-v4-flash", dry_run=True)
 
         command = run.call_args.args[0]
+        self.assertEqual(Path(command[0]), launcher.STACK_SCRIPT)
+        self.assertEqual(
+            command[1:4], ["start", "--preset", "deepseek-v4-flash"]
+        )
+        self.assertIn("--dry-run", command)
+
+    def test_launcher_runtime_only_uses_component_lifecycle_script(self) -> None:
+        with (
+            patch("r9700.launcher.managed_state", return_value=None),
+            patch("r9700.launcher.subprocess.run") as run,
+        ):
+            run.return_value.returncode = 0
+            launcher.start(
+                "deepseek-v4-flash", with_litellm=False, dry_run=True
+            )
+
+        command = run.call_args.args[0]
         self.assertEqual(Path(command[0]), launcher.START_SCRIPT)
         self.assertEqual(command[1:3], ["--profile", "deepseek-v4-flash"])
         self.assertIn("--dry-run", command)
 
-    def test_launcher_switch_stops_before_starting_another_profile(self) -> None:
+    def test_launcher_runtime_only_switch_stops_before_starting(self) -> None:
         state = {
             "profile": GLM_PROFILE,
             "url": "http://127.0.0.1:8000",
@@ -1057,7 +1088,7 @@ class ProductionProfileTests(unittest.TestCase):
             patch("builtins.print"),
         ):
             run.return_value.returncode = 0
-            launcher.switch("qwen38-flash")
+            launcher.switch("qwen38-flash", with_litellm=False)
 
         commands = [call.args[0] for call in run.call_args_list]
         self.assertEqual(Path(commands[0][0]), launcher.STOP_SCRIPT)
@@ -1070,9 +1101,7 @@ class ProductionProfileTests(unittest.TestCase):
             patch("r9700.launcher.subprocess.run") as run,
         ):
             run.return_value.returncode = 0
-            launcher.start(
-                "qwen38-flash", with_litellm=True, dry_run=True
-            )
+            launcher.start("qwen38-flash", dry_run=True)
 
         command = run.call_args.args[0]
         self.assertEqual(Path(command[0]), launcher.STACK_SCRIPT)
@@ -1102,7 +1131,7 @@ class ProductionProfileTests(unittest.TestCase):
             patch("r9700.launcher.subprocess.run") as run,
         ):
             run.return_value.returncode = 0
-            launcher.start("qwen38-flash", with_litellm=True)
+            launcher.start("qwen38-flash")
 
         wait.assert_called_once_with(timeout=900)
         self.assertEqual(Path(run.call_args.args[0][0]), launcher.STACK_SCRIPT)
@@ -1182,7 +1211,7 @@ class ProductionProfileTests(unittest.TestCase):
             patch("builtins.print"),
         ):
             run.return_value.returncode = 0
-            launcher.switch("qwen38-flash", with_litellm=True)
+            launcher.switch("qwen38-flash")
 
         commands = [call.args[0] for call in run.call_args_list]
         self.assertEqual(Path(commands[0][0]), launcher.STACK_SCRIPT)
@@ -1197,12 +1226,11 @@ class ProductionProfileTests(unittest.TestCase):
             patch("r9700.launcher.subprocess.run") as run,
         ):
             with self.assertRaisesRegex(
-                ConfigurationError, "unavailable with --with-litellm"
+                ConfigurationError, "only with --runtime-only"
             ):
                 launcher.switch(
                     "qwen38-flash",
                     host="127.0.0.1",
-                    with_litellm=True,
                 )
 
         run.assert_not_called()

@@ -173,7 +173,7 @@ def start(
     port: int | None = None,
     ready_timeout: int = 900,
     proxy_ready_timeout: int = 120,
-    with_litellm: bool = False,
+    with_litellm: bool = True,
     runtime_mode: str | None = None,
     dry_run: bool = False,
 ) -> None:
@@ -204,13 +204,13 @@ def start(
         )
     if proxy_state and not with_litellm and not dry_run:
         raise ConfigurationError(
-            "LiteLLM is already running; use --with-litellm or stop the full stack"
+            "LiteLLM is already running; omit --runtime-only or stop the full stack"
         )
     if with_litellm:
         if host or port is not None:
             raise ConfigurationError(
-                "--host and --port are unavailable with --with-litellm; "
-                "configure TARGET_* and LITELLM_* in .env"
+                "--host and --port are available only with --runtime-only; "
+                "configure TARGET_* and LITELLM_* in .env for the full stack"
             )
         if state and not dry_run:
             service_wait(timeout=ready_timeout)
@@ -240,7 +240,7 @@ def stop(
     *,
     timeout: int | None = None,
     proxy_timeout: int | None = None,
-    with_litellm: bool = False,
+    with_litellm: bool = True,
     dry_run: bool = False,
 ) -> None:
     if with_litellm:
@@ -254,8 +254,8 @@ def stop(
         return
     if not dry_run and _proxy_running_state():
         raise ConfigurationError(
-            "LiteLLM is running; use './run launcher stop --with-litellm' "
-            "to stop the proxy before the model"
+            "LiteLLM is running; omit --runtime-only to stop the proxy "
+            "before the model"
         )
     if timeout is not None and timeout < 1:
         raise ConfigurationError("stop timeout must be a positive integer")
@@ -276,7 +276,7 @@ def switch(
     proxy_ready_timeout: int = 120,
     stop_timeout: int | None = None,
     proxy_stop_timeout: int | None = None,
-    with_litellm: bool = False,
+    with_litellm: bool = True,
     runtime_mode: str | None = None,
     dry_run: bool = False,
 ) -> None:
@@ -285,8 +285,8 @@ def switch(
     if with_litellm:
         if host or port is not None:
             raise ConfigurationError(
-                "--host and --port are unavailable with --with-litellm; "
-                "configure TARGET_* and LITELLM_* in .env"
+                "--host and --port are available only with --runtime-only; "
+                "configure TARGET_* and LITELLM_* in .env for the full stack"
             )
         _stack_start_command(
             name,
@@ -480,18 +480,6 @@ def _confirm_switch(current: str, target: str) -> bool:
     return answer in {"y", "yes"}
 
 
-def _select_litellm_mode() -> bool:
-    while True:
-        answer = input(
-            "Mode: [d]irect API or [l]iteLLM stack? [d] "
-        ).strip().lower()
-        if answer in {"", "d", "direct"}:
-            return False
-        if answer in {"l", "litellm", "stack"}:
-            return True
-        print("Choose 'd' or 'l'.", file=sys.stderr)
-
-
 def interactive() -> None:
     if not sys.stdin.isatty():
         raise ConfigurationError(
@@ -537,17 +525,13 @@ def interactive() -> None:
                 continue
 
             selected = str(profiles[int(choice) - 1]["name"])
-            with_litellm = _select_litellm_mode()
-            if state and state.get("profile") == selected and not with_litellm:
-                print(f"{selected} is already running.")
-                continue
             if state and not _confirm_switch(str(state["profile"]), selected):
                 print("Switch cancelled.")
                 continue
             if state:
-                switch(selected, with_litellm=with_litellm)
+                switch(selected)
             else:
-                start(selected, with_litellm=with_litellm)
+                start(selected)
         except ConfigurationError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
         except (EOFError, KeyboardInterrupt):

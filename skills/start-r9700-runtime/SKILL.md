@@ -1,15 +1,16 @@
 ---
 name: start-r9700-runtime
-description: Start one self-contained my-llm production profile persistently through the r9700-runtime.service systemd user unit.
+description: "Start one self-contained my-llm production profile as a complete persistent stack: its R9700 inference runtime followed by the profile-bound LiteLLM proxy. Use for ordinary production model launch requests; component-only runtime starts are diagnostic operations."
 ---
 
-# Start R9700 Runtime
+# Start R9700 Production Stack
 
 1. Work from the repository containing this skill.
-2. Select one complete profile: `deepseek-v4-flash`, `glm53-flash`, or
-   `qwen38-flash`. Use `glm53-flash` when none is
-   supplied.
-4. Check current state with `./run service status`. If a service is already running, report it and do not replace it unless the user explicitly asks to stop it first.
+2. Select one complete profile from `./run profiles list`. Use `glm53-flash`
+   when none is supplied.
+3. Check current state with `./run launcher status`. If another profile is
+   already running, report it and do not replace it unless the user explicitly
+   asks to switch or stop it first.
 5. Require the configured maximum PPT0 power cap before launching. The start
    script defaults to at most 285 W on every visible GPU and fails closed if any
    card exceeds it, including after a GPU reset. A deliberately lower cap is
@@ -18,21 +19,32 @@ description: Start one self-contained my-llm production profile persistently thr
    `sudo amd-smi set` command printed by the script. Pass
    `--required-power-cap-w WATTS` only when the user explicitly requests a
    different limit.
-6. Preview both the power check and resolved launch command when the request is ambiguous:
+6. Preview the complete runtime and proxy lifecycle when the request is
+   ambiguous:
 
    ```bash
-   skills/start-r9700-runtime/scripts/start-runtime.sh --dry-run
+   ./run launcher start glm53-flash --dry-run
    ```
 
-7. Start the requested service through the transient `r9700-runtime.service` user unit and wait for readiness:
+7. Start the requested production profile as one stack and wait for both
+   components:
 
    ```bash
-   skills/start-r9700-runtime/scripts/start-runtime.sh \
-     --profile deepseek-v4-flash
+   ./run launcher start deepseek-v4-flash
    ```
 
-8. Confirm both `systemctl --user is-active r9700-runtime.service` and `./run service status`. Report the unit, backend, selected model, runtime, URL, and readiness result. On failure, inspect `journalctl --user-unit r9700-runtime.service` and the runtime log; do not silently fall back to another profile.
+8. Confirm both `r9700-runtime.service` and
+   `r9700-litellm-proxy.service` are active and `./run launcher status` reports
+   both components ready. Report the selected profile, runtime URL, LiteLLM
+   URL, and proxy test result. On failure, inspect the failing component's
+   journal and managed log; do not silently fall back to another profile.
 
-The systemd user manager keeps the workload outside the Codex execution cgroup. It survives the skill command and sandbox ending, but with user lingering disabled it does not promise survival across logout or reboot.
+The stack manager starts the model first, then LiteLLM, and rolls back only
+components started by that invocation if startup fails. The systemd user
+manager keeps both workloads outside the Codex execution cgroup. They survive
+the skill command and sandbox ending, but with user lingering disabled they do
+not promise survival across logout or reboot.
 
-Forward `--host`, `--port`, and `--ready-timeout` only when requested. Do not enable lingering, run installation, download a model, stop a running service, or alter profiles without explicit user approval.
+Do not use `--runtime-only` for an ordinary production launch. Do not enable
+lingering, run installation, download a model, stop a running service, or alter
+profiles without explicit user approval.

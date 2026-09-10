@@ -52,11 +52,20 @@ def _launcher_start_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--port", type=int)
     parser.add_argument("--ready-timeout", type=int, default=900)
     parser.add_argument("--proxy-ready-timeout", type=int, default=120)
-    parser.add_argument(
+    lifecycle = parser.add_mutually_exclusive_group()
+    lifecycle.add_argument(
         "--with-litellm",
+        dest="with_litellm",
         action="store_true",
-        help="start and verify the LiteLLM proxy after the model",
+        help=argparse.SUPPRESS,
     )
+    lifecycle.add_argument(
+        "--runtime-only",
+        dest="with_litellm",
+        action="store_false",
+        help="manage only the inference runtime (diagnostic use)",
+    )
+    parser.set_defaults(with_litellm=True)
     parser.add_argument(
         "--runtime-mode",
         help="select another explicit runtime mode embedded in the profile",
@@ -270,31 +279,40 @@ def parser() -> argparse.ArgumentParser:
     profiles_show.add_argument("name")
 
     launcher_parser = commands.add_parser(
-        "launcher", help="interactively select and safely manage a production model"
+        "launcher", help="safely manage a production runtime and LiteLLM stack"
     )
     launcher_commands = launcher_parser.add_subparsers(dest="launcher_command")
     launcher_commands.add_parser("list", help="show launchable production models")
     launcher_commands.add_parser("status", help="show runtime and unit state")
     launcher_start = launcher_commands.add_parser(
-        "start", help="start one model without replacing a running model"
+        "start", help="start one production stack without replacing a running model"
     )
     _launcher_start_options(launcher_start)
     launcher_switch = launcher_commands.add_parser(
-        "switch", help="explicitly stop the current model and start another"
+        "switch", help="stop the current stack and start another profile"
     )
     _launcher_start_options(launcher_switch)
     launcher_switch.add_argument("--stop-timeout", type=int)
     launcher_switch.add_argument("--proxy-stop-timeout", type=int)
     launcher_stop = launcher_commands.add_parser(
-        "stop", help="gracefully stop the current model"
+        "stop", help="gracefully stop LiteLLM and the current model"
     )
     launcher_stop.add_argument("--timeout", type=int)
     launcher_stop.add_argument("--proxy-timeout", type=int)
-    launcher_stop.add_argument(
+    stop_lifecycle = launcher_stop.add_mutually_exclusive_group()
+    stop_lifecycle.add_argument(
         "--with-litellm",
+        dest="with_litellm",
         action="store_true",
-        help="stop LiteLLM before stopping the model",
+        help=argparse.SUPPRESS,
     )
+    stop_lifecycle.add_argument(
+        "--runtime-only",
+        dest="with_litellm",
+        action="store_false",
+        help="stop only the inference runtime (diagnostic use)",
+    )
+    launcher_stop.set_defaults(with_litellm=True)
     launcher_stop.add_argument("--dry-run", action="store_true")
     launcher_logs = launcher_commands.add_parser("logs", help="show runtime logs")
     launcher_logs.add_argument(

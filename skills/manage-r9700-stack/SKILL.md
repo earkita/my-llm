@@ -21,12 +21,10 @@ Select another complete preset instead of choosing its components separately:
 ./run stack start --preset qwen38-flash
 ```
 
-The default GLM preset selects the verified vLLM Quark/MXFP4 stack with MRV2,
-TP8/EP8, packed RDNA4 GEMV, DFlash2 K=7, FP8 KV and a 1M context. Prefix
-caching is disabled.
-`--runtime-mode mxfp4-gemv-dflash2-k7-256k` selects the BF16 256K
-fallback. Qwen selects
-the production-ready vLLM 0.28 cache-safe MTP K=2 alternative.
+The default GLM preset selects the verified v0.29 Quark/MXFP4 stack with MRV2,
+TP8 without expert parallelism, packed RDNA4 GEMV, DFlash2 K=4, FP8 KV, a
+768K context, and Vision. Production profiles contain only their default
+runtime; experimental modes belong under `profiles/dev/`.
 
 The script checks that LiteLLM is installed and that every visible GPU has a
 PPT0 cap no higher than 285 W before changing service state. It
@@ -53,5 +51,5 @@ After `start`, report the selected runtime and model, the inference URL
 test result. After `stop`, confirm that both services are inactive.
 
 Do not install LiteLLM, change keys or profiles, replace a healthy service, use
-SIGKILL, or enable user lingering implicitly. Use the individual start/stop
-skills when the request concerns only the model backend or only LiteLLM.
+SIGKILL, or enable user lingering implicitly. Component-only lifecycle commands
+are diagnostic operations and must be explicit.

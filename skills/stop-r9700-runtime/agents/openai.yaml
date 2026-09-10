@@ -1,4 +1,4 @@
 interface:
-  display_name: "Stop R9700 Runtime"
-  short_description: "Gracefully stop the persistent R9700 service"
-  default_prompt: "Use $stop-r9700-runtime to gracefully stop the managed R9700 model service."
+  display_name: "Stop R9700 Production Stack"
+  short_description: "Gracefully stop LiteLLM and the runtime together"
+  default_prompt: "Use $stop-r9700-runtime to gracefully stop LiteLLM and the managed R9700 runtime in dependency order."

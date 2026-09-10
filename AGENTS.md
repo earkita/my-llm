@@ -18,8 +18,9 @@ state stays under ignored `.runtime/` and `logs/`.
 - `./run install --profile PROFILE`: create an isolated recipe under
   `.runtime/`, fetch pinned sources, apply patches, and build the runtime.
 - `./run doctor --profile PROFILE`: check host tools, devices, and permissions.
-- Use `skills/start-r9700-runtime/scripts/start-runtime.sh --profile PROFILE`
-  for persistent launch through `r9700-runtime.service`.
+- Use `./run launcher start PROFILE` for an ordinary production launch; it
+  starts the profile-bound runtime and LiteLLM together. Component-only service
+  scripts are reserved for explicit diagnostic operations.
 
 Never reboot or reset GPUs. Never use SIGKILL. Do not replace a running model
 implicitly.
