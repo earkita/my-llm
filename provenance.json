@@ -56,6 +56,20 @@
         "disabled prefix caching and removed the v0.31-only output-tiled BN8 setting from the canonical runtime"
       ]
     },
+    "glm53-flash-uncensored": {
+      "source_model": "https://huggingface.co/dealignai/GLM-5.3-Flash-UNCENSORED-FP8",
+      "source_model_sha256": "3591f3347b44ba8f0cc6769d85a82b10cddcd572",
+      "source_runtime": "https://github.com/vllm-project/vllm/commit/7fbd44cbe0a90b9c8fd3a94a0f0401ac4b1bc719",
+      "source_runtime_sha256": "7fbd44cbe0a90b9c8fd3a94a0f0401ac4b1bc719",
+      "target_profile": "profiles/production/glm53-flash-uncensored.json",
+      "target_profile_sha256": "ee9ed306ba8791557b993673038f416be7dc6ef1997b517b9da72d631562b2a3",
+      "intentional_changes": [
+        "converted the local UNCENSORED FP8 checkpoint to AMD Quark MXFP4 with recorded conversion provenance",
+        "bound the derived 62-shard checkpoint to exact file hashes and source revision",
+        "reused the qualified ROCm 10 v0.29 TP8 DFlash2 K4 FP8-KV 768K Vision runtime without experimental modes",
+        "added a dedicated LiteLLM alias and Claude Code template"
+      ]
+    },
     "glm53-flash-v029-rollback": {
       "source_model": "https://huggingface.co/amd/GLM-5.3-Flash-Quark-MXFP4",
       "source_model_sha256": "b5688f25491202978c19c4d036eef579f61bbe07",

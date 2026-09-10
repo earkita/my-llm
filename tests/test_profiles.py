@@ -41,6 +41,7 @@ from r9700.service import start
 REQUIRED_PROFILE_NAMES = {
     "deepseek-v4-flash",
     "glm53-flash",
+    "glm53-flash-uncensored",
     "qwen38-flash",
 }
 PROFILE_NAMES = tuple(
@@ -572,22 +573,50 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertNotIn("experimental_modes", rollback)
         self.assertNotIn("VLLM_ROCM_MXFP4_GEMV_BLOCK_N", rollback["environment"])
 
-    def test_glm_production_profile_has_a_matching_human_summary(self) -> None:
-        profile = load_profile(GLM_PROFILE)
+    def test_uncensored_glm_uses_the_stable_v029_runtime(self) -> None:
+        profile = load_profile("glm53-flash-uncensored")
+        model = profile["model"]
         runtime = profile["runtime"]
-        summary = (ROOT / "profiles/production/glm53-flash.md").read_text()
-        expected_values = (
-            profile["model"]["name"],
-            profile["model"]["default_directory"],
-            runtime["name"],
-            runtime["recipe"],
-            str(runtime["limits"]["max_model_len"]),
-            str(runtime["limits"]["max_num_batched_tokens"]),
-            str(runtime["limits"]["kv_cache_memory_bytes"]),
+
+        self.assertEqual(
+            model["default_directory"],
+            "/mnt/ai/models/glm/GLM-5.3-Flash-UNCENSORED-Quark-MXFP4",
         )
-        for value in expected_values:
-            with self.subTest(value=value):
-                self.assertIn(value, summary)
+        self.assertEqual(model["vllm"]["quantization"], "quark")
+        self.assertEqual(runtime["recipe"], "vllm_glm53flashrocm10_v0.29")
+        self.assertNotIn("experimental_modes", runtime)
+        self.assertEqual(runtime["limits"]["max_model_len"], 786432)
+        self.assertFalse(runtime["multimodal"]["language_model_only"])
+
+        command = build_command(
+            model, runtime, Path("/models/glm-uncensored"), "127.0.0.1", 8000
+        )
+        self.assertIn("--quantization", command)
+        self.assertEqual(command[command.index("--quantization") + 1], "quark")
+        self.assertEqual(
+            command[command.index("--served-model-name") + 1],
+            "glm-5.3-flash-uncensored-quark-mxfp4",
+        )
+
+    def test_glm_production_profile_has_a_matching_human_summary(self) -> None:
+        for profile_name in (GLM_PROFILE, "glm53-flash-uncensored"):
+            profile = load_profile(profile_name)
+            runtime = profile["runtime"]
+            summary = (
+                ROOT / f"profiles/production/{profile_name}.md"
+            ).read_text()
+            expected_values = (
+                profile["model"]["name"],
+                profile["model"]["default_directory"],
+                runtime["name"],
+                runtime["recipe"],
+                str(runtime["limits"]["max_model_len"]),
+                str(runtime["limits"]["max_num_batched_tokens"]),
+                str(runtime["limits"]["kv_cache_memory_bytes"]),
+            )
+            for value in expected_values:
+                with self.subTest(profile=profile_name, value=value):
+                    self.assertIn(value, summary)
 
     def test_glm_long_context_safety_patches_cover_page_sizes_and_bounds(
         self,
