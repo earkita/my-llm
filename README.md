@@ -21,9 +21,10 @@ odrzuca każdy profil, w którym wystąpi.
 
 Szablony Claude Code są pogrupowane według rodziny modelu w
 `templates/.claude/MODEL/`. Wewnątrz katalogu każdy plik nosi nazwę profilu,
-np. `glm53-flash/glm53-flash-uncensored.settings.local.json`. Jeżeli profil
-publikuje tylko jeden alias LiteLLM, wszystkie jego role Claude wskazują ten
-sam alias; profil wielomodelowy może rozdzielić role między własne aliasy.
+np. `glm53-flash/glm53-flash-uncensored.settings.local.json`. Wszystkie
+szablony z grupy `glm53-flash` używają dla ról Claude wspólnej nazwy
+`glm-5.3-flash-high`. Inne, w tym przyszłe profile wielomodelowe, mogą
+rozdzielać role między własne aliasy.
 
 ## Przygotowanie kontrolera
 

@@ -358,10 +358,15 @@ class ProductionProfileTests(unittest.TestCase):
                     min(context_tokens, 1_000_000)
                 )
                 expected["env"]["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"] = "90"
+                if model_directory == "glm53-flash":
+                    for key in model_keys:
+                        expected["env"][key] = "glm-5.3-flash-high"
                 self.assertEqual(template, expected)
                 aliases = profile["stack"]["litellm_aliases"]
-                if len(aliases) == 1:
-                    model_names = {template["env"][key] for key in model_keys}
+                model_names = {template["env"][key] for key in model_keys}
+                if model_directory == "glm53-flash":
+                    self.assertEqual(model_names, {"glm-5.3-flash-high"})
+                elif len(aliases) == 1:
                     self.assertEqual(model_names, {aliases[0]})
 
     def test_qwen_claude_stack_disables_unstable_long_context_thinking(self) -> None:
