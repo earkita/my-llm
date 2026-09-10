@@ -19,6 +19,12 @@ pin checkpointu, kompletną konfigurację runtime, topologię GPU, preset Claude
 Code i informację o zakresie walidacji. `extends` jest zabronione i walidator
 odrzuca każdy profil, w którym wystąpi.
 
+Szablony Claude Code są pogrupowane według rodziny modelu w
+`templates/.claude/MODEL/`. Wewnątrz katalogu każdy plik nosi nazwę profilu,
+np. `glm53-flash/glm53-flash-uncensored.settings.local.json`. Jeżeli profil
+publikuje tylko jeden alias LiteLLM, wszystkie jego role Claude wskazują ten
+sam alias; profil wielomodelowy może rozdzielić role między własne aliasy.
+
 ## Przygotowanie kontrolera
 
 ```bash

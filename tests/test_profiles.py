@@ -289,7 +289,7 @@ class ProductionProfileTests(unittest.TestCase):
             786432: "768k-vision",
             1048576: "1m",
         }
-        expected_variants: dict[tuple[str, str], tuple[dict, int]] = {}
+        profile_contexts: dict[str, dict[int, dict]] = {}
         profile_sources = [*PROFILE_NAMES, GLM_V029_EXPERIMENTS]
         for profile_source in profile_sources:
             profile = load_profile(profile_source)
@@ -303,32 +303,50 @@ class ProductionProfileTests(unittest.TestCase):
             )
             for runtime in runtimes:
                 context_tokens = runtime["limits"]["max_model_len"]
-                variant_name = variant_names[context_tokens]
-                expected_variants[(profile_name, variant_name)] = (
+                profile_contexts.setdefault(profile_name, {})[
+                    context_tokens
+                ] = profile
+
+        expected_templates: dict[tuple[str, str], tuple[dict, int]] = {}
+        for profile_name, contexts in profile_contexts.items():
+            model_directory = (
+                "glm53-flash"
+                if profile_name.startswith("glm53-flash")
+                else profile_name
+            )
+            for context_tokens, profile in contexts.items():
+                suffix = ""
+                if len(contexts) > 1:
+                    suffix = f"-{variant_names[context_tokens]}"
+                filename = f"{profile_name}{suffix}.settings.local.json"
+                expected_templates[(model_directory, filename)] = (
                     profile,
                     context_tokens,
                 )
 
         templates_root = ROOT / "templates" / ".claude"
-        actual_variants = {
-            (path.parent.parent.name, path.parent.name)
-            for path in templates_root.glob("*/*/settings.local.json")
+        actual_templates = {
+            (path.parent.name, path.name)
+            for path in templates_root.glob("*/*.settings.local.json")
         }
-        self.assertEqual(actual_variants, set(expected_variants))
+        self.assertEqual(actual_templates, set(expected_templates))
         self.assertFalse((templates_root / "settings.local.json").exists())
+        self.assertFalse(list(templates_root.glob("*/*/settings.local.json")))
 
-        for (profile_name, variant_name), (
+        model_keys = (
+            "ANTHROPIC_MODEL",
+            "ANTHROPIC_SMALL_FAST_MODEL",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL",
+        )
+        for (model_directory, filename), (
             profile,
             context_tokens,
-        ) in expected_variants.items():
-            with self.subTest(profile=profile_name, variant=variant_name):
+        ) in expected_templates.items():
+            with self.subTest(model=model_directory, template=filename):
                 template = json.loads(
-                    (
-                        templates_root
-                        / profile_name
-                        / variant_name
-                        / "settings.local.json"
-                    ).read_text()
+                    (templates_root / model_directory / filename).read_text()
                 )
                 expected = json.loads(
                     json.dumps(profile["stack"]["claude_settings"])
@@ -341,6 +359,10 @@ class ProductionProfileTests(unittest.TestCase):
                 )
                 expected["env"]["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"] = "90"
                 self.assertEqual(template, expected)
+                aliases = profile["stack"]["litellm_aliases"]
+                if len(aliases) == 1:
+                    model_names = {template["env"][key] for key in model_keys}
+                    self.assertEqual(model_names, {aliases[0]})
 
     def test_qwen_claude_stack_disables_unstable_long_context_thinking(self) -> None:
         settings = load_profile("qwen38-flash")["stack"]["claude_settings"]

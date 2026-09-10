@@ -88,12 +88,12 @@
       "source_runtime": "profiles/runtime/production/qwen38-flash-next-fp8-8x-cache-safe-mtp2.json",
       "source_runtime_sha256": "22b4431b0c4ecfd74cb08b89ab815292bf4ce78ab2d0b71aab0ca446484f9f04",
       "target_profile": "profiles/production/qwen38-flash.json",
-    "target_profile_sha256": "7af712298e2ae5876653672ee6346b480cd4c76599a42c479d2ec9202d3f1dde",
+    "target_profile_sha256": "ad04a7811e1bf5f4ab45268698d0e68abd8c3f47fe5b9bf259b978fdae132197",
       "intentional_changes": [
         "embedded stack preset",
         "GPU BDF order updated for the post-relocation host topology captured on 2026-09-02",
       "Claude Code defaults to the non-thinking Qwen alias because long-context reasoning loops under the current runtime",
-      "consolidated LiteLLM on the single qwen3.8-flash-next-fast alias"
+      "consolidated LiteLLM and every Claude Code model role on the single qwen3.8-flash-next-fast alias"
       ]
     }
   },
