@@ -1,5 +1,6 @@
 {
   "apiKeyHelper": "bash -c 'exec \"${MY_LLM_REPO_ROOT:-$HOME/ai/my-llm}/scripts/claude-litellm-key.sh\"'",
+  "totalTokensReminder": "off",
   "permissions": {
     "defaultMode": "acceptEdits"
   },
@@ -11,6 +12,7 @@
     "ANTHROPIC_DEFAULT_SONNET_MODEL": "qwen3.8-flash-next-fast",
     "ANTHROPIC_DEFAULT_OPUS_MODEL": "qwen3.8-flash-next-fast",
     "DISABLE_PROMPT_CACHING": "0",
+    "CLAUDE_CODE_TODO_REMINDER_MODE": "off",
     "CLAUDE_CODE_DISABLE_THINKING": "1",
     "MAX_THINKING_TOKENS": "0",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",

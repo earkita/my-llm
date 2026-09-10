@@ -193,6 +193,7 @@
     ],
     "claude_settings": {
       "apiKeyHelper": "bash -c 'exec \"${MY_LLM_REPO_ROOT:-$HOME/ai/my-llm}/scripts/claude-litellm-key.sh\"'",
+      "totalTokensReminder": "off",
       "permissions": {
         "defaultMode": "acceptEdits"
       },
@@ -204,6 +205,7 @@
         "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-v4-flash-thinking",
         "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4-flash-thinking",
         "DISABLE_PROMPT_CACHING": "1",
+        "CLAUDE_CODE_TODO_REMINDER_MODE": "off",
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
         "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
         "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "1048576"

@@ -150,6 +150,59 @@ class CompletionAccumulator:
         return _prefix_cache_delta(current, self.request_baseline)
 
 
+class LiveDecodeRate:
+    """Track wall-clock output-token throughput while the engine is running."""
+
+    def __init__(
+        self,
+        initial_tokens: float,
+        initial_time: float,
+        *,
+        active: bool,
+        window: float,
+    ) -> None:
+        self.previous_tokens = initial_tokens
+        self.previous_time = initial_time
+        self.previous_active = active
+        self.window = window
+        self.samples: deque[tuple[float, float]] = deque()
+
+    def observe(
+        self,
+        now: float,
+        tokens: float,
+        *,
+        active: bool,
+        request_completed: bool = False,
+    ) -> float:
+        if not active or request_completed:
+            self.samples.clear()
+            self.previous_tokens = tokens
+            self.previous_time = now
+            self.previous_active = active
+            return 0.0
+
+        if not self.previous_active:
+            self.samples.clear()
+
+        token_delta = max(tokens - self.previous_tokens, 0.0)
+        if token_delta and not self.samples:
+            self.samples.append((self.previous_time, self.previous_tokens))
+        if self.samples:
+            self.samples.append((now, tokens))
+            while len(self.samples) > 2 and now - self.samples[1][0] >= self.window:
+                self.samples.popleft()
+
+        self.previous_tokens = tokens
+        self.previous_time = now
+        self.previous_active = True
+        if len(self.samples) < 2:
+            return 0.0
+        oldest_time, oldest_tokens = self.samples[0]
+        elapsed = max(now - oldest_time, 1e-9)
+        return max(tokens - oldest_tokens, 0.0) / elapsed
+
+
 def _print(payload: dict[str, Any], *, json_lines: bool) -> None:
     if json_lines:
         print(json.dumps(payload, separators=(",", ":")), flush=True)
@@ -185,7 +238,8 @@ def _print(payload: dict[str, Any], *, json_lines: bool) -> None:
     print(
         f"{payload['timestamp']}  LIVE running={payload['running_requests']}  "
         f"waiting={payload['waiting_requests']}  kv={payload['kv_cache_percent']:6.2f}%  "
-        f"kv-growth~={payload['kv_growth_tokens_per_second']:8.1f} tok/s"
+        f"kv-growth~={payload['kv_growth_tokens_per_second']:8.1f} tok/s  "
+        f"decode~={payload['live_decode_tokens_per_second']:6.1f} tok/s"
         f"{live_cache_text}",
         flush=True,
     )
@@ -201,11 +255,19 @@ def follow(
     json_lines: bool,
 ) -> None:
     history: deque[tuple[float, float]] = deque()
-    accumulator = CompletionAccumulator(_metrics(url))
-    deadline = time.perf_counter()
+    initial = _metrics(url)
+    started_at = time.perf_counter()
+    accumulator = CompletionAccumulator(initial)
+    decode_rate = LiveDecodeRate(
+        initial["generation_tokens"],
+        started_at,
+        active=bool(initial["running_requests"]),
+        window=window,
+    )
+    deadline = started_at
     while True:
-        now = time.perf_counter()
         current = _metrics(url)
+        now = time.perf_counter()
         history.append((now, current["kv_cache_fraction"]))
         while len(history) > 1 and now - history[0][0] > window:
             history.popleft()
@@ -214,6 +276,12 @@ def follow(
         kv_growth = max(current["kv_cache_fraction"] - oldest_kv, 0.0)
         completion, completion_unavailable, active = accumulator.observe(current)
         request_cache = accumulator.request_cache(current)
+        live_decode = decode_rate.observe(
+            now,
+            current["generation_tokens"],
+            active=bool(current["running_requests"]),
+            request_completed=bool(completion or completion_unavailable),
+        )
         if include_idle or active or completion is not None or completion_unavailable:
             _print(
                 {
@@ -225,6 +293,7 @@ def follow(
                     * cache_capacity
                     / elapsed,
                     "kv_growth_window_seconds": elapsed,
+                    "live_decode_tokens_per_second": live_decode,
                     "completion": completion,
                     "completion_unavailable": completion_unavailable,
                     "request_cache": request_cache,

@@ -115,9 +115,12 @@ oczekujących żądań, zajęcie KV oraz wygładzoną estymatę wzrostu KV w okn
 zakończeniu wiersz `COMPLETE` wylicza z delt liczników dokładne server-side
 liczby tokenów, trafienia APC (`cached=HITS/QUERIES`), prefill tok/s, decode
 tok/s, TTFT i E2E. Bieżący wiersz `LIVE` pokazuje tę samą deltę APC od początku
-obserwowanego requestu, gdy licznik lookupów jest już dostępny. Gdy żądania się
-nakładają, wynik `COMPLETE` jest agregatem tych żądań. Pomiar obejmuje również
-ruch przechodzący przez LiteLLM.
+obserwowanego requestu oraz `decode~`, czyli kroczącą szybkość generowania
+wyliczoną z przyrostu rzeczywistych tokenów wyjściowych w ostatnich `--window`
+sekundach. Wartość zerowa przed pierwszym tokenem oznacza fazę prefill, a po
+zakończeniu miarodajnym wynikiem pozostaje dokładne `decode=` z `COMPLETE`.
+Gdy żądania się nakładają, wynik `COMPLETE` jest agregatem tych żądań. Pomiar
+obejmuje również ruch przechodzący przez LiteLLM.
 
 Na aktualnej maszynie monitor działa także jako odczytowa usługa użytkownika:
 

@@ -115,5 +115,68 @@ class CompletionAccumulatorTests(unittest.TestCase):
         )
 
 
+class LiveDecodeRateTests(unittest.TestCase):
+    def test_reports_rolling_decode_and_resets_between_requests(self) -> None:
+        tracker = MONITOR.LiveDecodeRate(
+            100,
+            0.0,
+            active=False,
+            window=10.0,
+        )
+
+        self.assertEqual(tracker.observe(1.0, 100, active=True), 0)
+        self.assertEqual(tracker.observe(2.0, 120, active=True), 20)
+        self.assertEqual(tracker.observe(3.0, 145, active=True), 22.5)
+        self.assertEqual(tracker.observe(4.0, 150, active=False), 0)
+        self.assertEqual(tracker.observe(5.0, 150, active=True), 0)
+        self.assertEqual(tracker.observe(6.0, 160, active=True), 10)
+
+    def test_limits_live_decode_to_the_requested_window(self) -> None:
+        tracker = MONITOR.LiveDecodeRate(
+            0,
+            0.0,
+            active=True,
+            window=2.0,
+        )
+
+        self.assertEqual(tracker.observe(1.0, 10, active=True), 10)
+        self.assertEqual(tracker.observe(2.0, 30, active=True), 15)
+        self.assertEqual(tracker.observe(3.0, 60, active=True), 25)
+
+    def test_waiting_request_does_not_carry_over_previous_decode(self) -> None:
+        tracker = MONITOR.LiveDecodeRate(
+            100,
+            0.0,
+            active=True,
+            window=10.0,
+        )
+
+        self.assertEqual(tracker.observe(1.0, 120, active=True), 20)
+        self.assertEqual(tracker.observe(2.0, 125, active=False), 0)
+        self.assertEqual(tracker.observe(3.0, 125, active=True), 0)
+        self.assertEqual(tracker.observe(4.0, 135, active=True), 10)
+
+    def test_completion_resets_decode_when_next_request_is_already_running(self) -> None:
+        tracker = MONITOR.LiveDecodeRate(
+            100,
+            0.0,
+            active=True,
+            window=10.0,
+        )
+
+        self.assertEqual(tracker.observe(1.0, 120, active=True), 20)
+        self.assertEqual(
+            tracker.observe(
+                2.0,
+                125,
+                active=True,
+                request_completed=True,
+            ),
+            0,
+        )
+        self.assertEqual(tracker.observe(3.0, 125, active=True), 0)
+        self.assertEqual(tracker.observe(4.0, 135, active=True), 10)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -41,9 +41,10 @@ aktualizować w tym samym commicie co profil.
 - `--prefix-cache-retention-interval 1280` zachowuje checkpoint na każdej
   wspólnej stronie cache; domyślne `0` nie dawało trafień w układzie
   Mamba `16` + MLA/DFlash `1280`;
-- szablon Claude Code wymusza `CLAUDE_CODE_TOTAL_TOKENS_REMINDER=off`, ponieważ
-  zmienny licznik w system prompt przerywał identyczny prefiks po 34 560
-  tokenach; ustawienie obowiązuje po uruchomieniu nowej sesji Claude Code;
+- szablon Claude Code wymusza `"totalTokensReminder": "off"` na głównym
+  poziomie ustawień, ponieważ zmienny licznik w system prompt przerywał
+  identyczny prefiks po 34 560 tokenach; ustawienie obowiązuje po uruchomieniu
+  nowej sesji Claude Code;
 - limit kontekstu `524288` zapewnia zapas względem pojemności hybrydowego cache;
   zachowuje dotychczasową rezerwę KV `4960000000`;
 - checkpoint jest ładowany z 62 shardów Safetensors;

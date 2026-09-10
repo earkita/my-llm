@@ -34,8 +34,9 @@ Ten opis należy aktualizować w tym samym commicie co profil.
 - scheduler jest synchroniczny i działa z `enforce_eager`;
 - natywny vLLM automatic prefix caching jest włączony przez
   `--enable-prefix-caching` oraz `--prefix-cache-retention-interval 1280`;
-- szablon Claude Code wymusza `CLAUDE_CODE_TOTAL_TOKENS_REMINDER=off`, aby
-  zmienny licznik w system prompt nie unieważniał dalszej historii APC;
+- szablon Claude Code wymusza `"totalTokensReminder": "off"` na głównym
+  poziomie ustawień, aby zmienny licznik w system prompt nie unieważniał
+  dalszej historii APC;
   API raportuje `usage.prompt_tokens_details.cached_tokens`, a `/metrics`
   udostępnia `vllm:prefix_cache_queries_total` i
   `vllm:prefix_cache_hits_total`;

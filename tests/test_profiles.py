@@ -1030,14 +1030,34 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(runtime["moe_backend"], "emulation")
         self.assertEqual(runtime["linear_backend"], "emulation")
 
-    def test_glm_claude_disables_changing_total_token_reminder(self) -> None:
-        for profile_name in ("glm53-flash", "glm53-flash-uncensored"):
-            with self.subTest(profile=profile_name):
-                environment = load_profile(profile_name)["stack"][
-                    "claude_settings"
-                ]["env"]
+    def test_claude_settings_disable_dynamic_reminders(self) -> None:
+        profile_paths = [
+            *(ROOT / "profiles" / "production").glob("*.json"),
+            *(ROOT / "profiles" / "dev").glob("*.json"),
+        ]
+        for path in profile_paths:
+            with self.subTest(profile=path.stem):
+                settings = load_profile(str(path))["stack"]["claude_settings"]
+                self.assertEqual(settings["totalTokensReminder"], "off")
                 self.assertEqual(
-                    environment["CLAUDE_CODE_TOTAL_TOKENS_REMINDER"], "off"
+                    settings["env"]["CLAUDE_CODE_TODO_REMINDER_MODE"], "off"
+                )
+                self.assertNotIn(
+                    "CLAUDE_CODE_TOTAL_TOKENS_REMINDER", settings["env"]
+                )
+
+        template_paths = (ROOT / "templates" / ".claude").glob(
+            "*/*.settings.local.json"
+        )
+        for path in template_paths:
+            with self.subTest(template=str(path.relative_to(ROOT))):
+                settings = json.loads(path.read_text())
+                self.assertEqual(settings["totalTokensReminder"], "off")
+                self.assertEqual(
+                    settings["env"]["CLAUDE_CODE_TODO_REMINDER_MODE"], "off"
+                )
+                self.assertNotIn(
+                    "CLAUDE_CODE_TOTAL_TOKENS_REMINDER", settings["env"]
                 )
 
     def test_glm_model_download_includes_its_chat_template(self) -> None:

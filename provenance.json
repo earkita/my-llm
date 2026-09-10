@@ -10,12 +10,13 @@
       "source_runtime": "profiles/runtime/production/deepseek-v4-flash-vllm-v0280-6xr9700-tp1-pp6-dspark-k5-1m.json",
       "source_runtime_sha256": "46268b8c9fa49cd46469d0fb2d3ec8e38e535f6139c4f00fc94b18b3cb227c83",
       "target_profile": "profiles/production/deepseek-v4-flash.json",
-    "target_profile_sha256": "e70849c5b84a9078827143c32834df4da53248d83b7806b19fd46cb031094316",
+    "target_profile_sha256": "b262f565f683ca87f54baa956838cf4c64440efb9f95525392c08f769670e305",
       "intentional_changes": [
         "default_directory points at the verified local /mnt/ai checkpoint",
         "embedded stack preset",
       "GPU BDF order updated for the post-relocation host topology captured on 2026-09-02",
-      "consolidated LiteLLM and Claude Code on the single deepseek-v4-flash-thinking alias"
+      "consolidated LiteLLM and Claude Code on the single deepseek-v4-flash-thinking alias",
+      "disabled Claude Code's changing total-token and periodic TODO reminders"
       ]
     },
     "glm53-flash": {
@@ -42,7 +43,7 @@
         "glm_required_first_tools_pr55558_head": "bcca85b9083512bccdb039a1770834ee6e246646"
       },
       "target_profile": "profiles/production/glm53-flash.json",
-      "target_profile_sha256": "a40276688dff0aaedbcb1893fa9cfaac895459e7b85bc5e3c1dd896619c1bb1b",
+      "target_profile_sha256": "515fd0853ebfb6c67db07b6c969ba3696581171bf48e4605f55dd7bfb7e8e802",
       "intentional_changes": [
         "replaced the llama.cpp GGUF deployment with the AMD Quark MXFP4 checkpoint",
         "migrated the isolated native recipe to ROCm SDK 10.0.0, PyTorch 2.13.0+rocm10.0.0, AITER v0.1.21 and vLLM main 7fbd44cbe",
@@ -55,7 +56,7 @@
         "consolidated LiteLLM and every Claude Code model role on the single glm-5.3-flash-high alias, capped at 524288 tokens",
         "enabled native vLLM automatic prefix caching with cached-token details and a 1280-token retention interval, without LMCache or CPU/NVMe KV offload",
         "kept the v0.31-only output-tiled BN8 setting out of the canonical runtime",
-        "disabled Claude Code's changing total-token reminder so transparent vLLM APC can retain the conversation prefix",
+        "disabled Claude Code's changing total-token and periodic TODO reminders so transparent vLLM APC can retain the conversation prefix",
         "set max_num_batched_tokens to 2048 based on the controlled 32K prefill and TTFT comparison"
       ]
     },
@@ -65,7 +66,7 @@
       "source_runtime": "https://github.com/vllm-project/vllm/commit/7fbd44cbe0a90b9c8fd3a94a0f0401ac4b1bc719",
       "source_runtime_sha256": "7fbd44cbe0a90b9c8fd3a94a0f0401ac4b1bc719",
       "target_profile": "profiles/production/glm53-flash-uncensored.json",
-      "target_profile_sha256": "51a3da5c25f1852149232750e670acab11ae59cf7f34ac41900c0521b521ffd3",
+      "target_profile_sha256": "1902af99d6ec331812be58f25b1517970d6af6670cc59c7c91ebb4597ddeeeeb",
       "intentional_changes": [
         "converted the local UNCENSORED FP8 checkpoint to AMD Quark MXFP4 with recorded conversion provenance",
         "bound the derived 62-shard checkpoint to exact file hashes and source revision",
@@ -73,7 +74,7 @@
         "bound the shared glm-5.3-flash-high LiteLLM and Claude Code alias dynamically to the active checkpoint",
         "enabled native vLLM automatic prefix caching and cached-token API details without LMCache or CPU/NVMe KV offload, setting the production context limit to 524288 while preserving the fixed KV allocation",
         "set the native prefix-cache retention interval to the 1280-token hybrid page because vLLM v0.29 zero-retention mode did not preserve reusable Mamba and DFlash boundaries",
-        "disabled Claude Code's changing total-token reminder so transparent vLLM APC can retain the conversation prefix",
+        "disabled Claude Code's changing total-token and periodic TODO reminders so transparent vLLM APC can retain the conversation prefix",
         "set max_num_batched_tokens to 2048 based on the controlled 32K prefill and TTFT comparison"
       ]
     },
@@ -83,12 +84,13 @@
       "source_runtime": "profiles/runtime/production/qwen38-flash-next-fp8-8x-cache-safe-mtp2.json",
       "source_runtime_sha256": "22b4431b0c4ecfd74cb08b89ab815292bf4ce78ab2d0b71aab0ca446484f9f04",
       "target_profile": "profiles/production/qwen38-flash.json",
-    "target_profile_sha256": "ad04a7811e1bf5f4ab45268698d0e68abd8c3f47fe5b9bf259b978fdae132197",
+    "target_profile_sha256": "39b23d0c15b4ebc62a7e0830d1c16b62760c39ac6099302c934c06b2e323c6b3",
       "intentional_changes": [
         "embedded stack preset",
         "GPU BDF order updated for the post-relocation host topology captured on 2026-09-02",
       "Claude Code defaults to the non-thinking Qwen alias because long-context reasoning loops under the current runtime",
-      "consolidated LiteLLM and every Claude Code model role on the single qwen3.8-flash-next-fast alias"
+      "consolidated LiteLLM and every Claude Code model role on the single qwen3.8-flash-next-fast alias",
+      "disabled Claude Code's changing total-token and periodic TODO reminders"
       ]
     }
   },
