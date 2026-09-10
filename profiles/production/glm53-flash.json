@@ -2,7 +2,7 @@
   "schema_version": 1,
   "name": "glm53-flash",
   "status": "production-ready",
-  "description": "Production GLM-5.3-Flash Quark MXFP4 on ROCm 10 with output-tiled BN8 GEMV, DFlash2 K4, FP8 KV, 768K context, and Vision",
+  "description": "Production GLM-5.3-Flash Quark MXFP4 on the stable v0.29 ROCm 10 runtime with DFlash2 K4, FP8 KV, 768K context, and Vision",
   "model": {
     "schema_version": 1,
     "name": "glm53-flash-quark-mxfp4",
@@ -67,10 +67,10 @@
   },
   "runtime": {
     "schema_version": 1,
-    "name": "glm53-flash-quark-mxfp4-rocm10-mrv2-8xr9700-tp8-noep-mxfp4gemv-tiledbn8-dflash2-k4-fp8kv-768k-vision-weights",
+    "name": "glm53-flash-quark-mxfp4-rocm10-mrv2-8xr9700-tp8-noep-mxfp4gemv-dflash2-k4-fp8kv-768k-vision-weights",
     "status": "production-ready",
-    "recipe": "vllm_glm53flashrocm10_v0.31",
-    "description": "Qualified ROCm 10 production runtime with output-tiled BN8 packed MXFP4 GEMV, DFlash2 K4, TP8 without expert parallelism, FP8 KV, 768K context, and TP8-sharded Vision weights",
+    "recipe": "vllm_glm53flashrocm10_v0.29",
+    "description": "Stable ROCm 10 production runtime with packed RDNA4 MXFP4 GEMV, DFlash2 K4, TP8 without expert parallelism, FP8 KV, 768K context, and TP8-sharded Vision weights",
     "required_model_family": "glm5next",
     "required_patches": [
       "0001",
@@ -97,8 +97,7 @@
       "0022",
       "0023",
       "0024",
-      "0025",
-      "0026"
+      "0025"
     ],
     "gpu_order": [
       0,
@@ -184,99 +183,6 @@
       "kv_cache_dtype": "fp8",
       "enforce_eager": true
     },
-    "experimental_modes": {
-      "prefix-cache": {
-        "status": "diagnostic-only",
-        "runtime_name": "glm53-flash-quark-mxfp4-rocm10-mrv2-8xr9700-tp8-noep-mxfp4gemv-tiledbn8-dflash2-k4-fp8kv-768k-vision-prefixcache",
-        "reason": "Deployment-exact prefix-cache qualification candidate; only automatic prefix caching differs from the production runtime.",
-        "runtime_overrides": {
-          "cache": {
-            "dtype": "fp8",
-            "block_size": 16,
-            "prefix_cache": true,
-            "cpu_offload_gb": 0
-          }
-        }
-      },
-      "prefix-cache-offload": {
-        "status": "production-ready",
-        "runtime_name": "glm53-flash-quark-mxfp4-rocm10-mrv2-8xr9700-tp8-noep-mxfp4gemv-tiledbn8-dflash2-k4-fp8kv-695k-vision-prefixcache-offload32g-fs128g",
-        "reason": "Production-qualified persistent prefix cache with a 32 GiB CPU primary tier, capacity-guarded 128 GiB filesystem tier, and a 695040-token context aligned to the 1280-token hybrid cache page.",
-        "runtime_overrides": {
-          "limits": {
-            "max_model_len": 695040,
-            "max_num_seqs": 1,
-            "max_num_batched_tokens": 4096,
-            "gpu_memory_utilization": 0.995,
-            "kv_cache_memory_bytes": 4420000000
-          },
-          "environment": {
-            "VLLM_TARGET_DEVICE": "rocm",
-            "VLLM_USE_V2_MODEL_RUNNER": "1",
-            "VLLM_ROCM_USE_AITER": "1",
-            "VLLM_ROCM_USE_AITER_FP8BMM": "0",
-            "VLLM_ROCM_USE_AITER_FP4BMM": "0",
-            "VLLM_ROCM_USE_AITER_FP4_ASM_GEMM": "0",
-            "VLLM_ROCM_USE_TRITON_MXFP4_GEMV": "1",
-            "VLLM_DISABLE_PYNCCL": "1",
-            "VLLM_KV_CACHE_LAYOUT": "LBHNC",
-            "SAFETENSORS_FAST_GPU": "1",
-            "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:False",
-            "VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS": "900",
-            "ROCBLAS_USE_HIPBLASLT": "0",
-            "VLLM_ROCM_MXFP4_GEMV_BLOCK_N": "8"
-          },
-          "cache": {
-            "dtype": "fp8",
-            "block_size": 16,
-            "prefix_cache": true,
-            "cpu_offload_gb": 0
-          },
-          "kv_transfer_config": {
-            "kv_connector": "OffloadingConnector",
-            "kv_role": "kv_both",
-            "kv_connector_extra_config": {
-              "cpu_bytes_to_use": 34359738368,
-              "spec_name": "TieringOffloadingSpec",
-              "eviction_policy": "lru",
-              "secondary_tiers": [
-                {
-                  "type": "BoundedFileSystemTierManager",
-                  "module_path": "r9700.vllm_bootstrap.bounded_fs_tier",
-                  "root_dir": "/mnt/ai/r9700-kv-cache/glm53-flash-v031",
-                  "max_bytes": 137438953472,
-                  "min_free_bytes": 206158430208,
-                  "n_read_threads": 16,
-                  "n_write_threads": 16
-                }
-              ]
-            }
-          }
-        }
-      },
-      "scalar-gemv-rollback": {
-        "status": "diagnostic-only",
-        "runtime_name": "glm53-flash-quark-mxfp4-rocm10-mrv2-8xr9700-tp8-noep-mxfp4gemv-scalar-dflash2-k4-fp8kv-768k-vision-weights",
-        "reason": "Exact scalar-output packed GEMV rollback within the same v0.31 recipe.",
-        "runtime_overrides": {
-          "environment": {
-            "VLLM_TARGET_DEVICE": "rocm",
-            "VLLM_USE_V2_MODEL_RUNNER": "1",
-            "VLLM_ROCM_USE_AITER": "1",
-            "VLLM_ROCM_USE_AITER_FP8BMM": "0",
-            "VLLM_ROCM_USE_AITER_FP4BMM": "0",
-            "VLLM_ROCM_USE_AITER_FP4_ASM_GEMM": "0",
-            "VLLM_ROCM_USE_TRITON_MXFP4_GEMV": "1",
-            "VLLM_DISABLE_PYNCCL": "1",
-            "VLLM_KV_CACHE_LAYOUT": "LBHNC",
-            "SAFETENSORS_FAST_GPU": "1",
-            "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
-            "ROCBLAS_USE_HIPBLASLT": "0",
-            "VLLM_ROCM_MXFP4_GEMV_BLOCK_N": "0"
-          }
-        }
-      }
-    },
     "environment": {
       "VLLM_TARGET_DEVICE": "rocm",
       "VLLM_USE_V2_MODEL_RUNNER": "1",
@@ -289,8 +195,7 @@
       "VLLM_KV_CACHE_LAYOUT": "LBHNC",
       "SAFETENSORS_FAST_GPU": "1",
       "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
-      "ROCBLAS_USE_HIPBLASLT": "0",
-      "VLLM_ROCM_MXFP4_GEMV_BLOCK_N": "8"
+      "ROCBLAS_USE_HIPBLASLT": "0"
     },
     "hardware_topology": {
       "captured_on": "2026-09-05",
@@ -299,7 +204,7 @@
     }
   },
   "stack": {
-    "description": "Production GLM-5.3 Flash ROCm 10 output-tiled MXFP4 GEMV stack",
+    "description": "Production GLM-5.3 Flash ROCm 10 v0.29 MXFP4 GEMV stack",
     "litellm_aliases": [
       "glm-5.3-flash-high"
     ],
@@ -322,17 +227,17 @@
         "DISABLE_PROMPT_CACHING": "1",
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
         "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
-        "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "695040",
-        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "695040",
+        "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "786432",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "786432",
         "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "90"
       }
     }
   },
   "verification": {
-    "scope": "gfx1201-v031-output-tiled-mxfp4-gemv-production",
+    "scope": "gfx1201-v029-mxfp4-gemv-768k-vision-production",
     "verified_context": 786432,
-    "verified_on": "2026-09-09",
+    "verified_on": "2026-09-08",
     "best_runtime_mode": "default",
-    "notes": "Qualified on eight gfx1201 R9700 GPUs on 2026-09-09. Focused kernel correctness passed 16/16 and BN8 matched scalar output; exact-shape microbenchmarks reached 1.039x scalar on the TP8/DFlash K4 up projection and 2.261x on the down projection. In a deployment-exact nine-request 32768-by-128 C1 A/B, BN8 improved mean decode by 1.54% and minimum decode by 1.20%, while mean TTFT changed by +0.09% and mean E2E improved by 0.05%. API and Vision smoke passed, and 256K NIAH passed 4/4 placements. The exact 786368-prompt plus 64-reserved-token boundary returned the expected needle with 786368 prompt tokens in 746.09 seconds; 746 one-second telemetry samples showed at least 99.84% mean GPU activity, peak power 238 W, at least 302.93 GB host memory available, and a minimum reported VRAM margin of 20 MiB at the exact boundary. No new MCE, watchdog, OOM, GPU reset, or runtime traceback was observed during the qualification window. The self-contained glm53-flash-v029-rollback profile preserves the prior recipe; use its mxfp4-gemv-dflash2-k4-fp8-768k-vision-weights mode for topology-exact rollback."
+    "notes": "Promoted from the self-contained v0.29 rollback profile at operator request as the last known stable deployment. Uses packed RDNA4 MXFP4 GEMV, DFlash2 K4, TP8 without expert parallelism, FP8 KV, a 786432-token context, and TP8-sharded Vision weights. Prefix caching and the v0.31-only output-tiled BN8 path are disabled."
   }
 }

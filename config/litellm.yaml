@@ -18,7 +18,7 @@ model_list:
       api_key: os.environ/HOSTED_INFERENCE_API_KEY
       reasoning_effort: high
     model_info:
-      max_input_tokens: 695040
+      max_input_tokens: 786432
       supports_reasoning: true
       supports_adaptive_thinking: true
       supports_output_config: true

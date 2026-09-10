@@ -188,12 +188,12 @@ class ProductionProfileTests(unittest.TestCase):
     def test_glm_uses_an_isolated_repo_local_vllm_recipe(self) -> None:
         runtime = load_profile(GLM_PROFILE)["runtime"]
         manifest = json.loads(
-            (ROOT / "manifest/vllm_glm53flashrocm10_v0.31.json").read_text()
+            (ROOT / "manifest/vllm_glm53flashrocm10_v0.29.json").read_text()
         )
-        self.assertEqual(runtime["recipe"], "vllm_glm53flashrocm10_v0.31")
+        self.assertEqual(runtime["recipe"], "vllm_glm53flashrocm10_v0.29")
         self.assertEqual(
             manifest["environment"]["venv"],
-            ".runtime/recipes/vllm_glm53flashrocm10_v0.31/venv",
+            ".runtime/recipes/vllm_glm53flashrocm10_v0.29/venv",
         )
         self.assertEqual(
             manifest["sources"]["vllm"]["repository"],
@@ -233,7 +233,7 @@ class ProductionProfileTests(unittest.TestCase):
             "\n  - model_name:", 1
         )[0]
         self.assertIn("model: anthropic/glm-5.3-flash-quark-mxfp4", block)
-        self.assertIn("max_input_tokens: 695040", block)
+        self.assertIn("max_input_tokens: 786432", block)
 
     def test_litellm_forces_strict_glm_tools_without_rewriting_schemas(self) -> None:
         schema = {
@@ -448,7 +448,7 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(default_runtime["cache"]["dtype"], "fp8")
         self.assertEqual(speculative["model_artifact"], "dflash2-drafter")
         self.assertEqual(speculative["method"], "dflash")
-        # K4 won the representative decode A/B; BN8 won the tiled kernel gate.
+        # K4 is the stable deployment setting for this rollback.
         self.assertEqual(speculative["num_speculative_tokens"], 4)
         self.assertEqual(speculative["draft_tensor_parallel_size"], 8)
         self.assertEqual(speculative["attention_backend"], "TRITON_ATTN")
@@ -459,7 +459,7 @@ class ProductionProfileTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            default_runtime["required_patches"][-18:],
+            default_runtime["required_patches"][-17:],
             [
                 "0009",
                 "0010",
@@ -478,7 +478,6 @@ class ProductionProfileTests(unittest.TestCase):
                 "0023",
                 "0024",
                 "0025",
-                "0026",
             ],
         )
         self.assertTrue(
@@ -504,7 +503,6 @@ class ProductionProfileTests(unittest.TestCase):
                 "0023",
                 "0024",
                 "0025",
-                "0026",
             }.issubset(default_runtime["required_patches"])
         )
 
@@ -520,17 +518,18 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertTrue({"0026", "1001"}.issubset(runtime["required_patches"]))
 
         production = load_profile(GLM_PROFILE)["runtime"]
-        self.assertEqual(production["recipe"], "vllm_glm53flashrocm10_v0.31")
+        self.assertEqual(production["recipe"], "vllm_glm53flashrocm10_v0.29")
         self.assertNotIn("VLLM_ROCM_USE_GLUON_SPARSE_MLA", production["environment"])
 
-    def test_glm_tiled_mxfp4_gemv_is_the_qualified_default(self) -> None:
+    def test_glm_v029_mxfp4_gemv_768k_vision_is_the_default(self) -> None:
         profile = load_profile(GLM_PROFILE)
         runtime = profile["runtime"]
         self.assertEqual(profile["status"], "production-ready")
         self.assertEqual(runtime["status"], "production-ready")
-        self.assertEqual(runtime["recipe"], "vllm_glm53flashrocm10_v0.31")
-        self.assertEqual(runtime["environment"]["VLLM_ROCM_MXFP4_GEMV_BLOCK_N"], "8")
-        self.assertIn("0026", runtime["required_patches"])
+        self.assertEqual(runtime["recipe"], "vllm_glm53flashrocm10_v0.29")
+        self.assertNotIn("VLLM_ROCM_MXFP4_GEMV_BLOCK_N", runtime["environment"])
+        self.assertNotIn("0026", runtime["required_patches"])
+        self.assertNotIn("experimental_modes", runtime)
         self.assertEqual(runtime["limits"]["max_model_len"], 786432)
         self.assertEqual(runtime["limits"]["max_num_batched_tokens"], 4096)
         self.assertEqual(runtime["limits"]["kv_cache_memory_bytes"], 4960000000)
@@ -560,103 +559,8 @@ class ProductionProfileTests(unittest.TestCase):
             profile["stack"]["claude_settings"]["env"][
                 "CLAUDE_CODE_MAX_CONTEXT_TOKENS"
             ],
-            "695040",
+            "786432",
         )
-
-        scalar = runtime["experimental_modes"]["scalar-gemv-rollback"]
-        self.assertEqual(
-            scalar["runtime_overrides"]["environment"][
-                "VLLM_ROCM_MXFP4_GEMV_BLOCK_N"
-            ],
-            "0",
-        )
-        resolved_scalar = load_runtime(
-            GLM_PROFILE,
-            "scalar-gemv-rollback",
-        )
-        self.assertEqual(
-            resolved_scalar["environment"]["VLLM_TARGET_DEVICE"], "rocm"
-        )
-        self.assertEqual(
-            resolved_scalar["environment"]["VLLM_ROCM_MXFP4_GEMV_BLOCK_N"], "0"
-        )
-        self.assertEqual(resolved_scalar["limits"], runtime["limits"])
-        self.assertEqual(resolved_scalar["multimodal"], runtime["multimodal"])
-
-        prefix_cache = runtime["experimental_modes"]["prefix-cache"]
-        self.assertEqual(prefix_cache["status"], "diagnostic-only")
-        self.assertEqual(
-            set(prefix_cache["runtime_overrides"]),
-            {"cache"},
-        )
-        resolved_prefix_cache = load_runtime(GLM_PROFILE, "prefix-cache")
-        self.assertTrue(resolved_prefix_cache["cache"]["prefix_cache"])
-        self.assertEqual(resolved_prefix_cache["cache"]["dtype"], "fp8")
-        self.assertEqual(resolved_prefix_cache["cache"]["block_size"], 16)
-        self.assertEqual(resolved_prefix_cache["cache"]["cpu_offload_gb"], 0)
-        self.assertEqual(resolved_prefix_cache["limits"], runtime["limits"])
-        self.assertEqual(
-            resolved_prefix_cache["speculative_config"],
-            runtime["speculative_config"],
-        )
-        self.assertEqual(
-            resolved_prefix_cache["multimodal"], runtime["multimodal"]
-        )
-        prefix_cache_command = build_command(
-            profile["model"],
-            resolved_prefix_cache,
-            Path("/models/glm"),
-            "127.0.0.1",
-            8000,
-        )
-        self.assertIn("--enable-prefix-caching", prefix_cache_command)
-        self.assertNotIn("--no-enable-prefix-caching", prefix_cache_command)
-
-        offload = runtime["experimental_modes"]["prefix-cache-offload"]
-        self.assertEqual(offload["status"], "production-ready")
-        self.assertEqual(
-            set(offload["runtime_overrides"]),
-            {"limits", "environment", "cache", "kv_transfer_config"},
-        )
-        resolved_offload = load_runtime(GLM_PROFILE, "prefix-cache-offload")
-        self.assertTrue(resolved_offload["cache"]["prefix_cache"])
-        self.assertEqual(
-            resolved_offload["environment"]["PYTORCH_CUDA_ALLOC_CONF"],
-            "expandable_segments:False",
-        )
-        expected_environment = dict(runtime["environment"])
-        expected_environment["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:False"
-        expected_environment["VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS"] = "900"
-        self.assertEqual(resolved_offload["environment"], expected_environment)
-        expected_limits = dict(runtime["limits"])
-        expected_limits["max_model_len"] = 695_040
-        expected_limits["kv_cache_memory_bytes"] = 4_420_000_000
-        self.assertEqual(resolved_offload["limits"], expected_limits)
-        self.assertEqual(
-            resolved_offload["speculative_config"], runtime["speculative_config"]
-        )
-        transfer = resolved_offload["kv_transfer_config"]
-        self.assertEqual(transfer["kv_connector"], "OffloadingConnector")
-        self.assertEqual(transfer["kv_role"], "kv_both")
-        extra = transfer["kv_connector_extra_config"]
-        self.assertEqual(extra["cpu_bytes_to_use"], 32 * 1024**3)
-        self.assertEqual(extra["spec_name"], "TieringOffloadingSpec")
-        tier = extra["secondary_tiers"][0]
-        self.assertEqual(tier["max_bytes"], 128 * 1024**3)
-        self.assertEqual(tier["min_free_bytes"], 192 * 1024**3)
-        self.assertEqual(tier["type"], "BoundedFileSystemTierManager")
-        offload_command = build_command(
-            profile["model"],
-            resolved_offload,
-            Path("/models/glm"),
-            "127.0.0.1",
-            8000,
-        )
-        self.assertIn("--enable-prefix-caching", offload_command)
-        transfer_json = offload_command[
-            offload_command.index("--kv-transfer-config") + 1
-        ]
-        self.assertEqual(json.loads(transfer_json), transfer)
 
         rollback = load_profile(GLM_ROLLBACK_PROFILE)["runtime"]
         self.assertEqual(rollback["recipe"], "vllm_glm53flashrocm10_v0.29")
@@ -935,7 +839,7 @@ class ProductionProfileTests(unittest.TestCase):
         for key in ("parallel", "limits", "cache", "speculative_config"):
             self.assertEqual(workflow_c4_async[key], workflow_c4[key])
 
-    def test_rocm10_glm_defaults_to_tiled_gemv_fp8_768k_vision(self) -> None:
+    def test_rocm10_glm_defaults_to_v029_gemv_fp8_768k_vision(self) -> None:
         profile = load_profile(GLM_PROFILE)
         baseline = profile["runtime"]
         self.assertEqual(baseline["speculative_config"]["method"], "dflash")
@@ -958,9 +862,7 @@ class ProductionProfileTests(unittest.TestCase):
         )
         self.assertEqual(baseline["cache"]["dtype"], "fp8")
         self.assertFalse(baseline["multimodal"]["language_model_only"])
-        self.assertEqual(
-            baseline["environment"]["VLLM_ROCM_MXFP4_GEMV_BLOCK_N"], "8"
-        )
+        self.assertNotIn("VLLM_ROCM_MXFP4_GEMV_BLOCK_N", baseline["environment"])
 
         command = build_command(
             profile["model"],

@@ -42,26 +42,18 @@
         "glm_required_first_tools_pr55558_head": "bcca85b9083512bccdb039a1770834ee6e246646"
       },
       "target_profile": "profiles/production/glm53-flash.json",
-      "target_profile_sha256": "27e2ffa970c7edd2fe16ed47e5dfc86767ed8b4981aaa3442fda45604dbb4fe9",
+      "target_profile_sha256": "4f0aa2e320c877cdba39712e95a932156a9713946de040cdf35c4919a7db40c5",
       "intentional_changes": [
         "replaced the llama.cpp GGUF deployment with the AMD Quark MXFP4 checkpoint",
         "migrated the isolated native recipe to ROCm SDK 10.0.0, PyTorch 2.13.0+rocm10.0.0, AITER v0.1.21 and vLLM main 7fbd44cbe",
         "kept 25 ordered vLLM patches required by the selected ROCm 10 sources, including the RDNA4 Triton sparse-MLA readers, non-persistent chunked-prefill fallback, shuffled physical kpool decode, an opt-in packed MXFP4 decode GEMV, duplicate GLM router-GEMM removal, and required-first GLM tool schemas",
         "replaced the former ROCm 7.14 glm53-flash profile with the qualified ROCm 10 deployment",
-        "previously promoted packed RDNA4 MXFP4 decode GEMV with DFlash2 K4, TP8 without EP, FP8 KV, 1048576 tokens and a 2048-token chunked-prefill budget before the v0.31 tiled-GEMV qualification",
-        "retained DFlash2 K3 and K7 as rollback comparators and the packed GEMV DFlash2 K7 BF16-KV 262144-token configuration as an explicit fallback mode",
-        "added opt-in async-scheduling A/B modes for the default K4 FP8-KV 1M BT2048 runtime and the K2 FP8-KV 256K concurrency-4 workflow runtime",
-        "added a diagnostic DFlash2 K2 FP8-KV 262144-token concurrency-4 workflow mode that keeps the aggregate context and sparse-indexer workspace bound at 1M tokens",
-        "added an opt-in 768K vision mode limited to eight images and 4096 image tokens per image, with the BF16 vision encoder weights sharded across TP8, Triton ViT attention for RDNA4, and a reduced fixed KV reservation",
+        "promoted the v0.29 packed-GEMV DFlash2 K4 FP8-KV 768K Vision mode as the canonical production runtime",
         "updated the final three AMD GPU BDFs for the current post-reseat KFD topology",
         "removed the superseded ROCm 7.14 GLM recipe and profile",
-      "promoted the v0.31 output-tiled BN8 MXFP4 GEMV after a deployment-exact nine-request A/B improved mean decode by 1.54 percent and minimum decode by 1.20 percent versus scalar",
-      "qualified API, Vision, four 256K NIAH placements, and the exact 786432-token boundary with 746 one-second telemetry samples and no new CPU or GPU runtime error",
-      "configured Claude Code auto-compaction at 90 percent of the qualified 768K context window",
-      "consolidated LiteLLM and every Claude Code model role on the single glm-5.3-flash-high alias, capped at the production-qualified 695040-token boundary",
-      "preserved the prior v0.29 deployment as the self-contained glm53-flash-v029-rollback profile",
-      "added an opt-in deployment-exact prefix-cache qualification mode without changing the production default",
-      "added a production-qualified OffloadingConnector mode with 32 GiB RAM, stable non-expandable KV allocations, a 695040-token boundary aligned to 543 hybrid 1280-token pages and one page below measured capacity, a 4.42 GB fixed KV allocation, a capacity-guarded 128 GiB filesystem tier, preloaded ROCm BF16 BLAS kernels, scheduler liveness for asynchronous filesystem lookups, correct preservation of prompt-only EAGLE chunks in fused prefill/decode steps, and one retained aligned Mamba state at the EAGLE fallback boundary"
+        "configured Claude Code auto-compaction at 90 percent of the 768K context window",
+        "consolidated LiteLLM and every Claude Code model role on the single glm-5.3-flash-high alias, capped at 786432 tokens",
+        "disabled prefix caching and removed the v0.31-only output-tiled BN8 setting from the canonical runtime"
       ]
     },
     "glm53-flash-v029-rollback": {
