@@ -1,0 +1,361 @@
+diff --git a/tests/v1/kv_connector/unit/offloading_connector/test_config.py b/tests/v1/kv_connector/unit/offloading_connector/test_config.py
+index cd53560..2c3b7c4 100644
+--- a/tests/v1/kv_connector/unit/offloading_connector/test_config.py
++++ b/tests/v1/kv_connector/unit/offloading_connector/test_config.py
+@@ -20,6 +20,7 @@ from vllm.platforms import current_platform
+ from vllm.v1.kv_cache_interface import (
+     FullAttentionSpec,
+     HiddenStateCacheSpec,
++    KpoolTailSpec,
+     KVCacheConfig,
+     KVCacheGroupSpec,
+     KVCacheSpec,
+@@ -271,6 +272,26 @@ def _make_mamba_hybrid_kv_cache_config() -> KVCacheConfig:
+     )
+ 
+ 
++def _make_kpool_tail_hybrid_kv_cache_config() -> KVCacheConfig:
++    return KVCacheConfig(
++        num_blocks=4,
++        kv_cache_tensors=[],
++        kv_cache_groups=[
++            KVCacheGroupSpec(["full_layer"], _full_attention_spec()),
++            KVCacheGroupSpec(
++                ["tail_layer"],
++                KpoolTailSpec(
++                    block_size=8,
++                    num_kv_heads=2,
++                    head_size=128,
++                    dtype=torch.bfloat16,
++                    sliding_window=8,
++                ),
++            ),
++        ],
++    )
++
++
+ def _parallelism_agnostic(
+     kv_cache_groups: list[KVCacheGroupSpec],
+     *,
+@@ -472,6 +493,32 @@ def test_resolves_heterogeneous_hybrid_block_sizes():
+     assert offloading_config.cache.blocks_per_chunk == 1
+ 
+ 
++def test_non_prefix_cacheable_scratch_group_is_not_offloaded():
++    config = _make_vllm_config()
++    config.speculative_config = None
++    kv_cache_config = _make_kpool_tail_hybrid_kv_cache_config()
++
++    offloading_config = build_offloading_config(config, kv_cache_config)
++
++    assert offloading_config.cache.tokens_per_hash == 16
++    assert tuple(group.tokens_per_block for group in offloading_config.groups) == (
++        16,
++        8,
++    )
++    assert tuple(group.offloadable for group in offloading_config.groups) == (
++        True,
++        False,
++    )
++
++    scheduler_config = SchedulerOffloadConfig.from_spec(
++        MockOffloadingSpec(offloading_config), config, kv_cache_config
++    )
++    assert scheduler_config.kv_group_configs[0].offloadable
++    assert not scheduler_config.kv_group_configs[1].offloadable
++    assert scheduler_config.kv_group_configs[1].hashes_per_chunk == 0
++    assert not scheduler_config.supports_partial_tail
++
++
+ @pytest.mark.parametrize("world_size", [2, 4, 8])
+ @pytest.mark.parametrize("use_v2_model_runner", [False, True], ids=["v1", "v2"])
+ def test_replicated_layout_enabled_for_pure_mla_tp_mp_single_node(
+diff --git a/tests/v1/kv_connector/unit/offloading_connector/test_scheduler.py b/tests/v1/kv_connector/unit/offloading_connector/test_scheduler.py
+index 69c39ef..f5bf5cf 100644
+--- a/tests/v1/kv_connector/unit/offloading_connector/test_scheduler.py
++++ b/tests/v1/kv_connector/unit/offloading_connector/test_scheduler.py
+@@ -7,6 +7,7 @@ import pytest
+ import torch
+ 
+ from tests.v1.kv_connector.unit.offloading_connector.test_config import (
++    _make_kpool_tail_hybrid_kv_cache_config,
+     _make_mamba_hybrid_kv_cache_config,
+     _make_vllm_config,
+ )
+@@ -246,6 +247,50 @@ def test_normal_store_excludes_align_mode_mamba_sources():
+     assert src_spec.group_sizes == [1, 0]
+ 
+ 
++def test_non_prefix_cacheable_scratch_group_is_excluded_from_load():
++    vllm_config = _make_vllm_config()
++    vllm_config.speculative_config = None
++    kv_cache_config = _make_kpool_tail_hybrid_kv_cache_config()
++    spec = MockOffloadingSpec(build_offloading_config(vllm_config, kv_cache_config))
++    scheduler = OffloadingConnectorScheduler(spec, vllm_config, kv_cache_config)
++
++    request = MagicMock()
++    request.request_id = "req"
++    request.kv_transfer_params = None
++    request.num_prompt_tokens = 33
++    request.num_tokens = 33
++    request.block_hashes = [BlockHash(b"h0"), BlockHash(b"h1")]
++    request.all_token_ids = list(range(33))
++    request.lora_request = None
++    request.is_finished.return_value = False
++    scheduler.on_new_request(request)
++
++    req_status = scheduler._req_status["req"]
++    req_status.update_offload_keys()
++    assert len(req_status.group_states[0].offload_keys) == 2
++    assert req_status.group_states[1].offload_keys == []
++    assert scheduler._lookup_groups == (0,)
++
++    req_status.num_locally_computed_tokens = 0
++    scheduler.update_state_after_alloc(
++        request,
++        KVCacheBlocks(
++            (
++                [KVCacheBlock(31), KVCacheBlock(32)],
++                [KVCacheBlock(41)],
++            )
++        ),
++        num_external_tokens=32,
++    )
++
++    [load_job] = scheduler._current_batch_load_jobs.values()
++    dst_spec = load_job.dst_spec
++    assert isinstance(dst_spec, GPULoadStoreSpec)
++    assert dst_spec.block_ids.tolist() == [31, 32]
++    assert dst_spec.group_sizes == [2, 0]
++    assert dst_spec.block_indices == [0, 0]
++
++
+ def test_partial_lookup_returns_exact_boundary_and_group_load_keys():
+     scheduler = _make_partial_tail_scheduler()
+     request = _make_partial_tail_request(scheduler)
+diff --git a/vllm/distributed/kv_transfer/kv_connector/v1/offloading/config.py b/vllm/distributed/kv_transfer/kv_connector/v1/offloading/config.py
+index e5ed896..79a63e7 100644
+--- a/vllm/distributed/kv_transfer/kv_connector/v1/offloading/config.py
++++ b/vllm/distributed/kv_transfer/kv_connector/v1/offloading/config.py
+@@ -49,12 +49,15 @@ def build_offloading_config(
+                 parallel_config.decode_context_parallel_size,
+             ),
+             layer_names=tuple(group.layer_names),
++            offloadable=group.kv_cache_spec.prefix_cacheable,
+         )
+         for group in kv_cache_config.kv_cache_groups
+     )
+ 
+     _, tokens_per_hash = resolve_kv_cache_block_sizes(kv_cache_config, vllm_config)
+     for group in groups:
++        if not group.offloadable:
++            continue
+         assert group.tokens_per_block % tokens_per_hash == 0, (
+             f"tokens_per_block={group.tokens_per_block} not divisible by "
+             f"tokens_per_hash={tokens_per_hash}. "
+diff --git a/vllm/distributed/kv_transfer/kv_connector/v1/offloading/scheduler.py b/vllm/distributed/kv_transfer/kv_connector/v1/offloading/scheduler.py
+index da0aea0..5499356 100644
+--- a/vllm/distributed/kv_transfer/kv_connector/v1/offloading/scheduler.py
++++ b/vllm/distributed/kv_transfer/kv_connector/v1/offloading/scheduler.py
+@@ -103,6 +103,9 @@ class GroupOffloadConfig(NamedTuple):
+     # of these groups is volatile and lacks a stable hash, so it must
+     # be excluded from store and load scheduling.
+     is_eagle_group: bool = False
++    # Scratch-only groups retain their position in group-sized transfer
++    # metadata but do not contribute prefix keys or GPU blocks to jobs.
++    offloadable: bool = True
+ 
+ 
+ def get_sliding_window_size_in_chunks(
+@@ -137,6 +140,8 @@ def resolve_mamba_align_size(
+     """
+     mamba_align_size: int | None = None
+     for idx, tokens_per_block in enumerate(spec.tokens_per_block):
++        if not spec.offloadable_groups[idx]:
++            continue
+         kv_spec = kv_cache_config.kv_cache_groups[idx].kv_cache_spec
+         if isinstance(kv_spec, MambaSpec) and kv_spec.mamba_cache_mode in (
+             "align",
+@@ -247,6 +252,7 @@ class SchedulerOffloadConfig(NamedTuple):
+                         isinstance(kv_spec, MambaSpec)
+                         and kv_spec.mamba_cache_mode == "align"
+                     ),
++                    offloadable=spec.offloadable_groups[idx],
+                 )
+             )
+         kv_group_configs = tuple(kv_group_configs_list)
+@@ -263,6 +269,7 @@ class SchedulerOffloadConfig(NamedTuple):
+             spec.blocks_per_chunk == 1
+             and len(group_block_sizes) == 1
+             and has_partial_recurrent_group
++            and all(config.offloadable for config in kv_group_configs)
+             and all(
+                 config.sliding_window_size_in_chunks is None
+                 or config.requires_cow_source
+@@ -280,7 +287,8 @@ class SchedulerOffloadConfig(NamedTuple):
+                 )
+             for config in kv_group_configs:
+                 if (
+-                    config.sliding_window_size_in_chunks is not None
++                    config.offloadable
++                    and config.sliding_window_size_in_chunks is not None
+                     and retention_interval % config.tokens_per_chunk != 0
+                 ):
+                     raise ValueError(
+@@ -360,6 +368,8 @@ class RequestOffloadState:
+         for group_config, group_state in zip(
+             self.config.kv_group_configs, self.group_states
+         ):
++            if not group_config.offloadable:
++                continue
+             for req_block_hash in islice(
+                 self.req.block_hashes,
+                 group_config.hashes_per_chunk * len(group_state.offload_keys)
+@@ -401,6 +411,8 @@ class RequestOffloadState:
+         ``next_stored_chunk_idx``, so it is never re-considered and a
+         permanent hole breaks prefix-reuse lookup.
+         """
++        if not group_config.offloadable:
++            return 0
+         num_chunks = num_offloadable_tokens // group_config.tokens_per_chunk
+         is_decoding = num_offloadable_tokens > self.req.num_prompt_tokens
+         if group_config.is_eagle_group and is_decoding:
+@@ -427,6 +439,9 @@ class RequestOffloadState:
+         for group_config, group_state in zip(
+             self.config.kv_group_configs, self.group_states
+         ):
++            if not group_config.offloadable:
++                group_state.num_hit_chunks = 0
++                continue
+             group_state.num_hit_chunks = (
+                 num_cached_tokens // group_config.tokens_per_chunk
+             )
+@@ -508,6 +523,13 @@ class OffloadingConnectorScheduler:
+         full_attention_groups: list[int] = []
+         sliding_window_groups: list[int] = []
+         for group_config in self.config.kv_group_configs:
++            if not group_config.offloadable:
++                logger.info(
++                    "KV offloading: skipping non-prefix-cacheable group %d (%s)",
++                    group_config.group_idx,
++                    type(group_config.kv_cache_spec).__name__,
++                )
++                continue
+             if group_config.sliding_window_size_in_chunks is None:
+                 full_attention_groups.append(group_config.group_idx)
+             else:
+@@ -671,6 +693,8 @@ class OffloadingConnectorScheduler:
+         for group_config, group_state in zip(
+             self.config.kv_group_configs, req_status.group_states
+         ):
++            if not group_config.offloadable:
++                continue
+             if group_config.sliding_window_size_in_chunks is None:
+                 self.manager.touch(group_state.offload_keys, req_status.req_context)
+             else:
+@@ -694,6 +718,7 @@ class OffloadingConnectorScheduler:
+                         req_status.partial_tail_boundary,
+                     )
+                     for group in self.config.kv_group_configs
++                    if group.offloadable
+                 ),
+                 req_status.req_context,
+             )
+@@ -841,6 +866,8 @@ class OffloadingConnectorScheduler:
+             for group_config, group_state in zip(
+                 self.config.kv_group_configs, req_status.group_states
+             ):
++                if not group_config.offloadable:
++                    continue
+                 tokens_per_chunk = group_config.tokens_per_chunk
+                 sliding_window_size_in_chunks = (
+                     group_config.sliding_window_size_in_chunks
+@@ -893,12 +920,15 @@ class OffloadingConnectorScheduler:
+         if max_boundary <= complete_boundary:
+             return complete_hit
+ 
++        offloadable_groups = tuple(
++            group for group in self.config.kv_group_configs if group.offloadable
++        )
+         pending = False
+         for boundary in range(max_boundary, complete_boundary, -tokens_per_hash):
+             boundary_pending = False
+             boundary_missed = False
+             boundary_keys = []
+-            for group_config in self.config.kv_group_configs:
++            for group_config in offloadable_groups:
+                 key = self._make_boundary_key(
+                     req_status.req, group_config.group_idx, boundary
+                 )
+@@ -912,9 +942,7 @@ class OffloadingConnectorScheduler:
+ 
+             pending |= boundary_pending
+             if not boundary_missed and not boundary_pending:
+-                for group_config, key in zip(
+-                    self.config.kv_group_configs, boundary_keys
+-                ):
++                for group_config, key in zip(offloadable_groups, boundary_keys):
+                     self._events_tracker.record_partial_lookup(
+                         req_status.req, group_config, boundary, key
+                     )
+@@ -1022,6 +1050,11 @@ class OffloadingConnectorScheduler:
+                 block.block_id for block in group_blocks if block.block_id != 0
+             )
+ 
++            if not group_config.offloadable:
++                group_sizes.append(0)
++                block_indices.append(0)
++                continue
++
+             tokens_per_block = group_config.tokens_per_block
+             tokens_per_chunk = group_config.tokens_per_chunk
+             offload_keys = group_state.offload_keys
+@@ -1175,7 +1208,8 @@ class OffloadingConnectorScheduler:
+             for group_idx, block_id, boundary in entries:
+                 group_config = self.config.kv_group_configs[group_idx]
+                 if (
+-                    block_id == 0
++                    not group_config.offloadable
++                    or block_id == 0
+                     or boundary > max_boundary
+                     or boundary % group_config.tokens_per_chunk != 0
+                 ):
+diff --git a/vllm/v1/kv_offload/base.py b/vllm/v1/kv_offload/base.py
+index 5ad89ee..0b0b2e2 100644
+--- a/vllm/v1/kv_offload/base.py
++++ b/vllm/v1/kv_offload/base.py
+@@ -600,6 +600,7 @@ class OffloadingSpec(ABC):
+         )
+ 
+         self.tokens_per_block = tuple(group.tokens_per_block for group in config.groups)
++        self.offloadable_groups = tuple(group.offloadable for group in config.groups)
+         self.tokens_per_hash = config.cache.tokens_per_hash
+         self.blocks_per_chunk = config.cache.blocks_per_chunk
+ 
+diff --git a/vllm/v1/kv_offload/config.py b/vllm/v1/kv_offload/config.py
+index 637d3bb..8a080a7 100644
+--- a/vllm/v1/kv_offload/config.py
++++ b/vllm/v1/kv_offload/config.py
+@@ -14,6 +14,10 @@ class OffloadingGroupConfig:
+     tokens_per_block: int
+     # Layer names belonging to this group.
+     layer_names: tuple[str, ...]
++    # Whether this group participates in prefix-based offload/load jobs.
++    # Scratch groups such as KpoolTailSpec have no stable prefix hash and are
++    # rebuilt after an aligned cache hit.
++    offloadable: bool = True
+ 
+ 
+ @dataclass(frozen=True)
+diff --git a/vllm/v1/kv_offload/file_mapper.py b/vllm/v1/kv_offload/file_mapper.py
+index 82ebe31..436ea2f 100644
+--- a/vllm/v1/kv_offload/file_mapper.py
++++ b/vllm/v1/kv_offload/file_mapper.py
+@@ -90,6 +90,7 @@ class FileMapper:
+             {
+                 "tokens_per_block": group.tokens_per_block,
+                 "layer_names": list(group.layer_names),
++                "offloadable": group.offloadable,
+             }
+             for group in config.groups
+         ]

@@ -34,12 +34,49 @@ Tryb diagnostyczny `prefix-cache` zachowuje całą tę topologię i przełącza 
 automatic prefix caching. Został przygotowany bez zmiany aktywnego procesu;
 nie jest jeszcze wynikiem kwalifikacji ani domyślną konfiguracją produkcyjną.
 
-Tryb `prefix-cache-offload` rozszerza ten kandydat o natywny vLLM
+Produkcyjnie zakwalifikowany tryb `prefix-cache-offload` rozszerza ten
+kandydat o natywny vLLM
 `OffloadingConnector`, 32 GiB RAM i ograniczony do 128 GiB tier filesystem z
-rezerwą 192 GiB wolnego miejsca. Konfiguracja, generator komendy, import tieru
-w środowisku przypiętej recepty oraz zarządzanie katalogiem mogą zostać
-zweryfikowane bez restartu. Odzyskanie KV po restarcie i wpływ na TTFT/decode
-pozostają bramkami GPU przed aktywacją produkcyjną.
+rezerwą 192 GiB wolnego miejsca. Tryb wyłącza `expandable_segments`, ponieważ
+vLLM odrzuca connector z remapowalną pamięcią KV. Granica trybu jest obniżona
+do `695040 = 543 × 1280`, czyli jedną pełną stronę poniżej wykrytej pojemności
+`696320`, dzięki czemu używa wyłącznie pełnych stron
+hybrydowego cache. Rezerwa KV 4,42 GB zwalnia 530 MB względem testu 4,95 GB,
+który uruchamiał serwer, lecz zakleszczył workery podczas pierwszego realnego
+chunku prefill. Dla ROCm `OffloadingConnector` recepta
+wstępnie wykonuje trzy małe BF16 GEMM odpowiadające ścieżkom GLM decode, aby
+hipBLASLt załadował potrzebne moduły przed stałą rezerwacją KV. Recepta
+podtrzymuje też pracę silnika podczas asynchronicznych lookupów filesystem,
+aby żądanie odroczone na secondary tier nie zatrzymało pętli scheduler-a.
+Bloki DFlash/EAGLE kończące się przed granicą promptu pozostają zapisywalne
+również wtedy, gdy ten sam krok schedulera rozpoczął już decode; zapobiega to
+dziurze, która zerowała wynik późniejszego lookupu całego prefiksu. Dodatkowa
+retencja jednego poprzedniego, wyrównanego stanu Mamba zachowuje stan na
+granicy fallbacku EAGLE; bez niej lookup grup Mamba redukował wspólny wynik do
+zera mimo trafienia grup attention.
+
+Kwalifikacja persistent cache 10 września 2026 dała następujące wyniki:
+
+- cold miss `4096 x 16` osiągnął TTFT 3.728 s, prefill 1,098.70 tok/s i
+  decode 43.76 tok/s; powtórzenie trafiło 2,560 tokenów lokalnego cache,
+  obniżyło TTFT do 1.781 s i podniosło efektywny prefill do 2,299.88 tok/s;
+- po łagodnym restarcie bez czyszczenia cache pierwszy identyczny request
+  odzyskał 2,560 tokenów z external prefix cache: filesystem trafił 14/14
+  fragmentów, odczytał 859.47 MB i przeniósł 303.30 MB CPU->GPU;
+- niezależny cold benchmark `4096 x 128`, C1 przeszedł API gate i osiągnął
+  TTFT 3.633 s, prefill 1,127.51 tok/s oraz decode 49.26 tok/s;
+- trwała usługa LiteLLM przeszła zarówno test OpenAI chat completions, jak i
+  natywne endpointy Anthropic `/v1/messages` oraz `/v1/messages/count_tokens`;
+  odpowiedź miała poprawny format Claude i lokalne liczenie zwróciło 15
+  tokenów wejściowych zgodnie z raportem generacji;
+- deterministyczny Vision smoke poprawnie rozpoznał czerwony obraz;
+- dokładna granica `694,976 + 64 = 695,040` odnalazła właściwy sekret na 95%
+  kontekstu: model przetworzył 694,976 tokenów promptu, wygenerował 38 tokenów
+  i zakończył request po 631.36 s;
+- w 610 stabilnych próbkach sekundowych granicy średnia aktywność GPU wyniosła
+  99.97%, najniższa średnia ośmiu GPU 94.38%, maksymalny hotspot 80 C,
+  maksymalna moc 250 W, a minimalny wolny VRAM 266 MiB; nie wystąpił OOM,
+  reset GPU, traceback ani zakleszczenie schedulera.
 
 Kwalifikacja 9 września 2026 dała następujące wyniki:
 
@@ -90,7 +127,9 @@ TTFT do 2.74 s. Przy 64K MTP2 zaakceptował 696 z 700 draftów i osiągnął
   serwowania. Diagnostyczny tryb GLM K2/FP8/256K/C4 przeszedł 8 września 2026
   krótkie testy czterech równoległych żądań API oraz wywołań narzędzi przez
   LiteLLM; nie stanowi to kwalifikacji czterech pełnych kontekstów 256K.
-- Prefix cache oraz natywne AITER FP4 BMM/ASM pozostają wyłączone; na gfx1201
+- Bazowy wariant 768K nadal nie używa prefix cache. Jawny wariant
+  `prefix-cache-offload` jest zakwalifikowany produkcyjnie z granicą 695040;
+  natywne AITER FP4 BMM/ASM pozostają wyłączone, ponieważ na gfx1201
   priorytetem jest poprawność.
 - Krótkie benchmarki są bramką regresji, a nie pomiarem przepustowości pod
   dużym współbieżnym obciążeniem.

@@ -59,7 +59,7 @@ def _launcher_start_options(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--runtime-mode",
-        help="select another explicit diagnostic mode embedded in the profile",
+        help="select another explicit runtime mode embedded in the profile",
     )
     parser.add_argument("--dry-run", action="store_true")
 
@@ -101,9 +101,41 @@ def _tests(args: argparse.Namespace) -> None:
         verify_runtime(profile, profile, args.runtime_mode)
 
     def patch() -> None:
-        runtime_profile = load_runtime(profile)
+        runtime_profile = load_runtime(profile, args.runtime_mode)
         python = recipe_venv(runtime_profile["recipe"]) / "bin" / "python"
         tree = recipe_source_root(runtime_profile["recipe"]) / "vllm"
+        if runtime_profile["recipe"] == "vllm_glm53flashrocm10_v0.31":
+            environment = _native_environment(runtime_profile)
+            # These are dependency-light scheduler and worker-mock tests. On a
+            # mixed NVIDIA/AMD host, force CPU platform discovery so importing
+            # the test suite does not select unavailable CUDA-only extras.
+            environment["VLLM_TARGET_DEVICE"] = "cpu"
+            subprocess.run(
+                [
+                    python,
+                    "-m",
+                    "pytest",
+                    "-p",
+                    "no:cacheprovider",
+                    "tests/v1/kv_connector/unit/offloading_connector/test_config.py",
+                    "tests/v1/kv_connector/unit/offloading_connector/test_scheduler.py",
+                    "tests/v1/worker/test_gpu_worker.py",
+                    "tests/v1/kv_offload/tiering/test_async_lookup.py",
+                    "tests/v1/core/test_prefix_caching.py",
+                    "-k",
+                    "non_prefix_cacheable_scratch_group or "
+                    "initialize_from_config_creates_rocm_blas_handle_before_kv_cache or "
+                    "pending_work_keeps_engine_alive_until_result_is_drained or "
+                    "fused_prefill_decode_keeps_complete_prompt_chunks or "
+                    "retention_zero_keeps_short_eagle_prefix_fallback or "
+                    "zero_retention_mamba_keeps_eagle_fallback_boundary",
+                    "-q",
+                ],
+                cwd=tree,
+                env=environment,
+                check=True,
+            )
+            return
         subprocess.run(
             [
                 python,
@@ -352,7 +384,7 @@ def parser() -> argparse.ArgumentParser:
     test_parser.add_argument("--url", default="http://127.0.0.1:8000")
     test_parser.add_argument("--timeout", type=float, default=600)
     test_parser.add_argument(
-        "--runtime-mode", help="resolve an explicit embedded diagnostic runtime mode"
+        "--runtime-mode", help="resolve an explicit embedded runtime mode"
     )
     test_parser.add_argument("--output", type=_path)
     test_parser.add_argument("--master-port", type=int, default=29571)
@@ -372,7 +404,7 @@ def parser() -> argparse.ArgumentParser:
     bench.add_argument("--data-parallel-rank", type=int)
     bench.add_argument("--timeout", type=float, default=900)
     bench.add_argument(
-        "--runtime-mode", help="benchmark an explicit embedded diagnostic runtime mode"
+        "--runtime-mode", help="benchmark an explicit embedded runtime mode"
     )
     bench.add_argument("--output", type=_path, required=True)
     return root

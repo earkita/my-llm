@@ -93,7 +93,7 @@
       "glm_moe_router_dedup_head": "0c2b5ad442672ea2efbf62df4a3df1cce01b946e",
       "glm_required_first_tools_pr": "https://github.com/vllm-project/vllm/pull/55558",
       "glm_required_first_tools_head": "bcca85b9083512bccdb039a1770834ee6e246646",
-      "expected_diff_sha256": "fd32a2870e93d97421fbc809e4aac4db26d81fb3103687d8059f09e03253e776",
+      "expected_diff_sha256": "ca9888f903813c03c5e87b2e5ab68629ba909cda57245c9b41f94e82c505218a",
       "full_index_diff": true,
       "apply_intent_to_add": true,
       "accepted_previous_images": [
@@ -124,6 +124,14 @@
         {
           "sha256": "8ccf39951c3be3a098af50a17991fa4ac86840710ba39a08352e538d810ac9b4",
           "patch_count": 25
+        },
+        {
+          "sha256": "fd32a2870e93d97421fbc809e4aac4db26d81fb3103687d8059f09e03253e776",
+          "patch_count": 26
+        },
+        {
+          "sha256": "d070f07a4ef96f4fc0839f9564b52a278ab59d52909747f10dda51ea1bf8121c",
+          "patch_count": 27
         }
       ],
       "patches": [
@@ -230,6 +238,30 @@
         {
           "path": "patches/vllm_glm53flashrocm10_v0.31/0026-perf-add-tiled-RDNA4-MXFP4-decode-GEMV.patch",
           "sha256": "4faadf7e5c17373657b912ebbca1e7f499648ab33705ad639e59506b14d75165"
+        },
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.31/0027-fix-skip-noncacheable-GLM-offload-groups.patch",
+          "sha256": "4bba0476453aa3f9be8b946cd9a243684567ee807a501ec698a880f61fe111bd"
+        },
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.31/0028-fix-initialize-ROCm-BLAS-before-fixed-KV-cache.patch",
+          "sha256": "d69b48a6e0fb1d3156b207c4236df9e7145ae1762455b9e5e3277c9e6f135cf8"
+        },
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.31/0029-fix-keep-engine-stepping-for-filesystem-lookups.patch",
+          "sha256": "b0a464d010640cea13de4b381e15c06b6ea9dd2c4dfe44d36fa54d594c36b6fd"
+        },
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.31/0030-fix-preserve-fused-prefill-EAGLE-chunks.patch",
+          "sha256": "ea7c76c8efa8103053be66d77ea3964690c90ac0638d9c18b3743a481c21912e"
+        },
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.31/0031-fix-retain-short-EAGLE-prefix-fallback.patch",
+          "sha256": "77f69489eff0f314e75b7db3adf80eeaea339aebba6d7f4c1740533661dfc810"
+        },
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.31/0032-fix-retain-Mamba-state-at-EAGLE-fallback.patch",
+          "sha256": "e96fca9f140203cae224a0df5baeb67d4f9bdb70b4c34c9fc71c5a4088d3d8d2"
         }
       ],
       "rocm_sparse_verify_head": "0f1d78db4495fed10384a2b048e70367e61d3dd1",

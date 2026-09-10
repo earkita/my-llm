@@ -1,0 +1,85 @@
+diff --git a/tests/v1/kv_connector/unit/offloading_connector/test_scheduler.py b/tests/v1/kv_connector/unit/offloading_connector/test_scheduler.py
+--- a/tests/v1/kv_connector/unit/offloading_connector/test_scheduler.py
++++ b/tests/v1/kv_connector/unit/offloading_connector/test_scheduler.py
+@@ -3995,3 +3995,62 @@ def test_retention_interval_zero_stores_only_replay_boundary(
+             (1, 11),
+         ),
+     )
++
++
++@pytest.mark.parametrize("async_scheduling", [True, False])
++def test_retention_zero_keeps_short_eagle_prefix_fallback(
++    request_runner, async_scheduling: bool
++):
++    """A partial EAGLE tail must not prune its short prefix fallback.
++
++    The 14-token prompt has three complete 4-token blocks and a partial
++    fourth block. EAGLE needs a three-block lookup window for SW=8. Its replay
++    boundary is shifted toward the unavailable fourth block, so retaining only
++    that boundary tail would drop block 0 and make the lookup fallback miss.
++    """
++    block_size = 4
++    groups = [
++        KVCacheGroupSpec(
++            ["target"],
++            FullAttentionSpec(
++                block_size=block_size,
++                num_kv_heads=1,
++                head_size=1,
++                dtype=torch.float32,
++            ),
++        ),
++        KVCacheGroupSpec(
++            ["draft"],
++            SlidingWindowSpec(
++                block_size=block_size,
++                num_kv_heads=1,
++                head_size=1,
++                dtype=torch.float32,
++                sliding_window=8,
++            ),
++            is_eagle_group=True,
++        ),
++    ]
++    runner = request_runner(
++        block_size=block_size,
++        num_gpu_blocks=100,
++        async_scheduling=async_scheduling,
++        kv_cache_groups=groups,
++        retention_interval=0,
++    )
++    runner.new_request(token_ids=[0] * 14)
++    runner.manager.prepare_store.side_effect = lambda keys, req_context: (
++        generate_store_output(keys)
++    )
++
++    runner.run(
++        decoded_tokens=[EOS_TOKEN_ID],
++        expected_stored=(
++            (0, 0),
++            (0, 1),
++            (0, 2),
++            (1, 0),
++            (1, 1),
++            (1, 2),
++        ),
++    )
+diff --git a/vllm/v1/core/single_type_kv_cache_manager.py b/vllm/v1/core/single_type_kv_cache_manager.py
+--- a/vllm/v1/core/single_type_kv_cache_manager.py
++++ b/vllm/v1/core/single_type_kv_cache_manager.py
+@@ -1052,6 +1052,15 @@ class SlidingWindowManager(SingleTypeKVCacheManager):
+             block_size=block_size,
+             use_eagle=use_eagle,
+         )
++        # Before the request has more blocks than a complete lookup window,
++        # _sliding_window_lookup falls back to the contiguous prefix. Every
++        # leading block is therefore reachable. This is especially important
++        # for EAGLE prompts with a partial trailing block: the EAGLE peek moves
++        # the replay-boundary tail one block to the right, but the unavailable
++        # peek is capped by the key list on lookup, which then needs the whole
++        # prefix instead.
++        if end_block <= need:
++            return None
+         # The matched run's right edge sits on the aligned boundary block when
+         # EAGLE peeks one block past it (shift=1), otherwise on the last block
+         # before the boundary (shift=0).

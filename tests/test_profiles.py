@@ -233,7 +233,7 @@ class ProductionProfileTests(unittest.TestCase):
             "\n  - model_name:", 1
         )[0]
         self.assertIn("model: anthropic/glm-5.3-flash-quark-mxfp4", block)
-        self.assertIn("max_input_tokens: 786432", block)
+        self.assertIn("max_input_tokens: 695040", block)
 
     def test_litellm_forces_strict_glm_tools_without_rewriting_schemas(self) -> None:
         schema = {
@@ -281,6 +281,7 @@ class ProductionProfileTests(unittest.TestCase):
     def test_claude_templates_cover_every_runtime_context_variant(self) -> None:
         variant_names = {
             262144: "256k",
+            695040: "aligned-695040",
             786432: "768k-vision",
             1048576: "1m",
         }
@@ -559,7 +560,7 @@ class ProductionProfileTests(unittest.TestCase):
             profile["stack"]["claude_settings"]["env"][
                 "CLAUDE_CODE_MAX_CONTEXT_TOKENS"
             ],
-            "786432",
+            "695040",
         )
 
         scalar = runtime["experimental_modes"]["scalar-gemv-rollback"]
@@ -612,14 +613,25 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertNotIn("--no-enable-prefix-caching", prefix_cache_command)
 
         offload = runtime["experimental_modes"]["prefix-cache-offload"]
-        self.assertEqual(offload["status"], "diagnostic-only")
+        self.assertEqual(offload["status"], "production-ready")
         self.assertEqual(
             set(offload["runtime_overrides"]),
-            {"cache", "kv_transfer_config"},
+            {"limits", "environment", "cache", "kv_transfer_config"},
         )
         resolved_offload = load_runtime(GLM_PROFILE, "prefix-cache-offload")
         self.assertTrue(resolved_offload["cache"]["prefix_cache"])
-        self.assertEqual(resolved_offload["limits"], runtime["limits"])
+        self.assertEqual(
+            resolved_offload["environment"]["PYTORCH_CUDA_ALLOC_CONF"],
+            "expandable_segments:False",
+        )
+        expected_environment = dict(runtime["environment"])
+        expected_environment["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:False"
+        expected_environment["VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS"] = "900"
+        self.assertEqual(resolved_offload["environment"], expected_environment)
+        expected_limits = dict(runtime["limits"])
+        expected_limits["max_model_len"] = 695_040
+        expected_limits["kv_cache_memory_bytes"] = 4_420_000_000
+        self.assertEqual(resolved_offload["limits"], expected_limits)
         self.assertEqual(
             resolved_offload["speculative_config"], runtime["speculative_config"]
         )

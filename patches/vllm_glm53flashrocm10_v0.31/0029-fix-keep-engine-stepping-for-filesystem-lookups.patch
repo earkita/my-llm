@@ -1,0 +1,84 @@
+diff --git a/tests/v1/kv_offload/tiering/test_async_lookup.py b/tests/v1/kv_offload/tiering/test_async_lookup.py
+index 05f3f96..d154c0d 100644
+--- a/tests/v1/kv_offload/tiering/test_async_lookup.py
++++ b/tests/v1/kv_offload/tiering/test_async_lookup.py
+@@ -36,6 +36,20 @@ class InMemoryLookupManager(AsyncLookupManager):
+ 
+ 
+ class TestAsyncLookupManager:
++    def test_pending_work_keeps_engine_alive_until_result_is_drained(self):
++        mgr = InMemoryLookupManager()
++        assert not mgr.has_pending_work()
++
++        assert mgr.lookup(_key(1), _ctx()) is None
++        assert mgr.has_pending_work()
++        mgr.flush()
++        mgr._results_ready.wait()
++        mgr._results_ready.clear()
++
++        assert not mgr.has_pending_work()
++        assert mgr.lookup(_key(1), _ctx()) is False
++        mgr.shutdown()
++
+     def test_new_key_returns_none(self):
+         mgr = InMemoryLookupManager()
+         assert mgr.lookup(_key(1), _ctx()) is None
+diff --git a/vllm/v1/kv_offload/tiering/async_lookup.py b/vllm/v1/kv_offload/tiering/async_lookup.py
+index 2baa1e2..fcb59dd 100644
+--- a/vllm/v1/kv_offload/tiering/async_lookup.py
++++ b/vllm/v1/kv_offload/tiering/async_lookup.py
+@@ -86,6 +86,10 @@ class AsyncLookupManager(ABC):
+         # Accumulates (key, req_context, generation) triples during lookup().
+         # Flushed as one queue item per step by flush().
+         self._lookup_batch: list[tuple[OffloadKey, ReqContext, int]] = []
++        # Scheduler-owned count of lookups whose worker result has not yet
++        # been drained. This keeps the engine stepping even when every request
++        # is deferred waiting for a secondary-tier existence check.
++        self._pending_lookups = 0
+ 
+         # Scheduler → worker: one full step's batch per item.
+         # None is used as a shutdown sentinel.
+@@ -145,6 +149,7 @@ class AsyncLookupManager(ABC):
+             self._next_generation += 1
+             self._lookup_state[key] = state
+             self._lookup_batch.append((key, req_context, state.generation))
++            self._pending_lookups += 1
+         state.request_ids.add(req_id)
+         self._req_keys.setdefault(req_id, set()).add(key)
+         return state.result
+@@ -173,6 +178,8 @@ class AsyncLookupManager(ABC):
+             except queue.Empty:
+                 break
+             for key, generation, result in batch:
++                assert self._pending_lookups > 0
++                self._pending_lookups -= 1
+                 state = self._lookup_state.get(key)
+                 if state is None or state.generation != generation:
+                     continue
+@@ -186,6 +193,11 @@ class AsyncLookupManager(ABC):
+                 )
+                 state.result = result
+ 
++    def has_pending_work(self) -> bool:
++        """Whether an async lookup result still needs to reach the scheduler."""
++        self.drain_results()
++        return self._pending_lookups > 0
++
+     def mark_miss(self, keys: Collection[OffloadKey]) -> None:
+         """Force the cached verdict for ``keys`` to False after a failed load, so
+         the scheduler stops re-issuing the doomed promotion (livelock, #49176).
+diff --git a/vllm/v1/kv_offload/tiering/fs/manager.py b/vllm/v1/kv_offload/tiering/fs/manager.py
+index 6de2d07..fe99752 100644
+--- a/vllm/v1/kv_offload/tiering/fs/manager.py
++++ b/vllm/v1/kv_offload/tiering/fs/manager.py
+@@ -331,6 +331,10 @@ class FileSystemTierManager(SecondaryTierManager):
+     def on_schedule_end(self, context: ScheduleEndContext) -> None:
+         self._lookup_manager.flush()
+ 
++    @override
++    def has_pending_work(self) -> bool:
++        return self._lookup_manager.has_pending_work()
++
+     @override
+     def shutdown(self) -> None:
+         """

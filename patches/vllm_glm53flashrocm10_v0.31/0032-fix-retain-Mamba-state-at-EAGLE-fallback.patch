@@ -1,0 +1,126 @@
+diff --git a/tests/v1/core/test_prefix_caching.py b/tests/v1/core/test_prefix_caching.py
+--- a/tests/v1/core/test_prefix_caching.py
++++ b/tests/v1/core/test_prefix_caching.py
+@@ -3638,6 +3638,76 @@ def test_hybrid_local_kv_retention_mtp_reuses_latest_boundary():
+     assert [len(blocks) for blocks in computed_blocks.blocks] == [3, 12]
+ 
+ 
++def test_zero_retention_mamba_keeps_eagle_fallback_boundary():
++    """Mamba must retain the boundary where an incomplete EAGLE peek lands."""
++    block_size = 4
++    kv_cache_config = KVCacheConfig(
++        num_blocks=100,
++        kv_cache_tensors=[],
++        kv_cache_groups=[
++            KVCacheGroupSpec(
++                ["full"],
++                FullAttentionSpec(
++                    block_size=block_size,
++                    num_kv_heads=1,
++                    head_size=1,
++                    dtype=torch.float16,
++                ),
++            ),
++            KVCacheGroupSpec(
++                ["mamba"],
++                MambaSpec(
++                    block_size=block_size,
++                    shapes=(1, 1),
++                    dtypes=(torch.float32,),
++                    mamba_cache_mode="align",
++                ),
++            ),
++            KVCacheGroupSpec(
++                ["swa_eagle"],
++                SlidingWindowSpec(
++                    block_size=block_size,
++                    num_kv_heads=1,
++                    head_size=1,
++                    dtype=torch.float32,
++                    sliding_window=2 * block_size,
++                ),
++                is_eagle_group=True,
++            ),
++        ],
++    )
++    manager = make_kv_cache_manager(
++        kv_cache_config=kv_cache_config,
++        max_model_len=8192,
++        enable_caching=True,
++        hash_block_size=block_size,
++        retention_interval=0,
++        use_eagle=True,
++    )
++
++    # Three complete blocks plus a partial fourth. EAGLE cannot cache its peek
++    # block, so after the mandatory pop the reusable boundary is block 1 (8
++    # tokens), not the replay boundary at block 2 (12 tokens).
++    token_ids = [i for i in range(3) for _ in range(block_size)] + [3, 3]
++    req0 = make_request("owner", token_ids, block_size, sha256)
++    computed_blocks, num_computed, _ = manager.get_computed_blocks(req0)
++    assert num_computed == 0
++    assert manager.allocate_slots(req0, 2 * block_size, 0, computed_blocks) is not None
++
++    req0.num_computed_tokens = 2 * block_size
++    manager.new_step_starts()
++    assert manager.allocate_slots(req0, len(token_ids) - 2 * block_size) is not None
++
++    pool = manager.block_pool
++    assert pool.get_cached_block(req0.block_hashes[1], [1]) is not None
++    manager.free(req0)
++
++    replay = make_request("replay", token_ids, block_size, sha256)
++    computed_blocks, num_computed, _ = manager.get_computed_blocks(replay)
++    assert num_computed == 2 * block_size
++    assert [len(group) for group in computed_blocks.blocks] == [2, 2, 2]
++
++
+ def test_block_lookup_cache_single_block_per_key():
+     cache = BlockHashToBlockMap()
+     key0 = BlockHashWithGroupId(b"hash0")
+diff --git a/vllm/v1/core/kv_cache_coordinator.py b/vllm/v1/core/kv_cache_coordinator.py
+--- a/vllm/v1/core/kv_cache_coordinator.py
++++ b/vllm/v1/core/kv_cache_coordinator.py
+@@ -733,6 +733,15 @@ class HybridKVCacheCoordinator(KVCacheCoordinator):
+                 for gid in group.group_ids:
+                     self.single_type_managers[gid].use_eagle = True
+ 
++        # If an EAGLE group's proof/lookahead block is not yet complete, its
++        # longest reusable prefix falls back by one aligned boundary. Preserve
++        # the matching Mamba state as well, otherwise hybrid reconciliation
++        # collapses the otherwise valid attention hit to zero.
++        if self.eagle_group_ids:
++            for manager in self.single_type_managers:
++                if isinstance(manager.kv_cache_spec, MambaSpec):
++                    manager.retain_previous_replay_boundary = True
++
+     def _align_cacheable(self, num_tokens: int) -> int:
+         """Largest prefix of ``num_tokens`` a future cache hit could match.
+ 
+diff --git a/vllm/v1/core/single_type_kv_cache_manager.py b/vllm/v1/core/single_type_kv_cache_manager.py
+--- a/vllm/v1/core/single_type_kv_cache_manager.py
++++ b/vllm/v1/core/single_type_kv_cache_manager.py
+@@ -117,5 +117,10 @@ class SingleTypeKVCacheManager(ABC):
+         # determining the attention groups.
+         self.use_eagle = False
++        # Hybrid EAGLE lookup can fall back one aligned boundary when its
++        # lookahead block is not complete. Mamba must retain the state at that
++        # earlier boundary so every cache group can converge on the same hit.
++        # Set by the hybrid coordinator only for Mamba groups.
++        self.retain_previous_replay_boundary = False
+ 
+         # Partial-hit copy-on-write bookkeeping. Populated only by fine-grained
+         # managers (full attention, mamba "align"); harmlessly empty elsewhere.
+@@ -470,6 +475,12 @@ class SingleTypeKVCacheManager(ABC):
+         # retention: the replay boundary (``num_prompt - 1``, capped by
+         # ``get_computed_blocks``) and any detected shared-prefix junction.
+         reachable_boundaries = [request.num_prompt_tokens - 1]
++        if self.retain_previous_replay_boundary:
++            alignment = self.cache_hit_alignment_tokens
++            aligned_replay = (request.num_prompt_tokens - 1) // alignment * alignment
++            previous_replay = aligned_replay - alignment
++            if previous_replay > 0:
++                reachable_boundaries.append(previous_replay)
+         if request.shared_prefix_boundary:
+             reachable_boundaries.append(request.shared_prefix_boundary)
+ 

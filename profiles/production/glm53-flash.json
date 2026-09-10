@@ -199,10 +199,33 @@
         }
       },
       "prefix-cache-offload": {
-        "status": "diagnostic-only",
-        "runtime_name": "glm53-flash-quark-mxfp4-rocm10-mrv2-8xr9700-tp8-noep-mxfp4gemv-tiledbn8-dflash2-k4-fp8kv-768k-vision-prefixcache-offload32g-fs128g",
-        "reason": "Persistent prefix-cache qualification candidate with a 32 GiB CPU primary tier and capacity-guarded 128 GiB filesystem tier.",
+        "status": "production-ready",
+        "runtime_name": "glm53-flash-quark-mxfp4-rocm10-mrv2-8xr9700-tp8-noep-mxfp4gemv-tiledbn8-dflash2-k4-fp8kv-695k-vision-prefixcache-offload32g-fs128g",
+        "reason": "Production-qualified persistent prefix cache with a 32 GiB CPU primary tier, capacity-guarded 128 GiB filesystem tier, and a 695040-token context aligned to the 1280-token hybrid cache page.",
         "runtime_overrides": {
+          "limits": {
+            "max_model_len": 695040,
+            "max_num_seqs": 1,
+            "max_num_batched_tokens": 4096,
+            "gpu_memory_utilization": 0.995,
+            "kv_cache_memory_bytes": 4420000000
+          },
+          "environment": {
+            "VLLM_TARGET_DEVICE": "rocm",
+            "VLLM_USE_V2_MODEL_RUNNER": "1",
+            "VLLM_ROCM_USE_AITER": "1",
+            "VLLM_ROCM_USE_AITER_FP8BMM": "0",
+            "VLLM_ROCM_USE_AITER_FP4BMM": "0",
+            "VLLM_ROCM_USE_AITER_FP4_ASM_GEMM": "0",
+            "VLLM_ROCM_USE_TRITON_MXFP4_GEMV": "1",
+            "VLLM_DISABLE_PYNCCL": "1",
+            "VLLM_KV_CACHE_LAYOUT": "LBHNC",
+            "SAFETENSORS_FAST_GPU": "1",
+            "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:False",
+            "VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS": "900",
+            "ROCBLAS_USE_HIPBLASLT": "0",
+            "VLLM_ROCM_MXFP4_GEMV_BLOCK_N": "8"
+          },
           "cache": {
             "dtype": "fp8",
             "block_size": 16,
@@ -299,8 +322,8 @@
         "DISABLE_PROMPT_CACHING": "1",
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
         "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
-        "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "786432",
-        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "786432",
+        "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "695040",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "695040",
         "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "90"
       }
     }

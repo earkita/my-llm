@@ -64,6 +64,13 @@ proxy nie wystartuje po świeżym starcie modelu, cały start jest wycofywany.
 Najpierw wykonaj jednorazowo `./run proxy install` i ustaw
 `LITELLM_MASTER_KEY` w `.env`.
 
+Ustawienie Claude Code `DISABLE_PROMPT_CACHING=1` wyłącza tylko znaczniki
+`cache_control` specyficzne dla zarządzanego API Anthropic. Nie wyłącza
+automatic prefix caching vLLM: lokalny silnik wykrywa identyczne tokenowe
+prefiksy niezależnie od tych znaczników. Dzięki temu Claude Code nie oczekuje
+anthropicowych pól rozliczeniowych cache, a runtime nadal korzysta z cache
+GPU/RAM/filesystem.
+
 Launcher używa poniższych skryptów cyklu życia. Można je nadal wywołać
 bezpośrednio:
 
@@ -113,13 +120,31 @@ warm hit tego samego prefiksu oraz poprawność odpowiedzi.
 
 ### Trwały prefix cache przez OffloadingConnector
 
-Tryb `prefix-cache-offload` zachowuje konfigurację modelu, DFlash, Vision i
-limit 768K z trybu produkcyjnego. Dodaje automatic prefix caching oraz natywny
-vLLM `OffloadingConnector` z `TieringOffloadingSpec`:
+Tryb `prefix-cache-offload` zachowuje konfigurację modelu, DFlash i Vision.
+Używa granicy `695040 = 543 × 1280` tokenów, aby dokładnie wyrównać kontekst
+do hybrydowej strony cache i pozostawić roboczy margines VRAM dla realnego
+prefillu oraz modułów HIP przy stałych adresach pamięci.
+Dodaje automatic prefix caching oraz natywny vLLM `OffloadingConnector` z
+`TieringOffloadingSpec`:
 
 - 32 GiB współdzielonego cache RAM w `/dev/shm`;
 - filesystem tier w `/mnt/ai/r9700-kv-cache/glm53-flash-v031`;
 - limit 128 GiB pełnych bloków KV i rezerwę 192 GiB wolnego miejsca;
+- stabilne adresy pamięci KV przez `expandable_segments:False`, wymagane przez
+  walidację connectora;
+- wstępne załadowanie modułów hipBLASLt dla trzech rodzin BF16 GEMM używanych
+  przez GLM decode, wykonane przed stałą rezerwacją KV i ograniczone wyłącznie
+  do ROCm `OffloadingConnector`;
+- rezerwę GPU KV `4,420,000,000` B dla wyrównanej granicy 543 pełnych stron po
+  1280 tokenów; względem nieudanego testu 4,95 GB zwalnia to 530 MB VRAM dla
+  prefillu, stagingu offloadu i modułów hipBLASLt;
+- podtrzymanie kroków silnika podczas asynchronicznego sprawdzania tieru
+  filesystem, także wtedy, gdy wszystkie żądania czekają na wynik lookupu;
+- zachowanie pełnych bloków DFlash/EAGLE należących jeszcze wyłącznie do
+  promptu, gdy jeden krok schedulera kończy prefill i rozpoczyna decode;
+- zachowanie poprzedniego wyrównanego stanu Mamba na granicy fallbacku EAGLE,
+  dzięki czemu wszystkie grupy hybrydowego cache uzgadniają wspólny trafiony
+  prefiks;
 - usuwanie najstarszych zapisanych bloków przed kolejnym zapisem, z ochroną
   bloków używanych przez aktywne transfery.
 
@@ -147,12 +172,20 @@ automatycznie podczas startu tego trybu.
 Natywny XFS `/mnt/ai` jest zamontowany z `noquota`, dlatego limit jest
 egzekwowany przez pojedynczego aktywnego writera tieru, a nie przez quota
 filesystemu. Nie uruchamiaj równolegle drugiego procesu zapisującego do tego
-samego katalogu. Tryb pozostaje diagnostyczny do czasu testów cold/warm,
-restart/warm, poprawności odpowiedzi i regresji decode.
+samego katalogu. Tryb przeszedł testy cold/warm, odzyskanie prefiksu po
+restarcie, regresję decode, Vision oraz dokładną granicę 695040 tokenów i jest
+kwalifikowany produkcyjnie. Ponieważ pozostaje jawnym wariantem profilu,
+uruchamiaj go z nazwą trybu:
 
-Po testach zatrzymaj usługę przed zmianą profilu. Kwalifikacja v0.31 objęła
-Vision smoke, NIAH 256K 4/4 i dokładny test graniczny
-`786,368 + 64 = 786,432` z telemetrią.
+```bash
+./run launcher start glm53-flash --runtime-mode prefix-cache-offload \
+  --with-litellm
+```
+
+Po testach zatrzymaj usługę przed zmianą profilu. Bazowa kwalifikacja v0.31
+objęła Vision smoke, NIAH 256K 4/4 i dokładny test graniczny
+`786,368 + 64 = 786,432`; produkcyjny wariant persistent-cache ma osobną
+granicę `694,976 + 64 = 695,040`.
 
 Live throughput podczas pracy Claude Code można odczytywać bezpośrednio z
 metryk silnika vLLM:
