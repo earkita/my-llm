@@ -51,6 +51,9 @@ PROFILE_NAMES = tuple(
 )
 GLM_PROFILE = "glm53-flash"
 GLM_ROLLBACK_PROFILE = "glm53-flash-v029-rollback"
+GLM_V029_EXPERIMENTS = str(
+    ROOT / "profiles" / "dev" / "glm53-flash-v029-experiments.json"
+)
 
 
 class ProductionProfileTests(unittest.TestCase):
@@ -286,11 +289,13 @@ class ProductionProfileTests(unittest.TestCase):
             1048576: "1m",
         }
         expected_variants: dict[tuple[str, str], tuple[dict, int]] = {}
-        for profile_name in PROFILE_NAMES:
-            profile = load_profile(profile_name)
+        profile_sources = [*PROFILE_NAMES, GLM_V029_EXPERIMENTS]
+        for profile_source in profile_sources:
+            profile = load_profile(profile_source)
+            profile_name = profile["name"]
             runtimes = [profile["runtime"]]
             runtimes.extend(
-                load_runtime(profile_name, mode_name)
+                load_runtime(profile_source, mode_name)
                 for mode_name in profile["runtime"].get(
                     "experimental_modes", {}
                 )
@@ -564,6 +569,7 @@ class ProductionProfileTests(unittest.TestCase):
 
         rollback = load_profile(GLM_ROLLBACK_PROFILE)["runtime"]
         self.assertEqual(rollback["recipe"], "vllm_glm53flashrocm10_v0.29")
+        self.assertNotIn("experimental_modes", rollback)
         self.assertNotIn("VLLM_ROCM_MXFP4_GEMV_BLOCK_N", rollback["environment"])
 
     def test_glm_long_context_safety_patches_cover_page_sizes_and_bounds(
@@ -703,8 +709,8 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertIn("def reorder_tools_required_first", strict_tool_order)
         self.assertIn("tools = reorder_tools_required_first(tools)", strict_tool_order)
 
-    def test_glm_v029_rollback_keeps_explicit_diagnostic_modes(self) -> None:
-        baseline = load_runtime(GLM_ROLLBACK_PROFILE)
+    def test_glm_v029_dev_profile_keeps_explicit_diagnostic_modes(self) -> None:
+        baseline = load_runtime(GLM_V029_EXPERIMENTS)
         self.assertEqual(
             set(baseline["experimental_modes"]),
             {
@@ -720,7 +726,7 @@ class ProductionProfileTests(unittest.TestCase):
         )
 
         async_scheduler = load_runtime(
-            GLM_ROLLBACK_PROFILE,
+            GLM_V029_EXPERIMENTS,
             "mxfp4-gemv-dflash2-k4-fp8-1m-bt2048-async",
         )
         self.assertTrue(async_scheduler["scheduler"]["async"])
@@ -732,7 +738,7 @@ class ProductionProfileTests(unittest.TestCase):
         )
 
         bt1024 = load_runtime(
-            GLM_ROLLBACK_PROFILE, "mxfp4-gemv-dflash2-k4-fp8-1m-bt1024"
+            GLM_V029_EXPERIMENTS, "mxfp4-gemv-dflash2-k4-fp8-1m-bt1024"
         )
         self.assertEqual(bt1024["limits"]["max_model_len"], 1048576)
         self.assertEqual(bt1024["limits"]["max_num_seqs"], 1)
@@ -741,7 +747,7 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(bt1024["cache"]["dtype"], "fp8")
 
         vision = load_runtime(
-            GLM_ROLLBACK_PROFILE,
+            GLM_V029_EXPERIMENTS,
             "mxfp4-gemv-dflash2-k4-fp8-768k-vision-weights",
         )
         self.assertEqual(vision["limits"]["max_model_len"], 786432)
@@ -777,7 +783,7 @@ class ProductionProfileTests(unittest.TestCase):
         )
 
         fallback = load_runtime(
-            GLM_ROLLBACK_PROFILE, "mxfp4-gemv-dflash2-k7-256k"
+            GLM_V029_EXPERIMENTS, "mxfp4-gemv-dflash2-k7-256k"
         )
         self.assertEqual(fallback["limits"]["max_model_len"], 262144)
         self.assertNotIn("kv_cache_memory_bytes", fallback["limits"])
@@ -792,7 +798,7 @@ class ProductionProfileTests(unittest.TestCase):
         )
 
         tp_noep = load_runtime(
-            GLM_ROLLBACK_PROFILE,
+            GLM_V029_EXPERIMENTS,
             "mxfp4-gemv-dflash2-k7-fp8-1m-tp8-noep",
         )
         self.assertEqual(tp_noep["parallel"]["tensor"], 8)
@@ -805,7 +811,7 @@ class ProductionProfileTests(unittest.TestCase):
         )
 
         k3 = load_runtime(
-            GLM_ROLLBACK_PROFILE, "mxfp4-gemv-dflash2-k3-fp8-1m-tp8-noep"
+            GLM_V029_EXPERIMENTS, "mxfp4-gemv-dflash2-k3-fp8-1m-tp8-noep"
         )
         self.assertEqual(k3["parallel"], baseline["parallel"])
         self.assertEqual(k3["limits"]["max_num_batched_tokens"], 512)
@@ -813,7 +819,7 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(k3["speculative_config"]["num_speculative_tokens"], 3)
 
         workflow_c4 = load_runtime(
-            GLM_ROLLBACK_PROFILE,
+            GLM_V029_EXPERIMENTS,
             "mxfp4-gemv-dflash2-k2-fp8-256k-c4-tp8-noep",
         )
         self.assertEqual(workflow_c4["parallel"], baseline["parallel"])
@@ -831,7 +837,7 @@ class ProductionProfileTests(unittest.TestCase):
         )
 
         workflow_c4_async = load_runtime(
-            GLM_ROLLBACK_PROFILE,
+            GLM_V029_EXPERIMENTS,
             "mxfp4-gemv-dflash2-k2-fp8-256k-c4-tp8-noep-async",
         )
         self.assertTrue(workflow_c4_async["scheduler"]["async"])
@@ -1028,24 +1034,16 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertIn("--proxy-ready-timeout", command)
         self.assertIn("--dry-run", command)
 
-    def test_launcher_accepts_a_generic_embedded_diagnostic_mode(self) -> None:
-        with (
-            patch("r9700.launcher.managed_state", return_value=None),
-            patch("r9700.launcher.subprocess.run") as run,
+    def test_launcher_rejects_modes_in_a_production_profile(self) -> None:
+        with self.assertRaisesRegex(
+            ConfigurationError,
+            "unknown experimental runtime mode",
         ):
-            run.return_value.returncode = 0
             launcher.start(
                 GLM_ROLLBACK_PROFILE,
                 runtime_mode="mxfp4-gemv-dflash2-k7-256k",
                 dry_run=True,
             )
-
-        command = run.call_args.args[0]
-        mode_index = command.index("--runtime-mode")
-        self.assertEqual(
-            command[mode_index + 1],
-            "mxfp4-gemv-dflash2-k7-256k",
-        )
 
     def test_launcher_waits_before_adding_litellm_to_active_model(self) -> None:
         state = {

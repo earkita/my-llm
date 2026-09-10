@@ -62,10 +62,10 @@
       "source_runtime": "https://github.com/vllm-project/vllm/commit/7fbd44cbe0a90b9c8fd3a94a0f0401ac4b1bc719",
       "source_runtime_sha256": "7fbd44cbe0a90b9c8fd3a94a0f0401ac4b1bc719",
       "target_profile": "profiles/production/glm53-flash-v029-rollback.json",
-      "target_profile_sha256": "479dcae74adfdf54cb65c46b0175f93eba1250d1f86be6c3bee0811654279284",
+      "target_profile_sha256": "0e18685c267b96a4d05cbae99d2f967cab07101c1d594f87533d16bc4a7a07c8",
       "intentional_changes": [
         "renamed the former glm53-flash deployment without changing its v0.29 runtime contract",
-        "retained the exact mxfp4-gemv-dflash2-k4-fp8-768k-vision-weights mode for production rollback"
+        "moved all experimental runtime modes to profiles/dev/glm53-flash-v029-experiments.json"
       ]
     },
     "qwen38-flash": {

@@ -1,0 +1,472 @@
+{
+  "schema_version": 1,
+  "name": "glm53-flash-v029-experiments",
+  "status": "development",
+  "description": "Development GLM-5.3-Flash v0.29 runtime experiments moved out of production",
+  "model": {
+    "schema_version": 1,
+    "name": "glm53-flash-quark-mxfp4",
+    "family": "glm5next",
+    "format": "safetensors",
+    "repository": "amd/GLM-5.3-Flash-Quark-MXFP4",
+    "revision": "b5688f25491202978c19c4d036eef579f61bbe07",
+    "source_profile_sha256": "5619c5424b7bd30e8ae81d921861c0f10b5265f67360a94734118c6f8e8d185f",
+    "default_directory": "/mnt/ai/models/glm/GLM-5.3-Flash-Quark-MXFP4",
+    "served_name": "glm-5.3-flash-quark-mxfp4",
+    "expected_shards": 62,
+    "index_file": "model.safetensors.index.json",
+    "checkpoint_weight_bytes": 185066521464,
+    "required_files": [
+      "README.md",
+      "chat_template.jinja",
+      "config.json",
+      "generation_config.json",
+      "model.safetensors.index.json",
+      "processor_config.json",
+      "tokenizer.json",
+      "tokenizer_config.json"
+    ],
+    "allow_patterns": [
+      "*.json",
+      "*.safetensors",
+      "chat_template.jinja",
+      "README.md"
+    ],
+    "supports_dspark": false,
+    "supports_mtp": true,
+    "supports_dflash": true,
+    "auxiliary_artifacts": [
+      {
+        "name": "dflash2-drafter",
+        "repository": "incoai/GLM-5.3-Flash-DFlash2",
+        "revision": "bf582e4eacc1810f76656d1811693ff6c6737d2a",
+        "filename": "model.safetensors",
+        "path": "/mnt/ai/models/glm/GLM-5.3-Flash-DFlash2-HF-bf582e4/model.safetensors",
+        "size_bytes": 2342169800,
+        "sha256": "b038e1d9d1e7833fa3880c2c0135ba9b673013f03da1b29fb831931584759dac"
+      },
+      {
+        "name": "dflash2-config",
+        "repository": "incoai/GLM-5.3-Flash-DFlash2",
+        "revision": "bf582e4eacc1810f76656d1811693ff6c6737d2a",
+        "filename": "config.json",
+        "path": "/mnt/ai/models/glm/GLM-5.3-Flash-DFlash2-HF-bf582e4/config.json",
+        "size_bytes": 1273,
+        "sha256": "c4aeac0101196a6e26705b34c45230bcd0c7c68ee2d2d1efdb242087f3712573"
+      }
+    ],
+    "vllm": {
+      "tokenizer_mode": "auto",
+      "tool_call_parser": "glm47",
+      "reasoning_parser": "glm45",
+      "quantization": "quark",
+      "enable_auto_tool_choice": true,
+      "trust_remote_code": false,
+      "language_model_only": true
+    }
+  },
+  "runtime": {
+    "schema_version": 1,
+    "name": "glm53-flash-quark-mxfp4-rocm10-mrv2-8xr9700-tp8-noep-mxfp4gemv-dflash2-k4-fp8kv-1m-bt2048-dev-base",
+    "status": "diagnostic-only",
+    "recipe": "vllm_glm53flashrocm10_v0.29",
+    "description": "Development base for preserved GLM-5.3-Flash v0.29 experimental runtime modes",
+    "required_model_family": "glm5next",
+    "required_patches": [
+      "0001",
+      "0002",
+      "0003",
+      "0004",
+      "0005",
+      "0006",
+      "0007",
+      "0008",
+      "0009",
+      "0010",
+      "0011",
+      "0012",
+      "0013",
+      "0014",
+      "0015",
+      "0016",
+      "0017",
+      "0018",
+      "0019",
+      "0020",
+      "0021",
+      "0022",
+      "0023",
+      "0024",
+      "0025"
+    ],
+    "gpu_order": [
+      0,
+      1,
+      2,
+      3,
+      7,
+      4,
+      5,
+      6
+    ],
+    "gpu_bdfs": [
+      "0000:e3:00.0",
+      "0000:c3:00.0",
+      "0000:c6:00.0",
+      "0000:03:00.0",
+      "0000:23:00.0",
+      "0000:e6:00.0",
+      "0000:07:00.0",
+      "0000:0a:00.0"
+    ],
+    "parallel": {
+      "tensor": 8,
+      "pipeline": 1,
+      "data": 1,
+      "enable_expert_parallel": false,
+      "disable_custom_all_reduce": true
+    },
+    "limits": {
+      "max_model_len": 1048576,
+      "max_num_seqs": 1,
+      "max_num_batched_tokens": 2048,
+      "gpu_memory_utilization": 0.995,
+      "kv_cache_memory_bytes": 6591622400
+    },
+    "cache": {
+      "dtype": "fp8",
+      "block_size": 16,
+      "prefix_cache": false,
+      "cpu_offload_gb": 0
+    },
+    "scheduler": {
+      "async": false,
+      "enforce_eager": true
+    },
+    "multimodal": {
+      "language_model_only": true
+    },
+    "loading": {
+      "format": "safetensors",
+      "max_parallel_workers": 1
+    },
+    "transport": {
+      "p2p_disable": 0,
+      "shm_disable": 1,
+      "socket_ifname": "lo",
+      "runtime_connect": 1,
+      "hsa_legacy_ipc": 0
+    },
+    "shutdown": {
+      "request_timeout_seconds": 0,
+      "worker_timeout_seconds": 60,
+      "process_grace_seconds": 120
+    },
+    "attention_backend": "ROCM_AITER_MLA_SPARSE",
+    "moe_backend": "emulation",
+    "linear_backend": "emulation",
+    "speculative_config": {
+      "model_artifact": "dflash2-drafter",
+      "method": "dflash",
+      "num_speculative_tokens": 4,
+      "draft_tensor_parallel_size": 8,
+      "attention_backend": "TRITON_ATTN",
+      "kv_cache_dtype": "fp8",
+      "enforce_eager": true
+    },
+    "experimental_modes": {
+      "mxfp4-gemv-dflash2-k7-256k": {
+        "status": "diagnostic-only",
+        "runtime_name": "glm53-flash-quark-mxfp4-rocm10-mrv2-8xr9700-tp8-mxfp4gemv-dflash2-k7-bf16kv-256k",
+        "reason": "Explicit 256K BF16-KV fallback for the packed RDNA4 MXFP4 decode GEMV.",
+        "runtime_overrides": {
+          "parallel": {
+            "tensor": 8,
+            "pipeline": 1,
+            "data": 1,
+            "enable_expert_parallel": true,
+            "disable_custom_all_reduce": true
+          },
+          "limits": {
+            "max_model_len": 262144,
+            "max_num_seqs": 1,
+            "max_num_batched_tokens": 512,
+            "gpu_memory_utilization": 0.97
+          },
+          "cache": {
+            "dtype": "bfloat16",
+            "block_size": 16,
+            "prefix_cache": false,
+            "cpu_offload_gb": 0
+          },
+          "speculative_config": {
+            "model_artifact": "dflash2-drafter",
+            "method": "dflash",
+            "num_speculative_tokens": 7,
+            "draft_tensor_parallel_size": 8,
+            "attention_backend": "TRITON_ATTN",
+            "kv_cache_dtype": "bfloat16",
+            "enforce_eager": true
+          },
+          "environment": {
+            "VLLM_TARGET_DEVICE": "rocm",
+            "VLLM_USE_V2_MODEL_RUNNER": "1",
+            "VLLM_ROCM_USE_AITER": "1",
+            "VLLM_ROCM_USE_AITER_FP8BMM": "0",
+            "VLLM_ROCM_USE_AITER_FP4BMM": "0",
+            "VLLM_ROCM_USE_AITER_FP4_ASM_GEMM": "0",
+            "VLLM_ROCM_USE_TRITON_MXFP4_GEMV": "1",
+            "VLLM_DISABLE_PYNCCL": "1",
+            "VLLM_KV_CACHE_LAYOUT": "LBHNC",
+            "SAFETENSORS_FAST_GPU": "1",
+            "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+            "ROCBLAS_USE_HIPBLASLT": "0"
+          }
+        }
+      },
+      "mxfp4-gemv-dflash2-k7-fp8-1m-tp8-noep": {
+        "status": "diagnostic-only",
+        "runtime_name": "glm53-flash-quark-mxfp4-rocm10-mrv2-8xr9700-tp8-noep-mxfp4gemv-dflash2-k7-fp8kv-1m",
+        "reason": "Former DFlash2 K7 TP8/no-EP configuration retained as an explicit rollback comparator; the earlier repeated-token 75.06 tok/s result is not treated as representative decode.",
+        "runtime_overrides": {
+          "parallel": {
+            "tensor": 8,
+            "pipeline": 1,
+            "data": 1,
+            "enable_expert_parallel": false,
+            "disable_custom_all_reduce": true
+          },
+          "limits": {
+            "max_model_len": 1048576,
+            "max_num_seqs": 1,
+            "max_num_batched_tokens": 512,
+            "gpu_memory_utilization": 0.995,
+            "kv_cache_memory_bytes": 6591622400
+          },
+          "speculative_config": {
+            "model_artifact": "dflash2-drafter",
+            "method": "dflash",
+            "num_speculative_tokens": 7,
+            "draft_tensor_parallel_size": 8,
+            "attention_backend": "TRITON_ATTN",
+            "kv_cache_dtype": "fp8",
+            "enforce_eager": true
+          }
+        }
+      },
+      "mxfp4-gemv-dflash2-k3-fp8-1m-tp8-noep": {
+        "status": "diagnostic-only",
+        "runtime_name": "glm53-flash-quark-mxfp4-rocm10-mrv2-8xr9700-tp8-noep-mxfp4gemv-dflash2-k3-fp8kv-1m",
+        "reason": "Qualified DFlash2 K3 rollback comparator; representative chat-template A/B measured 27.03 engine decode tok/s versus 29.28 tok/s for the K4 default.",
+        "runtime_overrides": {
+          "parallel": {
+            "tensor": 8,
+            "pipeline": 1,
+            "data": 1,
+            "enable_expert_parallel": false,
+            "disable_custom_all_reduce": true
+          },
+          "limits": {
+            "max_model_len": 1048576,
+            "max_num_seqs": 1,
+            "max_num_batched_tokens": 512,
+            "gpu_memory_utilization": 0.995,
+            "kv_cache_memory_bytes": 6591622400
+          },
+          "speculative_config": {
+            "model_artifact": "dflash2-drafter",
+            "method": "dflash",
+            "num_speculative_tokens": 3,
+            "draft_tensor_parallel_size": 8,
+            "attention_backend": "TRITON_ATTN",
+            "kv_cache_dtype": "fp8",
+            "enforce_eager": true
+          }
+        }
+      },
+      "mxfp4-gemv-dflash2-k4-fp8-1m-bt2048-async": {
+        "status": "diagnostic-only",
+        "runtime_name": "glm53-flash-quark-mxfp4-rocm10-mrv2-8xr9700-tp8-noep-mxfp4gemv-dflash2-k4-fp8kv-1m-bt2048-async",
+        "reason": "Async-scheduling decode experiment based on the production K4/FP8-KV/1M/BT2048 runtime; all model, cache, parallelism and speculative-decoding settings remain unchanged.",
+        "runtime_overrides": {
+          "scheduler": {
+            "async": true,
+            "enforce_eager": true
+          }
+        }
+      },
+      "mxfp4-gemv-dflash2-k4-fp8-1m-bt1024": {
+        "status": "diagnostic-only",
+        "runtime_name": "glm53-flash-quark-mxfp4-rocm10-mrv2-8xr9700-tp8-noep-mxfp4gemv-dflash2-k4-fp8kv-1m-bt1024",
+        "reason": "Qualified prefill scheduler rollback comparator for the production K4 runtime; uses max_num_batched_tokens=1024 without changing model, cache, parallelism or speculative decoding.",
+        "runtime_overrides": {
+          "limits": {
+            "max_model_len": 1048576,
+            "max_num_seqs": 1,
+            "max_num_batched_tokens": 1024,
+            "gpu_memory_utilization": 0.995,
+            "kv_cache_memory_bytes": 6591622400
+          }
+        }
+      },
+      "mxfp4-gemv-dflash2-k4-fp8-768k-vision-weights": {
+        "status": "diagnostic-only",
+        "runtime_name": "glm53-flash-quark-mxfp4-rocm10-mrv2-8xr9700-tp8-noep-mxfp4gemv-dflash2-k4-fp8kv-768k-vision-weights",
+        "reason": "Eight-image GLM-5.3 vision experiment. Shards the 1.05 GiB BF16 vision tower across TP8, uses Triton ViT attention to avoid the broken Torch SDPA path on RDNA4, and limits context to 768K with a smaller fixed KV reservation for prefill working-memory headroom; it is not yet GPU-qualified.",
+        "runtime_overrides": {
+          "limits": {
+            "max_model_len": 786432,
+            "max_num_seqs": 1,
+            "max_num_batched_tokens": 4096,
+            "gpu_memory_utilization": 0.995,
+            "kv_cache_memory_bytes": 4960000000
+          },
+          "multimodal": {
+            "language_model_only": false,
+            "encoder_attention_backend": "TRITON_ATTN",
+            "limit_per_prompt": {
+              "image": 8,
+              "video": 0
+            },
+            "encoder_tp_mode": "weights",
+            "processor_kwargs": {
+              "max_image_tokens": 4096
+            }
+          }
+        }
+      },
+      "mxfp4-gemv-dflash2-k2-fp8-256k-c4-tp8-noep": {
+        "status": "diagnostic-only",
+        "runtime_name": "glm53-flash-quark-mxfp4-rocm10-mrv2-8xr9700-tp8-noep-mxfp4gemv-dflash2-k2-fp8kv-256k-c4",
+        "reason": "Workflow concurrency experiment: DFlash2 K2 across four requests reaches but does not exceed the packed RDNA4 MXFP4 GEMV limit of 64 MoE routes. Short-context C4 API, decode and LiteLLM tool-call smoke tests passed on 2026-09-08; the measured cache capacity is 3.89 full 256K contexts, so a four-request full-boundary run is not claimed.",
+        "runtime_overrides": {
+          "parallel": {
+            "tensor": 8,
+            "pipeline": 1,
+            "data": 1,
+            "enable_expert_parallel": false,
+            "disable_custom_all_reduce": true
+          },
+          "limits": {
+            "max_model_len": 262144,
+            "max_num_seqs": 4,
+            "max_num_batched_tokens": 512,
+            "gpu_memory_utilization": 0.995,
+            "kv_cache_memory_bytes": 6591622400
+          },
+          "cache": {
+            "dtype": "fp8",
+            "block_size": 16,
+            "prefix_cache": false,
+            "cpu_offload_gb": 0
+          },
+          "speculative_config": {
+            "model_artifact": "dflash2-drafter",
+            "method": "dflash",
+            "num_speculative_tokens": 2,
+            "draft_tensor_parallel_size": 8,
+            "attention_backend": "TRITON_ATTN",
+            "kv_cache_dtype": "fp8",
+            "enforce_eager": true
+          }
+        }
+      },
+      "mxfp4-gemv-dflash2-k2-fp8-256k-c4-tp8-noep-async": {
+        "status": "diagnostic-only",
+        "runtime_name": "glm53-flash-quark-mxfp4-rocm10-mrv2-8xr9700-tp8-noep-mxfp4gemv-dflash2-k2-fp8kv-256k-c4-async",
+        "reason": "Async-scheduling A/B comparator for the DFlash2 K2 FP8-KV 256K concurrency-4 workflow mode; all non-scheduler settings are identical to its synchronous counterpart.",
+        "runtime_overrides": {
+          "parallel": {
+            "tensor": 8,
+            "pipeline": 1,
+            "data": 1,
+            "enable_expert_parallel": false,
+            "disable_custom_all_reduce": true
+          },
+          "limits": {
+            "max_model_len": 262144,
+            "max_num_seqs": 4,
+            "max_num_batched_tokens": 512,
+            "gpu_memory_utilization": 0.995,
+            "kv_cache_memory_bytes": 6591622400
+          },
+          "cache": {
+            "dtype": "fp8",
+            "block_size": 16,
+            "prefix_cache": false,
+            "cpu_offload_gb": 0
+          },
+          "scheduler": {
+            "async": true,
+            "enforce_eager": true
+          },
+          "speculative_config": {
+            "model_artifact": "dflash2-drafter",
+            "method": "dflash",
+            "num_speculative_tokens": 2,
+            "draft_tensor_parallel_size": 8,
+            "attention_backend": "TRITON_ATTN",
+            "kv_cache_dtype": "fp8",
+            "enforce_eager": true
+          }
+        }
+      }
+    },
+    "environment": {
+      "VLLM_TARGET_DEVICE": "rocm",
+      "VLLM_USE_V2_MODEL_RUNNER": "1",
+      "VLLM_ROCM_USE_AITER": "1",
+      "VLLM_ROCM_USE_AITER_FP8BMM": "0",
+      "VLLM_ROCM_USE_AITER_FP4BMM": "0",
+      "VLLM_ROCM_USE_AITER_FP4_ASM_GEMM": "0",
+      "VLLM_ROCM_USE_TRITON_MXFP4_GEMV": "1",
+      "VLLM_DISABLE_PYNCCL": "1",
+      "VLLM_KV_CACHE_LAYOUT": "LBHNC",
+      "SAFETENSORS_FAST_GPU": "1",
+      "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+      "ROCBLAS_USE_HIPBLASLT": "0"
+    },
+    "hardware_topology": {
+      "captured_on": "2026-09-05",
+      "motherboard": "ASUS Pro WS WRX90E-SAGE SE",
+      "note": "Eight gfx1201 R9700 devices in the measured fast-first order. NVIDIA remains the display adapter and is excluded by explicit ROCm platform selection."
+    }
+  },
+  "stack": {
+    "description": "Development GLM-5.3 Flash v0.29 runtime experiments",
+    "litellm_aliases": [
+      "glm-5.3-flash-high"
+    ],
+    "claude_settings": {
+      "apiKeyHelper": "bash -c 'exec \"${MY_LLM_REPO_ROOT:-$HOME/ai/my-llm}/scripts/claude-litellm-key.sh\"'",
+      "permissions": {
+        "defaultMode": "acceptEdits",
+        "allow": [
+          "Read",
+          "Bash"
+        ]
+      },
+      "env": {
+        "ANTHROPIC_BASE_URL": "http://127.0.0.1:4000",
+        "ANTHROPIC_MODEL": "glm-5.3-flash-high",
+        "ANTHROPIC_SMALL_FAST_MODEL": "glm-5.3-flash-high",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-5.3-flash-high",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.3-flash-high",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.3-flash-high",
+        "DISABLE_PROMPT_CACHING": "1",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+        "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
+        "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "1048576",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1048576",
+        "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "90"
+      }
+    }
+  },
+  "verification": {
+    "scope": "glm53-v029-development-experiments",
+    "verified_context": 1048576,
+    "verified_on": "2026-09-08",
+    "best_runtime_mode": null,
+    "notes": "Preserved development and rollback variants. No mode in this file is part of a production profile unless explicitly promoted by the user."
+  }
+}
