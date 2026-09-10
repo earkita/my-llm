@@ -572,7 +572,7 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertNotIn("0026", runtime["required_patches"])
         self.assertNotIn("experimental_modes", runtime)
         self.assertEqual(runtime["limits"]["max_model_len"], 524288)
-        self.assertEqual(runtime["limits"]["max_num_batched_tokens"], 2048)
+        self.assertEqual(runtime["limits"]["max_num_batched_tokens"], 4096)
         self.assertEqual(runtime["limits"]["kv_cache_memory_bytes"], 4960000000)
         self.assertFalse(runtime["multimodal"]["language_model_only"])
         self.assertEqual(
@@ -589,7 +589,7 @@ class ProductionProfileTests(unittest.TestCase):
             command[command.index("--max-model-len") + 1], "524288"
         )
         self.assertEqual(
-            command[command.index("--max-num-batched-tokens") + 1], "2048"
+            command[command.index("--max-num-batched-tokens") + 1], "4096"
         )
         self.assertIn("--enable-prefix-caching", command)
         self.assertEqual(
@@ -623,7 +623,7 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(runtime["recipe"], "vllm_glm53flashrocm10_v0.29")
         self.assertNotIn("experimental_modes", runtime)
         self.assertEqual(runtime["limits"]["max_model_len"], 524288)
-        self.assertEqual(runtime["limits"]["max_num_batched_tokens"], 2048)
+        self.assertEqual(runtime["limits"]["max_num_batched_tokens"], 4096)
         self.assertTrue(runtime["cache"]["prefix_cache"])
         self.assertEqual(
             runtime["cache"]["prefix_cache_retention_interval"], 1280
@@ -966,7 +966,7 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(baseline["limits"]["max_model_len"], 524288)
         self.assertEqual(baseline["limits"]["max_num_seqs"], 1)
         self.assertEqual(
-            baseline["limits"]["max_num_batched_tokens"], 2048
+            baseline["limits"]["max_num_batched_tokens"], 4096
         )
         self.assertEqual(
             baseline["limits"]["gpu_memory_utilization"], 0.995

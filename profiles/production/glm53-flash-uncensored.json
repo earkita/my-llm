@@ -139,7 +139,7 @@
     "limits": {
       "max_model_len": 524288,
       "max_num_seqs": 1,
-      "max_num_batched_tokens": 2048,
+      "max_num_batched_tokens": 4096,
       "gpu_memory_utilization": 0.995,
       "kv_cache_memory_bytes": 4960000000
     },

@@ -17,7 +17,7 @@ Ten opis należy aktualizować w tym samym commicie co profil.
 | Równoległość | TP8 / PP1 / DP1, bez expert parallelism |
 | Maksymalny kontekst | 524288 tokenów (512K) |
 | Maksymalna liczba sekwencji | 1 |
-| Budżet batchowanego prefilla | 2048 tokenów |
+| Budżet batchowanego prefilla | 4096 tokenów |
 | Wagi | AMD Quark MXFP4 |
 | KV cache | FP8, 4 960 000 000 bajtów (`4960000000`), bloki po 16 tokenów, automatic prefix caching |
 | DFlash | DFlash2, K=4, draft TP8 |
