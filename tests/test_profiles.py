@@ -817,6 +817,38 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertIn("def reorder_tools_required_first", strict_tool_order)
         self.assertIn("tools = reorder_tools_required_first(tools)", strict_tool_order)
 
+        bounded_renderer_warmup = (
+            ROOT
+            / "patches/vllm_glm53flashrocm10_v0.29/"
+            "0027-fix-bound-renderer-warmup-to-prefill-budget.patch"
+        ).read_text()
+        self.assertIn(
+            "seq_len = min(seq_len, scheduler_config.max_num_batched_tokens)",
+            bounded_renderer_warmup,
+        )
+        self.assertIn(
+            "scheduler_config=self.config.scheduler_config",
+            bounded_renderer_warmup,
+        )
+
+        mamba_retirement = (
+            ROOT
+            / "patches/vllm_glm53flashrocm10_v0.29/"
+            "0028-fix-retire-Mamba-states-across-null-gaps.patch"
+        ).read_text()
+        self.assertIn("self._num_retired_blocks", mamba_retirement)
+        self.assertIn("if blocks[i].is_null:", mamba_retirement)
+        self.assertIn("continue", mamba_retirement)
+
+        mamba_resume_index = (
+            ROOT
+            / "patches/vllm_glm53flashrocm10_v0.29/"
+            "0029-fix-seed-Mamba-state-index-in-Mamba-blocks.patch"
+        ).read_text()
+        self.assertIn(
+            "// self.cache_config.mamba_block_size", mamba_resume_index
+        )
+
     def test_glm_v029_dev_profile_keeps_explicit_diagnostic_modes(self) -> None:
         baseline = load_runtime(GLM_V029_EXPERIMENTS)
         self.assertEqual(

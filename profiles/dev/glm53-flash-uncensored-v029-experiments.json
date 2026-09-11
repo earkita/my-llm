@@ -9,7 +9,7 @@
     "family": "glm5next",
     "format": "safetensors",
     "repository": "dealignai/GLM-5.3-Flash-UNCENSORED-FP8",
-    "revision": "3591f3347b44ba8f0cc6769d85a82b10cddcd572",
+    "revision": "d21b19569d30e6f471c433b11e672b3bbb80552a",
     "source_profile_sha256": "b34650495b6cfbad7f1a520224000bfd61d31912ab6259b136e3b40dec92247e",
     "default_directory": "/mnt/ai/models/glm/GLM-5.3-Flash-UNCENSORED-Quark-MXFP4",
     "served_name": "glm-5.3-flash-uncensored-quark-mxfp4",
@@ -67,11 +67,11 @@
       "language_model_only": true
     },
     "file_sha256": {
-      "README.md": "d8630ecf0ecf10f1ed60ca27fba24447cd195de3ba30e52930730995be0eed84",
-      "chat_template.jinja": "34d5ee66b12fa6446cdae131c352b8f68cd85369e0e6fda115583805fada3891",
-      "config.json": "f1254056e7c78f105a559388185a0ee12a635addd11f4e6f0c20987619e23712",
+      "README.md": "bb18830545cfc8552ab6bee146e716ddee7e25ec08664dc3fe9ac923edd3be87",
+      "chat_template.jinja": "acfc37c9cba68e0f2707bb16a51f7bf84cb4d29d6c6db0819d7b1761f98a52a1",
+      "config.json": "16b26a539ce56ec27de6e71ef3033502ecd789a26e8e886b242ea633638ac1ec",
       "conversion-provenance.json": "654a423e2c55924b872aa1945db86513b35c7faa1146a9ae9ef48ba33e3af611",
-      "model.safetensors.index.json": "f97b7774ceb20b382bbede8d478f71fbe86c9eca08ee4a2cd4a9b728abb47de7",
+      "model.safetensors.index.json": "4268b6e4bdd293d724f9b62c7205bd184f487c01dfe099694a4a228d0c009e90",
       "tokenizer.json": "19e773648cb4e65de8660ea6365e10acca112d42a854923df93db4a6f333a82d"
     }
   },

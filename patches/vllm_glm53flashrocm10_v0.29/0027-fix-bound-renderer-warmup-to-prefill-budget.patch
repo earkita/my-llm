@@ -1,0 +1,168 @@
+From f4eccdadefc6501fafeb1a0bf7f171ff24f984b0 Mon Sep 17 00:00:00 2001
+From: lucamotz <luca.motz@icloud.com>
+Date: Sat, 5 Sep 2026 16:43:28 +0000
+Subject: [PATCH 27/29] fix: bound renderer warmup to prefill budget
+
+Long-context multimodal renderer warmup should not construct and retain dummy
+inputs for the full model context when chunked prefill can process only the
+configured token budget. Cap the warmup sequence at max_num_batched_tokens.
+
+Upstream: https://github.com/vllm-project/vllm/pull/55448
+Upstream-Commit: f4eccdadefc6501fafeb1a0bf7f171ff24f984b0
+---
+diff --git a/tests/multimodal/test_registry.py b/tests/multimodal/test_registry.py
+index 7ee83cc..99f0689 100644
+--- a/tests/multimodal/test_registry.py
++++ b/tests/multimodal/test_registry.py
+@@ -6,9 +6,11 @@ Qwen2.5-VL visual component loading behavior.
+ """
+ 
+ from types import SimpleNamespace
++from unittest.mock import MagicMock
+ 
+ import pytest
+ 
++from vllm.config import SchedulerConfig
+ from vllm.multimodal import MULTIMODAL_REGISTRY
+ 
+ from ..models.utils import build_model_context
+@@ -16,6 +18,34 @@ from ..models.utils import build_model_context
+ pytestmark = pytest.mark.cpu_test
+ 
+ 
++@pytest.mark.parametrize(
++    ("chunked_prefill", "max_model_len", "expected_seq_len"),
++    [(None, 491520, 491520), (True, 491520, 8192), (True, 128, 128), (False, 128, 128)],
++)
++def test_dummy_inputs_scheduler_budget(
++    chunked_prefill, max_model_len, expected_seq_len
++):
++    model_config = MagicMock()
++    model_config.max_model_len = max_model_len
++    processor = MagicMock()
++    processor.apply.return_value = {"prompt_token_ids": [7]}
++    kwargs = {}
++    if chunked_prefill is not None:
++        kwargs["scheduler_config"] = SchedulerConfig(
++            max_model_len=max_model_len,
++            is_encoder_decoder=False,
++            max_num_batched_tokens=8192,
++            max_num_seqs=1,
++            enable_chunked_prefill=chunked_prefill,
++        )
++    result = MULTIMODAL_REGISTRY.get_dummy_mm_inputs(
++        model_config, {"image": 1}, processor=processor, **kwargs
++    )
++    get_inputs = processor.dummy_inputs.get_dummy_processor_inputs
++    assert get_inputs.call_args.kwargs["seq_len"] == expected_seq_len
++    assert len(result["prompt_token_ids"]) == expected_seq_len
++
++
+ @pytest.mark.parametrize(
+     "model_id,limit_mm_per_prompt,expected",
+     [
+diff --git a/tests/renderers/test_warmup.py b/tests/renderers/test_warmup.py
+index aff1f5a..f6f9f7a 100644
+--- a/tests/renderers/test_warmup.py
++++ b/tests/renderers/test_warmup.py
+@@ -45,6 +45,7 @@ def _make_renderer_mock(mm_limits: dict[str, int]) -> MagicMock:
+     # MM processor with configurable limits
+     mm_processor = MagicMock()
+     mm_processor.info.allowed_mm_limits = mm_limits
++    mm_processor.apply.return_value = {"prompt_token_ids": [1]}
+     renderer.mm_processor = mm_processor
+     renderer._readonly_mm_processor = None
+     renderer._warmup_mm_processor = BaseRenderer._warmup_mm_processor.__get__(
+@@ -65,6 +66,8 @@ def _make_renderer_mock(mm_limits: dict[str, int]) -> MagicMock:
+     renderer._mm_warmup_done = False
+     renderer.clear_mm_cache = MagicMock()
+     renderer.model_config.max_model_len = 128
++    renderer.config.scheduler_config.max_num_batched_tokens = 8192
++    renderer.config.scheduler_config.enable_chunked_prefill = True
+     renderer.model_config.get_multimodal_config.return_value.limit_per_prompt = {}
+ 
+     return renderer
+@@ -115,6 +118,19 @@ class TestMmWarmupRunsNormally:
+     # MM warmup must run when mm_processor is set and limits > 0; the chat
+     # template warmup must run alongside it.
+ 
++    @pytest.mark.parametrize(
++        ("max_model_len", "expected_seq_len"), [(491520, 8192), (128, 128)]
++    )
++    def test_warmup_sequence_length_is_bounded(self, max_model_len, expected_seq_len):
++        renderer = _make_renderer_mock({"image": 1, "video": 1})
++        renderer.model_config.max_model_len = max_model_len
++
++        with patch("vllm.multimodal.processing.TimingContext", autospec=True):
++            BaseRenderer.warmup(renderer, ChatParams())
++
++        get_inputs = renderer.mm_processor.dummy_inputs.get_dummy_processor_inputs
++        assert get_inputs.call_args.kwargs["seq_len"] == expected_seq_len
++
+     def test_processor_apply_called(self):
+         renderer = _make_renderer_mock({"image": 1})
+ 
+diff --git a/vllm/multimodal/registry.py b/vllm/multimodal/registry.py
+index 810bdb0..1d541b9 100644
+--- a/vllm/multimodal/registry.py
++++ b/vllm/multimodal/registry.py
+@@ -29,7 +29,12 @@ from .processing import (
+ )
+ 
+ if TYPE_CHECKING:
+-    from vllm.config import ModelConfig, ObservabilityConfig, VllmConfig
++    from vllm.config import (
++        ModelConfig,
++        ObservabilityConfig,
++        SchedulerConfig,
++        VllmConfig,
++    )
+     from vllm.model_executor.models.interfaces import SupportsMultiModal
+ 
+ logger = init_logger(__name__)
+@@ -243,6 +248,7 @@ class MultiModalRegistry:
+         *,
+         cache: BaseMultiModalProcessorCache | None = None,
+         processor: BaseMultiModalProcessor | None = None,
++        scheduler_config: "SchedulerConfig | None" = None,
+     ) -> MultiModalInput:
+         """
+         Create dummy data for profiling the memory usage of a model.
+@@ -250,6 +256,8 @@ class MultiModalRegistry:
+         The model is identified by `model_config`.
+         """
+         seq_len = model_config.max_model_len
++        if scheduler_config is not None and scheduler_config.enable_chunked_prefill:
++            seq_len = min(seq_len, scheduler_config.max_num_batched_tokens)
+ 
+         if processor is None:
+             processor = self.create_processor(model_config, cache=cache)
+diff --git a/vllm/renderers/base.py b/vllm/renderers/base.py
+index 264a811..0fd1b76 100644
+--- a/vllm/renderers/base.py
++++ b/vllm/renderers/base.py
+@@ -246,19 +246,16 @@ class BaseRenderer(ABC, Generic[_T]):
+         *,
+         log_prefix: str,
+     ) -> None:
+-        from vllm.multimodal.processing import TimingContext
+-
+         model_config = self.model_config
+-        mm_config = model_config.get_multimodal_config()
+         mm_limits = {k: v for k, v in processor.info.allowed_mm_limits.items() if v > 0}
+ 
+         start_time = time.perf_counter()
+-        processor_inputs = processor.dummy_inputs.get_dummy_processor_inputs(
+-            seq_len=model_config.max_model_len,
++        _ = mm_registry.get_dummy_mm_inputs(
++            model_config,
+             mm_counts=dict.fromkeys(mm_limits, 1),
+-            mm_options=mm_config.limit_per_prompt,
++            processor=processor,
++            scheduler_config=self.config.scheduler_config,
+         )
+-        _ = processor.apply(processor_inputs, timing_ctx=TimingContext(enabled=False))
+ 
+         elapsed = time.perf_counter() - start_time
+         logger.info("%s warmup completed in %.3fs", log_prefix, elapsed)
+

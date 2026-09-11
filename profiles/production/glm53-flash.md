@@ -41,8 +41,11 @@ Ten opis należy aktualizować w tym samym commicie co profil.
   udostępnia `vllm:prefix_cache_queries_total` i
   `vllm:prefix_cache_hits_total`;
 - limit kontekstu `524288` zachowuje stałą rezerwę KV `4960000000`;
+- warmup renderera Vision jest ograniczony do budżetu prefilla `4096`, stare
+  stany Mamba są zwalniane także przez luki `null`, a wznowienie po trafieniu
+  APC indeksuje tabelę w jednostkach `mamba_block_size`;
 - checkpoint jest ładowany z 62 shardów Safetensors;
-- runtime wymaga 25 uporządkowanych patchy v0.29.
+- runtime wymaga 29 uporządkowanych patchy v0.29.
 
 ## Świadomie wyłączone
 

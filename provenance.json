@@ -62,13 +62,14 @@
     },
     "glm53-flash-uncensored": {
       "source_model": "https://huggingface.co/dealignai/GLM-5.3-Flash-UNCENSORED-FP8",
-      "source_model_sha256": "3591f3347b44ba8f0cc6769d85a82b10cddcd572",
+      "source_model_sha256": "d21b19569d30e6f471c433b11e672b3bbb80552a",
       "source_runtime": "https://github.com/vllm-project/vllm/commit/7fbd44cbe0a90b9c8fd3a94a0f0401ac4b1bc719",
       "source_runtime_sha256": "7fbd44cbe0a90b9c8fd3a94a0f0401ac4b1bc719",
       "target_profile": "profiles/production/glm53-flash-uncensored.json",
-      "target_profile_sha256": "3512001e08499d0460e9d9cff04492c5e1e903fc5b4d0f48e9469a069b2a7016",
+      "target_profile_sha256": "3ade009d2f60fc5fbad2f8e8ab2d752958ec264f2aa6cc3777b628a2af4dd559",
       "intentional_changes": [
         "converted the local UNCENSORED FP8 checkpoint to AMD Quark MXFP4 with recorded conversion provenance",
+        "updated the conversion to source revision d21b195 with corrected weights, clear_thinking enabled, and repetition_penalty 1.1",
         "bound the derived 62-shard checkpoint to exact file hashes and source revision",
         "reused the qualified ROCm 10 v0.29 TP8 DFlash2 K4 FP8-KV Vision runtime without experimental modes",
         "bound the shared glm-5.3-flash-high LiteLLM and Claude Code alias dynamically to the active checkpoint",

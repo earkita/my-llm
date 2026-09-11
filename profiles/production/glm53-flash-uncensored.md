@@ -11,7 +11,7 @@ aktualizować w tym samym commicie co profil.
 | Status | `production-ready` |
 | Model | `glm53-flash-uncensored-quark-mxfp4` |
 | Checkpoint | `/mnt/ai/models/glm/GLM-5.3-Flash-UNCENSORED-Quark-MXFP4` |
-| Źródło | `dealignai/GLM-5.3-Flash-UNCENSORED-FP8` @ `3591f3347b44ba8f0cc6769d85a82b10cddcd572` |
+| Źródło | `dealignai/GLM-5.3-Flash-UNCENSORED-FP8` @ `d21b19569d30e6f471c433b11e672b3bbb80552a` |
 | Runtime | vLLM na ROCm 10 |
 | Nazwa runtime’u | `glm53-flash-uncensored-quark-mxfp4-rocm10-mrv2-8xr9700-tp8-noep-mxfp4gemv-dflash2-k4-fp8kv-512k-vision-weights` |
 | Recepta | `vllm_glm53flashrocm10_v0.29` |
@@ -47,8 +47,11 @@ aktualizować w tym samym commicie co profil.
   nowej sesji Claude Code;
 - limit kontekstu `524288` zapewnia zapas względem pojemności hybrydowego cache;
   zachowuje dotychczasową rezerwę KV `4960000000`;
+- warmup renderera Vision jest ograniczony do budżetu prefilla `4096`, stare
+  stany Mamba są zwalniane także przez luki `null`, a wznowienie po trafieniu
+  APC indeksuje tabelę w jednostkach `mamba_block_size`;
 - checkpoint jest ładowany z 62 shardów Safetensors;
-- runtime wymaga 25 uporządkowanych patchy v0.29.
+- runtime wymaga 29 uporządkowanych patchy v0.29.
 
 ## Pochodzenie i weryfikacja modelu
 
@@ -57,7 +60,10 @@ offline objęła 76108 tensorów i nie wykazała braków ani różnic w nazwach,
 kształtach lub typach. Hash 3280 tensorów i skal zachowanych bez konwersji był
 zgodny ze źródłem. Cztery reprezentatywne próbki po dekwantyzacji osiągnęły
 cosine similarity od 0.99284 do 0.99336. Szczegóły konwersji są zapisane w
-`conversion-provenance.json` obok checkpointu.
+`conversion-provenance.json` obok checkpointu. Konwersja używa rewizji źródła
+`d21b19569d30e6f471c433b11e672b3bbb80552a`, zawierającej poprawione wagi,
+`clear_thinking=true` w szablonie rozmowy i `repetition_penalty=1.1` w
+`generation_config.json`.
 
 ## Świadomie wyłączone
 
