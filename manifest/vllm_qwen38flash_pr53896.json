@@ -48,9 +48,16 @@
       "upstream_pr": "https://github.com/vllm-project/vllm/pull/53896",
       "upstream_release": "https://github.com/vllm-project/vllm/releases/tag/v0.28.0",
       "upstream_release_commit": "2cf0a6915ce544dc493a0990f2ea38d81601128a",
-      "expected_diff_sha256": "50567e71e056844bd514e9c5f8b7dea739e691b98f73d890b142175dd33dcb55",
+      "expected_diff_sha256": "077b2b507439cdb0a85767bd728796dbe8c9dd645ff95d4696da72849211168a",
       "full_index_diff": true,
       "apply_intent_to_add": true,
+      "reuse_existing_native_build": true,
+      "accepted_previous_images": [
+        {
+          "sha256": "cec99b6fed1e1b07539421dc828eeff33f135fbf0b63b0ce4ddd6c97081c22d7",
+          "patch_count": 17
+        }
+      ],
       "patches": [
         {
           "path": "patches/vllm_qwen38flash_pr53896/0001-prefer-rocm-pytorch-on-mixed-host.patch",
@@ -79,6 +86,42 @@
         {
           "path": "patches/vllm_qwen38flash_pr53896/0009-route-qwen4-target-bf16-gemm-through-triton-on-rdna4.patch",
           "sha256": "9e965c0d6286cbca85f87155be590c4e246db4ba335a3c20c65791796aa04f28"
+        },
+        {
+          "path": "patches/vllm_qwen38flash_pr53896/0010-support-fp8-groups-in-mxfp4-checkpoints.patch",
+          "sha256": "423d54e366229d5b6a932bf270032bb992cc5cc963d1aa5dcadd6f32b69f4288"
+        },
+        {
+          "path": "patches/vllm_qwen38flash_pr53896/0011-offload-qwen4-ple-fp8-table-on-rdna4.patch",
+          "sha256": "8c86034e0c636f3d2f6dc87bf677a069a8158b52f9d47c7ab19a0b36d753b991"
+        },
+        {
+          "path": "patches/vllm_qwen38flash_pr53896/0012-map-qwen4-fp8-linear-inverse-scales.patch",
+          "sha256": "f6c489d5e890a8c1ac7a2c145672d9a78259a57d0d3f41d9d7cb7889e3b0c084"
+        },
+        {
+          "path": "patches/vllm_qwen38flash_pr53896/0013-route-compressed-mxfp4-moe-to-emulation.patch",
+          "sha256": "09c6eb8213c9a9b471527061978a654eedd53cee232aad5142d75975daf4e912"
+        },
+        {
+          "path": "patches/vllm_qwen38flash_pr53896/0014-replicate-misaligned-ct-fp8-shared-experts.patch",
+          "sha256": "6e0a4e0d0dd7e20f4c9266e8a6ce076f40f5347213df61156e6df4b7131868f9"
+        },
+        {
+          "path": "patches/vllm_qwen38flash_pr53896/0015-map-qwen4-routed-fp8-inverse-scales.patch",
+          "sha256": "dd335687f73206e428ecb1a400066fc766872e1f04861350cbf996fee154e728"
+        },
+        {
+          "path": "patches/vllm_qwen38flash_pr53896/0016-preserve-a16-for-weight-only-ct-mxfp4.patch",
+          "sha256": "dceab1494825357c6577a4877253b2cd0f4a25cc9c0d2262cb9eafc173575cb2"
+        },
+        {
+          "path": "patches/vllm_qwen38flash_pr53896/0017-support-quark-w4a16-int4-on-rdna4.patch",
+          "sha256": "9d5484051a6c45590b3387a1a5c0992187c30cc7a531abe27d86db7c19d70919"
+        },
+        {
+          "path": "patches/vllm_qwen38flash_pr53896/0018-support-packed-w4a16-dflash2-context-kv.patch",
+          "sha256": "8d55d4a461d0fb136cd854c58b256cf1607a555185077484992be69dc812a33b"
         }
       ]
     },

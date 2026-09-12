@@ -1,0 +1,215 @@
+{
+  "schema_version": 1,
+  "name": "qwen38-4x27b",
+  "status": "production-ready",
+  "description": "Four local TP1 Qwen3.8-27B Quark AWQ INT4 worker replicas on the secondary R9700 GPU pool",
+  "model": {
+    "schema_version": 1,
+    "name": "qwen38-27b-quark-awq-int4-w4a16",
+    "family": "qwen3_5",
+    "format": "safetensors",
+    "repository": "amd/Qwen3.8-27B-Quark-AWQ-INT4-W4A16",
+    "revision": "0f7ee2559e8dbc25879e1fe1677b2b10708b91a9",
+    "default_directory": "/mnt/ai/models/qwen/Qwen3.8-27B-Quark-AWQ-INT4-W4A16",
+    "served_name": "qwen3.8-27b-worker",
+    "expected_shards": 1,
+    "weight_pattern": "model.safetensors",
+    "checkpoint_weight_bytes": 19512618464,
+    "required_files": [
+      "config.json",
+      "generation_config.json",
+      "model.safetensors",
+      "tokenizer.json",
+      "tokenizer_config.json",
+      "chat_template.jinja",
+      "vocab.json",
+      "LICENSE"
+    ],
+    "allow_patterns": [
+      "*.json",
+      "*.safetensors",
+      "*.jinja",
+      "*.txt",
+      "tokenizer*",
+      "vocab.json",
+      "LICENSE",
+      "README.md"
+    ],
+    "supports_dspark": false,
+    "supports_mtp": true,
+    "supports_dflash": true,
+    "supports_qsa": false,
+    "auxiliary_artifacts": [
+      {
+        "name": "qwen38-27b-dflash2-w4a16",
+        "repository": "syvai/Qwen3.8-27B-DFlash2-W4A16",
+        "revision": "4d30ec736ffc6b8688dc2ae2b502d9b48bdec279",
+        "filename": "model.safetensors",
+        "path": "/mnt/ai/models/qwen/Qwen3.8-27B-DFlash2-W4A16/model.safetensors",
+        "size_bytes": 1280633960,
+        "sha256": "ec26996e6a0745ab5edb857117220ce1e219ad524f71e6e149b703804947d8e7"
+      },
+      {
+        "name": "qwen38-27b-dflash2-config",
+        "repository": "syvai/Qwen3.8-27B-DFlash2-W4A16",
+        "revision": "4d30ec736ffc6b8688dc2ae2b502d9b48bdec279",
+        "filename": "config.json",
+        "path": "/mnt/ai/models/qwen/Qwen3.8-27B-DFlash2-W4A16/config.json",
+        "size_bytes": 2264,
+        "sha256": "61d6276fe8d76295232cb02d26cbb0d29c25565911f50441e779c88c9220c556"
+      }
+    ],
+    "source_evidence": {
+      "kind": "huggingface_tree",
+      "path": ".cache/huggingface/trees/0f7ee2559e8dbc25879e1fe1677b2b10708b91a9.json",
+      "sha256": "e7a3e4db220bde34f94d97c9d569ea55ac42f1a7421344654f897f00f1bafe90"
+    },
+    "vllm": {
+      "tokenizer_mode": "auto",
+      "tool_call_parser": "qwen3_coder",
+      "reasoning_parser": "qwen3",
+      "enable_auto_tool_choice": true,
+      "trust_remote_code": false,
+      "language_model_only": true,
+      "quantization": "quark"
+    },
+    "file_sha256": {
+      "LICENSE": "bbedc3fda3305820b977265f01b8619d87570a6739de3a5582c3464840f1e57a",
+      "README.md": "e64a6c20921063c45020c76a40843ee98aa363e77ed3c5a152ff6f660da727e3",
+      "chat_template.jinja": "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041",
+      "config.json": "86ddf61aefc3032a4c92e510a14f8fcebbe40db4175609f23683810d7fc83de2",
+      "generation_config.json": "07f857aba5260b2ea2513f80de8062d086661f00eada0a3794964e665ba680f5",
+      "model.safetensors": "f1699476b8c79a9a3121469b8bdfd84c0ee55417d2af02260b0d8982257c6346",
+      "tokenizer.json": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3",
+      "tokenizer_config.json": "b11349aafa7cdc6a320767cf7ceb29ed82f7eda5d65e8e0819e76f0ce947bf27"
+    }
+  },
+  "runtime": {
+    "schema_version": 1,
+    "name": "qwen38-27b-quark-awq-int4-4xr9700-dp4-tp1-dflash2-k4",
+    "status": "production-ready",
+    "role": "worker-pool",
+    "recipe": "vllm_qwen38flash_pr53896",
+    "description": "Four local Qwen3.8-27B W4A16 replicas with the gfx1201 hybrid INT4 kernel, FP8 KV, native prefix cache, and W4A16 DFlash2 K4",
+    "required_model_family": "qwen3_5",
+    "required_patches": [
+      "0008",
+      "0009",
+      "0017",
+      "0018"
+    ],
+    "gpu_order": [
+      1,
+      2,
+      3,
+      7
+    ],
+    "gpu_bdfs": [
+      "0000:07:00.0",
+      "0000:0a:00.0",
+      "0000:23:00.0",
+      "0000:e6:00.0"
+    ],
+    "parallel": {
+      "tensor": 1,
+      "pipeline": 1,
+      "data": 4,
+      "enable_expert_parallel": false,
+      "disable_custom_all_reduce": true
+    },
+    "limits": {
+      "max_model_len": 131072,
+      "max_num_seqs": 1,
+      "max_num_batched_tokens": 2048,
+      "gpu_memory_utilization": 0.96
+    },
+    "cache": {
+      "dtype": "fp8",
+      "block_size": 16,
+      "prefix_cache": true,
+      "cpu_offload_gb": 0,
+      "prefix_cache_retention_interval": 1616
+    },
+    "scheduler": {
+      "async": false,
+      "enforce_eager": true
+    },
+    "multimodal": {
+      "language_model_only": true
+    },
+    "loading": {
+      "format": "safetensors",
+      "max_parallel_workers": 1
+    },
+    "transport": {
+      "p2p_disable": 0,
+      "shm_disable": 1,
+      "socket_ifname": "lo",
+      "runtime_connect": 1,
+      "hsa_legacy_ipc": 0
+    },
+    "shutdown": {
+      "request_timeout_seconds": 0,
+      "worker_timeout_seconds": 60,
+      "process_grace_seconds": 120
+    },
+    "linear_backend": "auto",
+    "speculative_config": {
+      "model_artifact": "qwen38-27b-dflash2-w4a16",
+      "method": "dflash",
+      "num_speculative_tokens": 4,
+      "draft_tensor_parallel_size": 1,
+      "attention_backend": "TRITON_ATTN",
+      "draft_sample_method": "probabilistic",
+      "kv_cache_dtype": "fp8",
+      "enforce_eager": true
+    },
+    "environment": {
+      "VLLM_USE_V2_MODEL_RUNNER": "1",
+      "VLLM_ROCM_USE_AITER": "0",
+      "VLLM_DISABLE_PYNCCL": "1",
+      "VLLM_KV_CACHE_LAYOUT": "LBHNC",
+      "SAFETENSORS_FAST_GPU": "1",
+      "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+      "ROCBLAS_USE_HIPBLASLT": "0"
+    },
+    "hardware_topology": {
+      "captured_on": "2026-09-11",
+      "motherboard": "ASUS Pro WS WRX90E-SAGE SE",
+      "note": "Secondary pool only: physical cards 1,2,3,7 / BDFs 07:00.0,0a:00.0,23:00.0,e6:00.0; disjoint from the primary TP4 allocation."
+    }
+  },
+  "stack": {
+    "description": "Qwen3.8-27B DP4 worker pool with thinking and fast LiteLLM routes",
+    "litellm_aliases": [
+      "qwen3.8-27b-workers-thinking",
+      "qwen3.8-27b-workers-fast"
+    ],
+    "claude_settings": {
+      "apiKeyHelper": "bash -c 'exec \"${MY_LLM_REPO_ROOT:-$HOME/ai/my-llm}/scripts/claude-litellm-key.sh\"'",
+      "totalTokensReminder": "off",
+      "effortLevel": "high",
+      "permissions": {
+        "defaultMode": "acceptEdits"
+      },
+      "env": {
+        "ANTHROPIC_BASE_URL": "http://127.0.0.1:4000",
+        "ANTHROPIC_MODEL": "qwen3.8-27b-workers-thinking",
+        "ANTHROPIC_SMALL_FAST_MODEL": "qwen3.8-27b-workers-fast",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "qwen3.8-27b-workers-fast",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "qwen3.8-27b-workers-thinking",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "qwen3.8-27b-workers-thinking",
+        "DISABLE_PROMPT_CACHING": "0",
+        "CLAUDE_CODE_TODO_REMINDER_MODE": "off",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+        "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
+        "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "131072"
+      }
+    }
+  },
+  "verification": {
+    "scope": "checkpoint-and-native-gfx1201-runtime",
+    "verified_context": 131072,
+    "notes": "The exact AMD target and syvai DFlash2 revision were verified, including finite tensors and the DFlash2 symmetric compressed-tensors W4A16 structure. The prior MTP K1 runtime and DFlash2 K4 BF16-KV runtime passed pinned-rank generation, DP fairness, native prefix-cache replay, reasoning, non-thinking, tool calling, and speculative acceptance on local gfx1201 cards. The target and draft now use standard ROCm FP8 E4M3 KV. Neither checkpoint contains calibrated KV activation scales and the pinned runtime has no dynamic calculate_kv_scales option, so vLLM uses per-tensor scale 1.0; functional and boundary requalification is required. Native gfx1201 startup measured a 1616-token hybrid scheduler block with FP8, so prefix-cache retention is aligned to 1616. GPU utilization remains 0.96 to measure and retain the largest practical KV pool on the dedicated worker cards."
+  }
+}

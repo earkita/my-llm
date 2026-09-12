@@ -9,6 +9,7 @@ GLM53_MODEL_NAMES = frozenset(
         "glm-5.3-flash-quark-mxfp4",
     }
 )
+QWEN38_MODEL_PREFIXES = ("qwen3.8-flash-next", "qwen3.8-27b-worker")
 
 
 def local_anthropic_count_tokens_endpoint(api_base: str) -> str:
@@ -19,6 +20,27 @@ def _is_glm53_model(value: Any) -> bool:
     if not isinstance(value, str):
         return False
     return value.removeprefix("anthropic/") in GLM53_MODEL_NAMES
+
+
+def _is_qwen38_model(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    name = value
+    for provider in ("anthropic/", "hosted_vllm/", "openai/"):
+        name = name.removeprefix(provider)
+    return name.startswith(QWEN38_MODEL_PREFIXES)
+
+
+def normalize_qwen38_reasoning_effort(data: dict[str, Any]) -> dict[str, Any]:
+    """Translate Claude Code's high/max effort to Qwen3.8's xhigh level."""
+    if not _is_qwen38_model(data.get("model")):
+        return data
+    if data.get("reasoning_effort") not in {"high", "max"}:
+        return data
+
+    updated = dict(data)
+    updated["reasoning_effort"] = "xhigh"
+    return updated
 
 
 def _strict_tool(tool: Any) -> Any:

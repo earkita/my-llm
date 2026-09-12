@@ -1,0 +1,91 @@
+diff --git a/tests/models/qwen4_exp/test_qsa_amd.py b/tests/models/qwen4_exp/test_qsa_amd.py
+--- a/tests/models/qwen4_exp/test_qsa_amd.py
++++ b/tests/models/qwen4_exp/test_qsa_amd.py
+@@ -91,6 +91,31 @@ def test_ple_fp8_embedding_dequantizes_with_checkpoint_scale() -> None:
+     )
+ 
+ 
++@pytest.mark.parametrize(
++    ("name", "expected"),
++    [
++        (
++            "layers.0.linear_attn.in_proj_qkv.weight_scale_inv",
++            "layers.0.linear_attn.in_proj_qkv.weight_scale",
++        ),
++        (
++            "layers.0.self_attn.q_proj.weight_scale_inv",
++            "layers.0.self_attn.q_proj.weight_scale",
++        ),
++        (
++            "layers.0.mlp.shared_expert.up_proj.weight_scale_inv",
++            "layers.0.mlp.shared_expert.up_proj.weight_scale",
++        ),
++        (
++            "layers.0.mlp.experts.7.up_proj.weight_scale_inv",
++            "layers.0.mlp.experts.7.up_proj.weight_scale_inv",
++        ),
++    ],
++)
++def test_remap_fp8_linear_scale_name(name: str, expected: str) -> None:
++    assert _qwen4_exp_model._remap_fp8_linear_scale_name(name) == expected
++
++
+ def test_mxfp4_checkpoint_selects_fp8_ple_embedding() -> None:
+     config = SimpleNamespace(
+         get_name=lambda: "compressed-tensors",
+diff --git a/vllm/models/qwen4_exp/amd/model.py b/vllm/models/qwen4_exp/amd/model.py
+--- a/vllm/models/qwen4_exp/amd/model.py
++++ b/vllm/models/qwen4_exp/amd/model.py
+@@ -130,6 +130,20 @@ def _remap_qsa_cache_scale_name(
+     return name
+ 
+ 
++def _remap_fp8_linear_scale_name(name: str) -> str:
++    """Map serialized FP8 inverse-scale names to CT linear parameters.
++
++    Expert loaders consume their checkpoint-native ``weight_scale_inv``
++    names directly. Compressed-tensors Linear methods instead register the
++    same dequantization scale as ``weight_scale``.
++    """
++
++    suffix = ".weight_scale_inv"
++    if name.endswith(suffix) and ".experts." not in name:
++        return f"{name[: -len(suffix)]}.weight_scale"
++    return name
++
++
+ _QWEN4_EXP_IGNORED_MISSING_SUFFIXES = [
+     ".bias",
+     "_bias",
+@@ -573,6 +587,10 @@ class Qwen4ExpModel(nn.Module):
+             n_shared_experts=1,
+             ckpt_prefix="mlp.shared_expert",
+         )
++        weights = (
++            (_remap_fp8_linear_scale_name(name), weight)
++            for name, weight in weights
++        )
+         # Non-persistent PLE state rebuilt in __init__; skip any ckpt
+         # column for them.
+         skip_substrs = (
+diff --git a/vllm/models/qwen4_exp/amd/mtp.py b/vllm/models/qwen4_exp/amd/mtp.py
+--- a/vllm/models/qwen4_exp/amd/mtp.py
++++ b/vllm/models/qwen4_exp/amd/mtp.py
+@@ -54,5 +54,6 @@ from .model import (
+     _HC_WEIGHTS_MAPPER,
+     _QWEN4_EXP_IGNORED_MISSING_SUFFIXES,
++    _remap_fp8_linear_scale_name,
+     Qwen4ExpDecoderLayer,
+     Qwen4ExpMixtureOfExperts,
+     Qwen4ExpSparseMoeBlock,
+@@ -346,6 +347,10 @@ class Qwen4ExpMultiTokenPredictor(nn.Module):
+             n_shared_experts=1,
+             ckpt_prefix="mlp.shared_expert",
+         )
++        weights = (
++            (_remap_fp8_linear_scale_name(name), weight)
++            for name, weight in weights
++        )
+         mapper = self.hf_to_vllm_mapper | WeightsMapper(
+             orig_to_new_substr={"hyper_connection_mixer.block_inject_weight": None}
+         )

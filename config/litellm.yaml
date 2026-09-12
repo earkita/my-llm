@@ -26,16 +26,89 @@ model_list:
       supports_xhigh_reasoning_effort: true
       supports_max_reasoning_effort: true
 
+  - model_name: qwen3.8-flash-next-thinking
+    litellm_params:
+      model: os.environ/HOSTED_INFERENCE_OPENAI_MODEL
+      api_base: os.environ/HOSTED_INFERENCE_API_BASE
+      api_key: os.environ/HOSTED_INFERENCE_API_KEY
+      temperature: 1.0
+      top_p: 0.95
+      presence_penalty: 0.0
+      extra_body:
+        top_k: 20
+        min_p: 0.0
+        repetition_penalty: 1.0
+        chat_template_kwargs:
+          enable_thinking: true
+          preserve_thinking: true
+    model_info:
+      max_input_tokens: 262144
+      supports_reasoning: true
+      supports_adaptive_thinking: true
+      supports_output_config: true
+      supports_low_reasoning_effort: true
+      supports_xhigh_reasoning_effort: true
+      supports_max_reasoning_effort: true
+
   - model_name: qwen3.8-flash-next-fast
     litellm_params:
-      model: hosted_vllm/qwen3.8-flash-next-fp8
+      model: os.environ/HOSTED_INFERENCE_OPENAI_MODEL
       api_base: os.environ/HOSTED_INFERENCE_API_BASE
+      api_key: os.environ/HOSTED_INFERENCE_API_KEY
+      temperature: 0.7
+      top_p: 0.8
+      presence_penalty: 1.5
       extra_body:
+        top_k: 20
+        min_p: 0.0
+        repetition_penalty: 1.0
         chat_template_kwargs:
           enable_thinking: false
           preserve_thinking: false
     model_info:
       max_input_tokens: 262144
+
+  - model_name: qwen3.8-27b-workers-thinking
+    litellm_params:
+      model: os.environ/HOSTED_WORKER_OPENAI_MODEL
+      api_base: os.environ/HOSTED_WORKER_API_BASE
+      api_key: os.environ/HOSTED_INFERENCE_API_KEY
+      temperature: 1.0
+      top_p: 0.95
+      presence_penalty: 0.0
+      extra_body:
+        top_k: 20
+        min_p: 0.0
+        repetition_penalty: 1.0
+        chat_template_kwargs:
+          enable_thinking: true
+          preserve_thinking: true
+    model_info:
+      max_input_tokens: 131072
+      supports_reasoning: true
+      supports_adaptive_thinking: true
+      supports_output_config: true
+      supports_low_reasoning_effort: true
+      supports_xhigh_reasoning_effort: true
+      supports_max_reasoning_effort: true
+
+  - model_name: qwen3.8-27b-workers-fast
+    litellm_params:
+      model: os.environ/HOSTED_WORKER_OPENAI_MODEL
+      api_base: os.environ/HOSTED_WORKER_API_BASE
+      api_key: os.environ/HOSTED_INFERENCE_API_KEY
+      temperature: 0.7
+      top_p: 0.8
+      presence_penalty: 1.5
+      extra_body:
+        top_k: 20
+        min_p: 0.0
+        repetition_penalty: 1.0
+        chat_template_kwargs:
+          enable_thinking: false
+          preserve_thinking: false
+    model_info:
+      max_input_tokens: 131072
 
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY

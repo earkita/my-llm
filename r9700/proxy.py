@@ -35,6 +35,8 @@ REQUIREMENTS_PATH = ROOT / "constraints" / "litellm-py312.txt"
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 4000
 DEFAULT_BACKEND_URL = "http://127.0.0.1:8000"
+DEFAULT_WORKER_BACKEND_URL = "http://127.0.0.1:8100"
+DEFAULT_WORKER_MODEL = "qwen3.8-27b-worker"
 
 
 def _config_sha256() -> str:
@@ -176,10 +178,15 @@ def _active_profile_name(runtime_state: dict[str, Any]) -> str:
     )
 
 
-def _active_anthropic_model(runtime_state: dict[str, Any]) -> tuple[str, str]:
+def _active_served_model(runtime_state: dict[str, Any]) -> tuple[str, str]:
     profile_name = _active_profile_name(runtime_state)
     profile = load_profile(profile_name)
     served_name = profile["model"]["served_name"]
+    return profile_name, served_name
+
+
+def _active_anthropic_model(runtime_state: dict[str, Any]) -> tuple[str, str]:
+    profile_name, served_name = _active_served_model(runtime_state)
     return profile_name, f"anthropic/{served_name}"
 
 
@@ -250,9 +257,9 @@ def start(
         STATE_PATH.unlink(missing_ok=True)
     if not _backend_healthy(backend_url):
         raise ConfigurationError(f"inference backend is not healthy: {backend_url}")
-    active_profile, anthropic_model = _active_anthropic_model(
-        runtime_managed_state()
-    )
+    active_profile, served_model = _active_served_model(runtime_managed_state())
+    anthropic_model = f"anthropic/{served_model}"
+    openai_model = f"hosted_vllm/{served_model}"
     if not _port_available(host, port):
         raise ConfigurationError(f"listener already owns {host}:{port}")
     timestamp = datetime.now().astimezone().strftime("%Y%m%dT%H%M%S")
@@ -275,6 +282,9 @@ def start(
             "HOSTED_INFERENCE_API_BASE": backend_url.rstrip("/") + "/v1",
             "HOSTED_INFERENCE_ANTHROPIC_BASE": backend_url.rstrip("/"),
             "HOSTED_INFERENCE_ANTHROPIC_MODEL": anthropic_model,
+            "HOSTED_INFERENCE_OPENAI_MODEL": openai_model,
+            "HOSTED_WORKER_API_BASE": DEFAULT_WORKER_BACKEND_URL + "/v1",
+            "HOSTED_WORKER_OPENAI_MODEL": f"hosted_vllm/{DEFAULT_WORKER_MODEL}",
             "HOSTED_INFERENCE_API_KEY": "local-inference",
         }
     )
@@ -300,6 +310,7 @@ def start(
         "backend_url": backend_url,
         "profile": active_profile,
         "anthropic_model": anthropic_model,
+        "openai_model": openai_model,
         "config_sha256": _config_sha256(),
         "log": str(log_path),
     }

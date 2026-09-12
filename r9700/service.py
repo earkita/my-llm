@@ -32,6 +32,13 @@ from .models import verify_model
 
 
 STATE_PATH = ROOT / ".runtime" / "service.json"
+WORKER_POOL_STATE_PATH = ROOT / ".runtime" / "worker-pool" / "service.json"
+
+
+def state_path_for_runtime(runtime: dict[str, Any]) -> Path:
+    if runtime.get("role") == "worker-pool":
+        return WORKER_POOL_STATE_PATH
+    return STATE_PATH
 
 
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
@@ -50,18 +57,19 @@ def _start_ticks(pid: int) -> int:
     return int(fields[21])
 
 
-def _state() -> dict[str, Any] | None:
-    if not STATE_PATH.is_file():
+def _state(state_path: Path | None = None) -> dict[str, Any] | None:
+    selected_path = state_path or STATE_PATH
+    if not selected_path.is_file():
         return None
     try:
-        value = json.loads(STATE_PATH.read_text())
+        value = json.loads(selected_path.read_text())
     except (OSError, json.JSONDecodeError):
         return None
     return value if isinstance(value, dict) else None
 
 
-def managed_state() -> dict[str, Any]:
-    state = _state()
+def managed_state(*, state_path: Path | None = None) -> dict[str, Any]:
+    state = _state(state_path)
     if not state or not _identity_alive(state):
         raise ConfigurationError("managed service is not running")
     return state
@@ -93,24 +101,34 @@ def _health(url: str, timeout: float = 2) -> bool:
 
 
 def _vllm_engine_alive(pid: int) -> bool:
-    try:
-        children = Path(f"/proc/{pid}/task/{pid}/children").read_text().split()
-    except OSError:
-        return False
-    for child in children:
-        try:
-            child_pid = int(child)
-            process_name = Path(f"/proc/{child_pid}/comm").read_text().strip()
-            process_status = Path(f"/proc/{child_pid}/status").read_text()
-            process_state = next(
-                line.split()[1]
-                for line in process_status.splitlines()
-                if line.startswith("State:")
-            )
-        except (OSError, ValueError, StopIteration):
+    pending = [pid]
+    visited: set[int] = set()
+    while pending:
+        parent = pending.pop()
+        if parent in visited:
             continue
-        if process_name.startswith("VLLM::Engine") and process_state != "Z":
-            return True
+        visited.add(parent)
+        try:
+            children = Path(
+                f"/proc/{parent}/task/{parent}/children"
+            ).read_text().split()
+        except OSError:
+            continue
+        for child in children:
+            try:
+                child_pid = int(child)
+                process_name = Path(f"/proc/{child_pid}/comm").read_text().strip()
+                process_status = Path(f"/proc/{child_pid}/status").read_text()
+                process_state = next(
+                    line.split()[1]
+                    for line in process_status.splitlines()
+                    if line.startswith("State:")
+                )
+            except (OSError, ValueError, StopIteration):
+                continue
+            if process_name.startswith("VLLM::Engine") and process_state != "Z":
+                return True
+            pending.append(child_pid)
     return False
 
 
@@ -153,7 +171,9 @@ def start(
     runtime_mode: str | None = None,
     wait_ready: bool = False,
     ready_timeout: float = 900,
+    state_path: Path | None = None,
 ) -> dict[str, Any]:
+    selected_state_path = state_path or STATE_PATH
     deployment = load_profile(model_name)
     runtime_deployment = load_profile(runtime_name)
     if deployment["_path"] != runtime_deployment["_path"]:
@@ -174,13 +194,13 @@ def start(
     validate_compatibility(model, runtime)
     directory = resolve_model_directory(model, model_directory)
     verify_model(model_name, str(directory))
-    existing = _state()
+    existing = _state(selected_state_path)
     if existing and _identity_alive(existing):
         raise ConfigurationError(
             f"service is already running: PID={existing['pid']} URL={existing['url']}"
         )
     if existing:
-        STATE_PATH.unlink(missing_ok=True)
+        selected_state_path.unlink(missing_ok=True)
     if runtime.get("kv_transfer_config") is not None:
         from . import kv_cache
 
@@ -253,15 +273,17 @@ def start(
         "backend_manifest_sha256": selected_manifest_sha256,
         "runtime_manifest_sha256": selected_manifest_sha256,
     }
-    _atomic_json(STATE_PATH, state)
+    _atomic_json(selected_state_path, state)
     print(f"started PID={process.pid} URL={state['url']} log={log_path}")
     if wait_ready:
-        wait(timeout=ready_timeout)
+        wait(timeout=ready_timeout, state_path=selected_state_path)
     return state
 
 
-def wait(*, timeout: float = 900) -> dict[str, Any]:
-    state = _state()
+def wait(
+    *, timeout: float = 900, state_path: Path | None = None
+) -> dict[str, Any]:
+    state = _state(state_path)
     if not state or not _identity_alive(state):
         raise ConfigurationError("managed service is not running")
     deadline = time.monotonic() + timeout
@@ -275,8 +297,8 @@ def wait(*, timeout: float = 900) -> dict[str, Any]:
     raise ConfigurationError(f"service readiness timed out after {timeout}s")
 
 
-def status() -> int:
-    state = _state()
+def status(*, state_path: Path | None = None) -> int:
+    state = _state(state_path)
     if not state or not _identity_alive(state):
         print("stopped")
         return 3
@@ -290,8 +312,9 @@ def status() -> int:
     return 0 if label == "ready" else 2
 
 
-def stop(*, timeout: float = 180) -> None:
-    state = _state()
+def stop(*, timeout: float = 180, state_path: Path | None = None) -> None:
+    selected_state_path = state_path or STATE_PATH
+    state = _state(selected_state_path)
     if not state:
         print("already stopped")
         return
@@ -304,7 +327,7 @@ def stop(*, timeout: float = 180) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if not _identity_alive(state):
-            STATE_PATH.unlink(missing_ok=True)
+            selected_state_path.unlink(missing_ok=True)
             print(f"stopped PID={pid}")
             return
         time.sleep(0.5)
@@ -313,8 +336,10 @@ def stop(*, timeout: float = 180) -> None:
     )
 
 
-def logs(*, follow: bool = False, lines: int = 100) -> None:
-    state = _state()
+def logs(
+    *, follow: bool = False, lines: int = 100, state_path: Path | None = None
+) -> None:
+    state = _state(state_path)
     if not state:
         raise ConfigurationError("no managed service state")
     command = ["tail", "-n", str(lines)]

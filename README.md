@@ -12,7 +12,10 @@ dedykowanym magazynie modeli wskazanym przez profile produkcyjne.
 | `deepseek-v4-flash` | vLLM 0.28 | 6 | TP1/PP6 | 1,048,576 | DSpark K5 |
 | `glm53-flash` | vLLM `main` `7fbd44c`, ROCm 10 | 8 | TP8/no-EP | 786,432 | packed MXFP4 GEMV + DFlash2 K4, FP8 KV |
 | `glm53-flash-uncensored` | vLLM `main` `7fbd44c`, ROCm 10 | 8 | TP8/no-EP | 786,432 | packed MXFP4 GEMV + DFlash2 K4, FP8 KV |
-| `qwen38-flash` | vLLM 0.28 | 8 | TP8/EP8 | 262,144 | MTP K2 |
+| `qwen38-flash` | vLLM 0.28 | 4 | TP4/EP4 | 262,144 | MTP K2, FP8 KV |
+| `qwen38-flash-uncensored` | vLLM 0.28 | 4 | TP4/EP4 | 262,144 | MTP K2, BF16 KV |
+| `qwen38-4x27b` | vLLM 0.28 | 4 | DP4/TP1 | 131,072 | Quark W4A16 + DFlash2 K4, FP8 KV |
+| `qwen-multi` | vLLM 0.28 | 8 | TP4/EP4 + DP4/TP1 | 262,144 + 131,072 | Qwen Flash main + 4 DFlash2 workers |
 
 Każdy deployment jest jednym plikiem w `profiles/production/`. Plik zawiera
 pin checkpointu, kompletną konfigurację runtime, topologię GPU, preset Claude
@@ -23,8 +26,11 @@ Szablony Claude Code są pogrupowane według rodziny modelu w
 `templates/.claude/MODEL/`. Wewnątrz katalogu każdy plik nosi nazwę profilu,
 np. `glm53-flash/glm53-flash-uncensored.settings.local.json`. Wszystkie
 szablony z grupy `glm53-flash` używają dla ról Claude wspólnej nazwy
-`glm-5.3-flash-high`. Inne, w tym przyszłe profile wielomodelowe, mogą
-rozdzielać role między własne aliasy.
+`glm-5.3-flash-high`, a oba warianty Qwen używają
+`qwen3.8-flash-next-thinking` dla ról głównych oraz
+`qwen3.8-flash-next-fast` dla Haiku i zadań szybkich. Proxy wiąże oba aliasy
+dynamicznie z checkpointem aktywnego profilu i normalizuje nieobsługiwane
+przez Qwen poziomy effort `high` oraz `max` do `xhigh`.
 
 ## Przygotowanie kontrolera
 
@@ -50,6 +56,7 @@ checkoutów.
 ./run launcher list
 ./run launcher start glm53-flash
 ./run launcher start qwen38-flash
+./run launcher start qwen38-flash-uncensored
 ./run launcher switch qwen38-flash
 ./run launcher switch deepseek-v4-flash
 ./run launcher status
@@ -57,11 +64,25 @@ checkoutów.
 ./run launcher logs --component litellm --follow
 ./run launcher stop
 
+# dodatkowa pula czterech workerów, bez zastępowania modelu głównego
+./run worker-pool start qwen38-4x27b
+./run worker-pool status
+
+# cały profil Qwen 4+1+1+1+1 oraz LiteLLM
+./run launcher start qwen-multi
+./run launcher status
+# jawne, łagodne zatrzymanie wszystkich jego elementów
+./run launcher stop --profile qwen-multi
+./run worker-pool logs --follow
+./run worker-pool stop
+
 ./run profiles list
 ./run profiles show glm53-flash
 
 ./run install --profile glm53-flash
 ./run model verify glm53-flash
+./run model verify qwen38-flash
+./run model verify qwen38-flash-uncensored
 
 # domyślnie: v0.29, MRV2, TP8/no-EP, packed MXFP4 GEMV,
 # DFlash2 K4, FP8 KV, 768K i Vision
@@ -98,6 +119,15 @@ Pełny stack z LiteLLM i ustawieniami Claude Code:
 ./run stack stop
 ```
 
+Po starcie wybranego profilu Qwen interaktywny Claude Code uruchamia się przez
+`scripts/claude-local.sh`. Odtwarzalny test agenta kodowego:
+
+```bash
+./run test claude-code \
+  --profile qwen38-flash-uncensored \
+  --output logs/validation/claude-code-qwen38-flash-uncensored-thinking.json
+```
+
 Start odbywa się wyłącznie przez użytkownikową jednostkę
 `r9700-runtime.service`. Skrypty nie wykonują rebootu, resetu GPU ani SIGKILL.
 
@@ -125,4 +155,7 @@ prefill, decode, TTFT i E2E:
 
 Szczegóły: [architektura](docs/architecture.md),
 [operacje](docs/operations.md), [dowody i ograniczenia](docs/verification.md),
+[Qwen w Claude Code](docs/qwen38-claude-code.md),
+[Qwen3.8-27B: pula 4×R9700](docs/qwen38-4x27b-workers.md),
+[wspólny profil Qwen 4+1+1+1+1](docs/qwen-multi.md),
 [plan eksperymentu v0.31](docs/glm53-gfx1201-mxfp4-tiled.md).

@@ -1,0 +1,141 @@
+diff --git a/tests/model_executor/layers/test_fused_shared_expert.py b/tests/model_executor/layers/test_fused_shared_expert.py
+index 34d3246..76d3a99 100644
+--- a/tests/model_executor/layers/test_fused_shared_expert.py
++++ b/tests/model_executor/layers/test_fused_shared_expert.py
+@@ -15,8 +15,12 @@ import vllm.config as vllm_config_module
+ from vllm.config import VllmConfig, set_current_vllm_config
+ from vllm.model_executor.layers.fused_moe import utils as fused_moe_utils
+ from vllm.model_executor.layers.fused_moe.layer import determine_expert_counts
++from vllm.model_executor.layers.quantization.compressed_tensors.compressed_tensors import (  # noqa: E501
++    CompressedTensorsConfig,
++)
+ from vllm.model_executor.layers.quantization.quark.quark import QuarkConfig
+ from vllm.model_executor.layers.quantization.utils.config_utils import (
++    get_quantized_linear_group_size,
+     get_quark_ocp_mx_group_size,
+     is_shared_expert_quant_fse_compatible,
+ )
+@@ -639,6 +643,51 @@ def test_quark_ocp_mx_group_size_for_layer() -> None:
+     )
+ 
+ 
++def test_compressed_tensors_fp8_block_size_for_mtp_shared_expert() -> None:
++    quant_config = CompressedTensorsConfig.from_config(
++        {
++            "format": "mxfp4-pack-quantized",
++            "config_groups": {
++                "mtp_fp8": {
++                    "targets": ["re:mtp\\..*\\.mlp\\.shared_expert\\..*"],
++                    "weights": {
++                        "actorder": None,
++                        "block_structure": [128, 128],
++                        "dynamic": False,
++                        "num_bits": 8,
++                        "observer": "minmax",
++                        "observer_kwargs": {},
++                        "strategy": "block",
++                        "symmetric": True,
++                        "type": "float",
++                    },
++                    "input_activations": {
++                        "actorder": None,
++                        "dynamic": True,
++                        "group_size": 128,
++                        "num_bits": 8,
++                        "observer": None,
++                        "observer_kwargs": {},
++                        "strategy": "group",
++                        "symmetric": True,
++                        "type": "float",
++                    },
++                    "output_activations": None,
++                }
++            },
++            "ignore": [],
++        }
++    )
++
++    assert (
++        get_quantized_linear_group_size(
++            quant_config,
++            "mtp.layers.48.mlp.shared_expert.down_proj",
++        )
++        == 128
++    )
++
++
+ @pytest.mark.parametrize("tp_size", [1, 2, 4])
+ def test_quark_ocp_mx_shared_expert_uses_supported_tp_shards(tp_size: int) -> None:
+     assert not _should_replicate_misaligned_shared_expert(
+diff --git a/vllm/model_executor/layers/quantization/utils/config_utils.py b/vllm/model_executor/layers/quantization/utils/config_utils.py
+index badfbdc..baf34b7 100644
+--- a/vllm/model_executor/layers/quantization/utils/config_utils.py
++++ b/vllm/model_executor/layers/quantization/utils/config_utils.py
+@@ -44,6 +44,45 @@ def get_quark_ocp_mx_group_size(
+     return int(weight_quant["group_size"])
+ 
+ 
++def get_quantized_linear_group_size(
++    quant_config: "QuantizationConfig | None",
++    layer_name: str,
++) -> int | None:
++    """Return the output-shard alignment required by a quantized linear.
++
++    Quark OCP MX weights use their group size. Compressed-tensors block FP8
++    weights use the output-axis block size. Qwen shared experts use this value
++    to replicate a small projection when a TP shard would split quantization
++    groups and make its checkpoint scales impossible to apply exactly.
++    """
++    quark_group_size = get_quark_ocp_mx_group_size(quant_config, layer_name)
++    if quark_group_size is not None:
++        return quark_group_size
++    if quant_config is None:
++        return None
++
++    from torch import nn
++
++    from vllm.model_executor.layers.quantization.compressed_tensors.compressed_tensors import (  # noqa: E501
++        CompressedTensorsConfig,
++    )
++
++    if not isinstance(quant_config, CompressedTensorsConfig):
++        return None
++
++    scheme = quant_config.get_scheme_dict(nn.Linear(1, 1), layer_name)
++    weight_quant = scheme.get("weights") if scheme is not None else None
++    if weight_quant is None:
++        return None
++
++    block_structure = getattr(weight_quant, "block_structure", None)
++    if block_structure:
++        return int(block_structure[0])
++
++    group_size = getattr(weight_quant, "group_size", None)
++    return int(group_size) if group_size is not None else None
++
++
+ def is_shared_expert_quant_fse_compatible(
+     quant_config: "QuantizationConfig | None",
+     expert_prefix: str,
+diff --git a/vllm/model_executor/models/qwen3_next.py b/vllm/model_executor/models/qwen3_next.py
+index 2b16a2e..1597658 100644
+--- a/vllm/model_executor/models/qwen3_next.py
++++ b/vllm/model_executor/models/qwen3_next.py
+@@ -44,7 +44,7 @@ from vllm.model_executor.layers.mamba.mamba_utils import (
+ )
+ from vllm.model_executor.layers.quantization import QuantizationConfig
+ from vllm.model_executor.layers.quantization.utils.config_utils import (
+-    get_quark_ocp_mx_group_size,
++    get_quantized_linear_group_size,
+ )
+ from vllm.model_executor.layers.rotary_embedding import MRotaryEmbedding, get_rope
+ from vllm.model_executor.layers.vocab_parallel_embedding import (
+@@ -141,7 +141,7 @@ class Qwen3NextSparseMoeBlock(nn.Module):
+ 
+         self.is_sequence_parallel = parallel_config.use_sequence_parallel_moe
+ 
+-        shared_expert_group_size = get_quark_ocp_mx_group_size(
++        shared_expert_group_size = get_quantized_linear_group_size(
+             quant_config,
+             f"{prefix}.shared_expert.down_proj",
+         )

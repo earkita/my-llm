@@ -11,6 +11,7 @@ from litellm.llms.anthropic.count_tokens.transformation import (
 from r9700.litellm_tools import (
     enforce_glm53_strict_tools,
     local_anthropic_count_tokens_endpoint,
+    normalize_qwen38_reasoning_effort,
 )
 
 
@@ -28,7 +29,7 @@ AnthropicCountTokensConfig.get_anthropic_count_tokens_endpoint = (  # type: igno
 )
 
 
-class GLM53StrictToolsHook(CustomLogger):
+class LocalRequestNormalizationHook(CustomLogger):
     async def async_pre_call_hook(
         self,
         user_api_key_dict: Any,
@@ -36,7 +37,18 @@ class GLM53StrictToolsHook(CustomLogger):
         data: dict[str, Any],
         call_type: str,
     ) -> dict[str, Any]:
-        return enforce_glm53_strict_tools(data)
+        normalized = normalize_qwen38_reasoning_effort(data)
+        return enforce_glm53_strict_tools(normalized)
+
+    async def async_pre_call_deployment_hook(
+        self,
+        kwargs: dict[str, Any],
+        call_type: Any,
+    ) -> dict[str, Any]:
+        # Native Anthropic requests are converted to chat completions after the
+        # proxy pre-call hook. Normalize again at the deployment boundary,
+        # where reasoning_effort is present and the provider model is selected.
+        return normalize_qwen38_reasoning_effort(kwargs)
 
 
-proxy_handler_instance = GLM53StrictToolsHook()
+proxy_handler_instance = LocalRequestNormalizationHook()

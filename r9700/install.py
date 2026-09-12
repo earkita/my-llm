@@ -133,6 +133,7 @@ def _activate_and_verify_source_package(
     distribution: str,
     import_name: str,
     env: dict[str, str],
+    reuse_existing_native_build: bool = False,
 ) -> None:
     """Make a pinned checkout authoritative over dependency-installed wheels."""
     # vLLM's ROCm requirements may install an ``amd-aiter`` wheel after the
@@ -143,7 +144,19 @@ def _activate_and_verify_source_package(
     # Use ``python -m pip`` because a relocated venv can retain a stale shebang
     # in ``bin/pip`` even though its interpreter remains usable.
     run([*_pip_command(python), "uninstall", "--yes", distribution], env=env)
-    run([python, "setup.py", "develop", "--no-deps"], cwd=source, env=env)
+    install_env = env
+    native_extensions = list((source / import_name).glob("*.so"))
+    if reuse_existing_native_build and native_extensions:
+        # An append-only Python patch does not invalidate the already attested
+        # native image. Asking setup.py for an empty-device editable install
+        # restores only the source link and console entry point, without an
+        # unnecessary CMake rebuild of the existing gfx1201 extensions.
+        install_env = dict(env, VLLM_TARGET_DEVICE="empty")
+    run(
+        [python, "setup.py", "develop", "--no-deps"],
+        cwd=source,
+        env=install_env,
+    )
 
     import_probe = (
         "import importlib; from pathlib import Path; "
@@ -522,6 +535,9 @@ def _install_vllm(
         distribution="vllm",
         import_name="vllm",
         env=dict(build_env, VLLM_TARGET_DEVICE="rocm"),
+        reuse_existing_native_build=bool(
+            manifest["sources"]["vllm"].get("reuse_existing_native_build")
+        ),
     )
     _make_venv_entrypoints_relocatable(venv)
     write_install_manifest(recipe_name)

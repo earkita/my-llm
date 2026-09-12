@@ -111,11 +111,120 @@ K7, 1M i BF16-KV 256K jako jawne komparatory.
 
 ## Qwen3.8 Flash-Next
 
-Profil vLLM 0.28 TP8/EP8 MTP K2 wykonał dokładnie
+Historyczny profil upstream FP8 vLLM 0.28 TP8/EP8 MTP K2 wykonał dokładnie
 `261,120 + 1,024 = 262,144` tokenów. Zmierzył 1,239.33 tok/s cold prefill,
 29.28 tok/s decode, TTFT 210.69 s i E2E 245.64 s. Identyczny replay obniżył
 TTFT do 2.74 s. Przy 64K MTP2 zaakceptował 696 z 700 draftów i osiągnął
 29.72 tok/s wobec 11.70 tok/s bez spekulacji.
+
+Profil `qwen38-flash-uncensored` to lokalnie przekwantyzowany UNCENSORED
+MXFP4/FP8 na czterech R9700, TP4/EP4 i MTP2. Na rzeczywistym `gfx1201` przeszedł ładowanie,
+chat, reasoning, tool calling oraz dokładny benchmark 256+64: 532.65 tok/s
+prefill i 15.43 tok/s decode. Pełny opis pochodzenia tensorów, polecenie
+konwersji i ograniczenia kwalifikacji znajdują się w
+[raporcie Qwen3.8 UNCENSORED MXFP4/FP8](qwen38-uncensored-mxfp4-fp8.md).
+Pełny kontekst 262,144 nie był wykonywany end-to-end na nowym checkpoincie;
+wynik starego profilu FP8 nie jest przenoszony na niego automatycznie.
+
+Stos Claude Code dla UNCENSORED przeszedł również kwalifikację 21/21 z
+thinking włączonym dla ról głównych. Żądane przez Claude Code `high` zostało
+zmienione w LiteLLM na obsługiwane przez Qwen `xhigh`; dziewięć bloków thinking,
+dziewięcioturowa naprawa z `Read/Edit/Bash` i wbudowany non-thinking test aliasu
+fast przeszły. Oba profile Qwen mają natywny prefix cache z interwałem 800, ale
+pełna granica 262144 i pomiar trafień cache dla nowych checkpointów nie były
+częścią tego przebiegu.
+
+Profil `qwen38-flash` wskazuje zwykły checkpoint MXFP4/FP8. Jego 132 pliki,
+5168 tensorów i 58 968 416 801 elementów zmiennoprzecinkowych przeszły pełny
+skan kompletności oraz NaN/Inf. Zawiera 36 skal kalibracyjnych FP8 KV. Ten
+wariant nie został jeszcze uruchomiony na `gfx1201`, dlatego nie dziedziczy
+kwalifikacji runtime'u UNCENSORED.
+
+## Qwen3.8-27B Quark W4A16: cztery workery R9700
+
+Profil `qwen38-4x27b` uruchomił checkpoint AMD w dokładnej rewizji
+`0f7ee2559e8dbc25879e1fe1677b2b10708b91a9` jako cztery niezależne repliki
+TP1 na czterech R9700/gfx1201. Historyczny wariant MTP K1 ładował 17.44 GiB
+modelu i udostępniał BF16 KV dla 155,316 tokenów. Bieżący DFlash2 K4 ładuje
+17.9 GiB targetu i draftera oraz udostępnia FP8 KV dla 250,106 tokenów.
+Lokalna konfiguracja ma 127 wyłączeń z kwantyzacji, w tym wszystkie 15 modułów
+`mtp.*`; wcześniejsze internetowe raporty o 112 wyłączeniach dotyczyły starszej
+wersji checkpointu.
+
+Kwalifikacja 11 września 2026 dotyczyła MTP K1 i wykazała:
+
+- pełny skan 2,191 tensorów i 3,621,110,512 elementów zmiennoprzecinkowych bez
+  NaN/Inf oraz 496 kompletnych zestawów Quark INT4 group-128;
+- poprawne reasoning i non-thinking, wymuszone wywołanie `get_weather` z
+  argumentem `Warszawa`, prefix-cache hit 16,800 tokenów oraz MTP 110/121
+  zaakceptowanych draftów w powtarzalnej kwalifikacji funkcji;
+- dwanaście krótkich żądań rozłożonych po wszystkich rangach dało średnio
+  990.43 tok/s prefill obserwowanego przez klienta i 31.69 tok/s decode na
+  pojedynczą replikę; zagregowane wyjście wyniosło 111.18 tok/s, minimum
+  pojedynczej karty 30.81 tok/s, a fairness Jaina 0.99947;
+- dokładna granica `131008 + 64 = 131072` przeszła bez OOM: TTFT 490.69 s,
+  prefill 266.99 tok/s, decode 2.27 tok/s i E2E 518.40 s. Jest to dowód
+  poprawności granicy, nie zalecany interaktywny punkt pracy;
+- oba aliasy LiteLLM trafiły do backendu workerów. Claude Code 2.1.197 przeszedł
+  21/21 kontroli, w tym thinking, fast bez thinking oraz rzeczywistą pętlę
+  `Read/Edit/Bash`, naprawę pliku i dwa testy jednostkowe.
+
+Artefakty znajdują się w `logs/validation/qwen38-4x27b-*`. Karta AMD podaje
+schemat W4A16 i ustawienia samplera, ale jej polecenie wymaga nieopublikowanej
+jeszcze obsługi Quark W4A16 w vLLM. Zewnętrzna recepta jednej R9700 oparta na
+AutoRound, FP8 KV i DFlash2 jest punktem odniesienia wydajnościowym, a nie
+dowodem dla tego checkpointu AMD ani źródłem jego wag.
+
+12 września 2026 profil workerów został przygotowany do użycia dokładnej
+rewizji `4d30ec736ffc6b8688dc2ae2b502d9b48bdec279` draftera
+`syvai/Qwen3.8-27B-DFlash2-W4A16`: K4, probabilistyczny sampler,
+`TRITON_ATTN` i draft TP1. Pełny skan 153 tensorów draftera nie wykrył
+NaN/Inf i potwierdził 36 symetrycznych, skompresowanych modułów W4A16 group-128.
+Łatka `0018` usuwa założenie o gęstym `qkv_proj.weight`: wagi context-KV są
+materializowane przez wybrany kernel kwantyzacji, więc używają wag i skal
+draftera, a nie targetu ani referencji.
+
+Bieżąca pula została przełączona łagodnym restartem wyłącznie worker-poola;
+główny Qwen Flash i LiteLLM pozostały `ready`. Wszystkie cztery rangi przeszły
+generowanie, reasoning/non-thinking, tool calling, prefix-cache replay i
+DFlash2: hit wyniósł po 16,160 tokenów, a akceptacja po 271/390, czyli 69.49%.
+Krótki benchmark 256/64 dał 984.85 tok/s prefill, 59.11 tok/s decode średnio na
+kartę, minimum 56.31, 185.55 tok/s zagregowanego wyjścia oraz fairness 0.99840.
+
+Czysty prefill 32K osiągnął 438.03 tok/s. Granica
+`131008 + 64 = 131072` przeszła bez OOM z 144.01 tok/s prefill, TTFT 909.73 s,
+2.43 tok/s decode i E2E 935.61 s. Podczas prefill aktywna R9700 raportowała
+100% GFX oraz 6--10% UMC; przy TP1, braku CPU offloadu i lokalnym KV wynik jest
+ograniczony long-context attention i kernelami, nie PCIe. Raporty znajdują się
+w `logs/validation/qwen38-4x27b-dflash2-fp8-*`. Jest to lokalna kwalifikacja
+R9700/gfx1201; wyniki MI350 ani checkpointu AutoRound nie zostały użyte jako
+dowód.
+
+Strojenie `max_num_batched_tokens` na identycznym czystym prefill 32K nie
+wykazało korzyści z większych chunków. Warianty 2,048 / 4,096 / 8,192 osiągnęły
+odpowiednio 438.03 / 431.13 / 410.13 tok/s. Jednocześnie peak aktywacji wzrósł
+z 0.25 przez 0.66 do 1.50 GiB, a fizyczny cache zmalał z 250,106 przez 239,464
+do 219,777 tokenów. Każdy wariant przeszedł gate funkcjonalny, po czym profil
+produkcyjny został przywrócony do zwycięskiego 2,048.
+
+Pierwszy start DFlash2 przy `gpu_memory_utilization=0.92` zatrzymał się przed
+gotowością: vLLM raportował 10.24 GiB dostępnego KV wobec 11.07 GiB wymaganych
+dla 131,072 tokenów i szacował limit 119,952. Profil zachowuje kontrakt 131,072
+i podnosi wykorzystanie czterech dedykowanych kart workerów do 0.96; wynik
+ponownego startu i testów jest zapisywany osobno od historycznej kwalifikacji
+MTP K1.
+
+Historycznie przy 0.96 alokacja przeszła: 11.53 GiB BF16 KV zapewniło 136,602 tokeny i
+concurrency 1.04x. Start ujawnił następnie, że blok hybrydowego schedulera
+DFlash2 ma 816 tokenów; profil wyrównuje więc interwał retencji prefix cache z
+historycznych 800 do wymaganej pełnej strony. Bieżący wariant ustawia target i
+draft na FP8 E4M3. Ponieważ checkpointy nie zawierają skal KV, a przypięty
+runtime nie ma dynamicznego `calculate_kv_scales`, vLLM użyje skal 1.0; wariant
+został dlatego jawnie objęty kwalifikacją jakości i granicy kontekstu na
+gfx1201. Lokalny start zmierzył hybrydowy blok 1616 tokenów, więc retencja
+wynosi teraz 1616.
+Ta sama alokacja 11.53 GiB daje 250,106 tokenów KV na kartę, concurrency 1.91x
+dla 131,072 i 248,864 tokeny po wyrównaniu w dół do 154 pełnych stron.
 
 ## Ograniczenia
 

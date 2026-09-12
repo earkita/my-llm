@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from r9700 import api, cli, launcher, proxy
+from r9700 import api, cli, launcher, proxy, worker_pool
 from r9700.backends import build_command
 from r9700.backends.vllm import environment as vllm_environment
 from r9700.config import (
@@ -26,6 +26,7 @@ from r9700.install import (
 from r9700.litellm_tools import (
     enforce_glm53_strict_tools,
     local_anthropic_count_tokens_endpoint,
+    normalize_qwen38_reasoning_effort,
 )
 from r9700.manifest import (
     recipe_artifact_path,
@@ -43,6 +44,9 @@ REQUIRED_PROFILE_NAMES = {
     "glm53-flash",
     "glm53-flash-uncensored",
     "qwen38-flash",
+    "qwen38-flash-uncensored",
+    "qwen38-4x27b",
+    "qwen-multi",
 }
 PROFILE_NAMES = tuple(
     sorted(
@@ -320,11 +324,12 @@ class ProductionProfileTests(unittest.TestCase):
 
         expected_templates: dict[tuple[str, str], tuple[dict, int]] = {}
         for profile_name, contexts in profile_contexts.items():
-            model_directory = (
-                "glm53-flash"
-                if profile_name.startswith("glm53-flash")
-                else profile_name
-            )
+            if profile_name.startswith("glm53-flash"):
+                model_directory = "glm53-flash"
+            elif profile_name.startswith("qwen38-flash"):
+                model_directory = "qwen38-flash"
+            else:
+                model_directory = profile_name
             for context_tokens, profile in contexts.items():
                 suffix = ""
                 if len(contexts) > 1:
@@ -377,15 +382,139 @@ class ProductionProfileTests(unittest.TestCase):
                 elif len(aliases) == 1:
                     self.assertEqual(model_names, {aliases[0]})
 
-    def test_qwen_claude_stack_disables_unstable_long_context_thinking(self) -> None:
-        settings = load_profile("qwen38-flash")["stack"]["claude_settings"]
-        environment = settings["env"]
-        self.assertEqual(
-            environment["ANTHROPIC_MODEL"],
-            "qwen3.8-flash-next-fast",
+    def test_qwen_claude_stack_splits_thinking_and_fast_roles(self) -> None:
+        for name in ("qwen38-flash", "qwen38-flash-uncensored"):
+            with self.subTest(profile=name):
+                settings = load_profile(name)["stack"]["claude_settings"]
+                environment = settings["env"]
+                self.assertEqual(
+                    environment["ANTHROPIC_MODEL"],
+                    "qwen3.8-flash-next-thinking",
+                )
+                self.assertEqual(
+                    environment["ANTHROPIC_DEFAULT_SONNET_MODEL"],
+                    "qwen3.8-flash-next-thinking",
+                )
+                self.assertEqual(
+                    environment["ANTHROPIC_DEFAULT_OPUS_MODEL"],
+                    "qwen3.8-flash-next-thinking",
+                )
+                self.assertEqual(
+                    environment["ANTHROPIC_DEFAULT_HAIKU_MODEL"],
+                    "qwen3.8-flash-next-fast",
+                )
+                self.assertEqual(
+                    environment["ANTHROPIC_SMALL_FAST_MODEL"],
+                    "qwen3.8-flash-next-fast",
+                )
+                self.assertNotIn("CLAUDE_CODE_DISABLE_THINKING", environment)
+                self.assertNotIn("MAX_THINKING_TOKENS", environment)
+                self.assertEqual(settings["effortLevel"], "high")
+
+    def test_qwen_reasoning_effort_normalizes_without_mutation(self) -> None:
+        models = (
+            "qwen3.8-flash-next-thinking",
+            "hosted_vllm/qwen3.8-flash-next-uncensored-mxfp4-fp8",
+            "qwen3.8-27b-workers-thinking",
+            "hosted_vllm/qwen3.8-27b-worker",
         )
-        self.assertEqual(environment["CLAUDE_CODE_DISABLE_THINKING"], "1")
-        self.assertEqual(environment["MAX_THINKING_TOKENS"], "0")
+        for model in models:
+            for effort in ("high", "max"):
+                with self.subTest(model=model, effort=effort):
+                    request = {
+                        "model": model,
+                        "reasoning_effort": effort,
+                        "messages": [{"role": "user", "content": "test"}],
+                    }
+
+                    updated = normalize_qwen38_reasoning_effort(request)
+
+                    self.assertIsNot(updated, request)
+                    self.assertEqual(updated["reasoning_effort"], "xhigh")
+                    self.assertEqual(request["reasoning_effort"], effort)
+
+    def test_qwen_reasoning_effort_preserves_supported_and_other_models(self) -> None:
+        requests = [
+            {
+                "model": "qwen3.8-flash-next-thinking",
+                "reasoning_effort": effort,
+            }
+            for effort in ("low", "medium", "xhigh")
+        ]
+        requests.append(
+            {"model": "glm-5.3-flash-high", "reasoning_effort": "high"}
+        )
+        for request in requests:
+            with self.subTest(request=request):
+                self.assertIs(normalize_qwen38_reasoning_effort(request), request)
+
+    def test_litellm_binds_the_shared_qwen_alias_to_the_active_profile(self) -> None:
+        profile_name, model = proxy._active_anthropic_model(
+            {"profile": "qwen38-flash-uncensored"}
+        )
+
+        self.assertEqual(profile_name, "qwen38-flash-uncensored")
+        self.assertEqual(
+            model,
+            "anthropic/qwen3.8-flash-next-uncensored-mxfp4-fp8",
+        )
+
+    def test_litellm_qwen_alias_uses_nonthinking_sampling_recipe(self) -> None:
+        config = (ROOT / "config" / "litellm.yaml").read_text()
+        block = config.split("- model_name: qwen3.8-flash-next-fast", 1)[1].split(
+            "\n  - model_name:", 1
+        )[0]
+        for expected in (
+            "model: os.environ/HOSTED_INFERENCE_OPENAI_MODEL",
+            "temperature: 0.7",
+            "top_p: 0.8",
+            "presence_penalty: 1.5",
+            "top_k: 20",
+            "min_p: 0.0",
+            "repetition_penalty: 1.0",
+            "enable_thinking: false",
+            "preserve_thinking: false",
+        ):
+            self.assertIn(expected, block)
+
+    def test_litellm_qwen_thinking_alias_uses_reasoning_sampling_recipe(self) -> None:
+        config = (ROOT / "config" / "litellm.yaml").read_text()
+        block = config.split(
+            "- model_name: qwen3.8-flash-next-thinking", 1
+        )[1].split("\n  - model_name:", 1)[0]
+        for expected in (
+            "model: os.environ/HOSTED_INFERENCE_OPENAI_MODEL",
+            "temperature: 1.0",
+            "top_p: 0.95",
+            "presence_penalty: 0.0",
+            "top_k: 20",
+            "min_p: 0.0",
+            "repetition_penalty: 1.0",
+            "enable_thinking: true",
+            "preserve_thinking: true",
+            "supports_reasoning: true",
+            "supports_max_reasoning_effort: true",
+        ):
+            self.assertIn(expected, block)
+
+    def test_litellm_qwen_worker_aliases_use_secondary_backend(self) -> None:
+        config = (ROOT / "config" / "litellm.yaml").read_text()
+        for alias, thinking in (
+            ("qwen3.8-27b-workers-thinking", True),
+            ("qwen3.8-27b-workers-fast", False),
+        ):
+            with self.subTest(alias=alias):
+                block = config.split(f"- model_name: {alias}", 1)[1].split(
+                    "\n  - model_name:", 1
+                )[0]
+                self.assertIn(
+                    "model: os.environ/HOSTED_WORKER_OPENAI_MODEL", block
+                )
+                self.assertIn(
+                    "api_base: os.environ/HOSTED_WORKER_API_BASE", block
+                )
+                self.assertIn(f"enable_thinking: {str(thinking).lower()}", block)
+                self.assertIn("max_input_tokens: 131072", block)
 
     def test_no_production_profile_enables_cpu_offload(self) -> None:
         for name in PROFILE_NAMES:
@@ -410,11 +539,13 @@ class ProductionProfileTests(unittest.TestCase):
 
     def test_commands_resolve_from_one_profile(self) -> None:
         expectations = {
-            "deepseek-v4-flash": ("vllm", "--pipeline-parallel-size", "6"),
-            GLM_PROFILE: ("vllm", "--quantization", "quark"),
-            "qwen38-flash": ("vllm", "--tensor-parallel-size", "8"),
+            "deepseek-v4-flash": ("--pipeline-parallel-size", "6"),
+            GLM_PROFILE: ("--quantization", "quark"),
+            "qwen38-4x27b": ("--data-parallel-size", "4"),
+            "qwen38-flash": ("--tensor-parallel-size", "4"),
+            "qwen38-flash-uncensored": ("--tensor-parallel-size", "4"),
         }
-        for name, expected in expectations.items():
+        for name, (option, value) in expectations.items():
             with self.subTest(profile=name):
                 profile = load_profile(name)
                 command = build_command(
@@ -424,13 +555,164 @@ class ProductionProfileTests(unittest.TestCase):
                     "127.0.0.1",
                     8000,
                 )
-                rendered = " ".join(command)
-                for value in expected:
-                    self.assertIn(value, rendered)
+                option_index = command.index(option)
+                self.assertEqual(command[option_index + 1], value)
                 if profile["runtime"].get("backend", "vllm") == "vllm":
                     self.assertEqual(
                         command[1:3], ["-m", "r9700.vllm_entrypoint"]
                     )
+
+    def test_qwen_27b_worker_pool_uses_four_disjoint_tp1_replicas(self) -> None:
+        profile = load_profile("qwen38-4x27b")
+        model = profile["model"]
+        runtime = profile["runtime"]
+        self.assertEqual(runtime["role"], "worker-pool")
+        self.assertEqual(
+            runtime["parallel"],
+            {
+                "tensor": 1,
+                "pipeline": 1,
+                "data": 4,
+                "enable_expert_parallel": False,
+                "disable_custom_all_reduce": True,
+            },
+        )
+        self.assertEqual(
+            runtime["gpu_bdfs"],
+            [
+                "0000:07:00.0",
+                "0000:0a:00.0",
+                "0000:23:00.0",
+                "0000:e6:00.0",
+            ],
+        )
+        primary_bdfs = {
+            bdf.lower()
+            for bdf in load_profile("qwen38-flash-uncensored")["runtime"][
+                "gpu_bdfs"
+            ]
+        }
+        self.assertFalse(primary_bdfs.intersection(runtime["gpu_bdfs"]))
+        self.assertEqual(model["vllm"]["quantization"], "quark")
+        self.assertTrue(model["supports_dflash"])
+        self.assertEqual(len(model["auxiliary_artifacts"]), 2)
+        drafter = model["auxiliary_artifacts"][0]
+        self.assertEqual(
+            drafter["repository"], "syvai/Qwen3.8-27B-DFlash2-W4A16"
+        )
+        self.assertEqual(
+            drafter["revision"], "4d30ec736ffc6b8688dc2ae2b502d9b48bdec279"
+        )
+        speculative = runtime["speculative_config"]
+        self.assertEqual(speculative["method"], "dflash")
+        self.assertEqual(
+            speculative["model_artifact"], "qwen38-27b-dflash2-w4a16"
+        )
+        self.assertEqual(speculative["num_speculative_tokens"], 4)
+        self.assertEqual(speculative["draft_tensor_parallel_size"], 1)
+        self.assertEqual(speculative["attention_backend"], "TRITON_ATTN")
+        self.assertEqual(speculative["draft_sample_method"], "probabilistic")
+        self.assertEqual(runtime["cache"]["dtype"], "fp8")
+        self.assertEqual(
+            runtime["cache"]["prefix_cache_retention_interval"], 1616
+        )
+        self.assertEqual(speculative["kv_cache_dtype"], "fp8")
+        self.assertIn("0018", runtime["required_patches"])
+        self.assertTrue(runtime["cache"]["prefix_cache"])
+        self.assertEqual(runtime["environment"]["VLLM_KV_CACHE_LAYOUT"], "LBHNC")
+
+        command = build_command(
+            model, runtime, Path("/models/qwen38-27b"), "127.0.0.1", 8100
+        )
+        for option, value in (
+            ("--tensor-parallel-size", "1"),
+            ("--data-parallel-size", "4"),
+            ("--quantization", "quark"),
+            ("--max-model-len", "131072"),
+        ):
+            self.assertEqual(command[command.index(option) + 1], value)
+        self.assertIn("--enable-prefix-caching", command)
+        self.assertIn("--language-model-only", command)
+        speculative_value = json.loads(
+            command[command.index("--speculative-config") + 1]
+        )
+        self.assertNotIn("model_artifact", speculative_value)
+        self.assertEqual(
+            speculative_value["model"],
+            "/mnt/ai/models/qwen/Qwen3.8-27B-DFlash2-W4A16",
+        )
+
+    def test_qwen_multi_pins_primary_and_worker_components(self) -> None:
+        profile = load_profile("qwen-multi")
+        primary = load_profile("qwen38-flash-uncensored")
+        workers = load_profile("qwen38-4x27b")
+        components = profile["components"]
+
+        self.assertEqual(profile["model"]["name"], primary["model"]["name"])
+        self.assertEqual(profile["runtime"]["name"], primary["runtime"]["name"])
+        self.assertEqual(
+            components["primary"]["profile_sha256"], primary["_sha256"]
+        )
+        self.assertEqual(
+            components["worker_pool"]["profile_sha256"], workers["_sha256"]
+        )
+        self.assertEqual(
+            set(profile["stack"]["litellm_aliases"]),
+            set(primary["stack"]["litellm_aliases"])
+            | set(workers["stack"]["litellm_aliases"]),
+        )
+        self.assertTrue(
+            launcher._state_matches_target(
+                {
+                    "profile": "qwen38-flash-uncensored",
+                    "model": primary["model"]["name"],
+                    "runtime": primary["runtime"]["name"],
+                    "runtime_mode": None,
+                },
+                profile_name="qwen-multi",
+                model_name=profile["model"]["name"],
+                runtime_name=profile["runtime"]["name"],
+                runtime_mode=None,
+                compatible_profiles={"qwen38-flash-uncensored"},
+            )
+        )
+
+    def test_qwen_multi_stop_plan_includes_all_three_services(self) -> None:
+        with patch("r9700.launcher._run") as run:
+            launcher.stop(profile_name="qwen-multi", dry_run=True)
+
+        commands = [call.args[0] for call in run.call_args_list]
+        self.assertEqual(len(commands), 3)
+        self.assertIn("stop-litellm-proxy", commands[0][0])
+        self.assertEqual(commands[1][1:3], ["worker-pool", "stop"])
+        self.assertIn("stop-r9700-runtime", commands[2][0])
+
+    def test_primary_launcher_refuses_worker_pool_profile(self) -> None:
+        with self.assertRaisesRegex(ConfigurationError, "secondary worker pool"):
+            launcher._target("qwen38-4x27b")
+
+    def test_worker_pool_start_command_is_persistent_and_graceful(self) -> None:
+        command = worker_pool._start_command(
+            "qwen38-4x27b", host="127.0.0.1", port=8100, ready_timeout=1200
+        )
+        self.assertEqual(command[:4], ["systemd-run", "--user", "--unit", worker_pool.UNIT])
+        self.assertIn("--property=KillMode=control-group", command)
+        self.assertIn("--property=KillSignal=SIGINT", command)
+        self.assertIn("--property=SendSIGKILL=no", command)
+        self.assertNotIn("SIGKILL", " ".join(command).replace("SendSIGKILL=no", ""))
+
+    def test_worker_pool_rejects_overlap_with_managed_primary(self) -> None:
+        profile = load_profile("qwen38-4x27b")
+        overlapping = json.loads(json.dumps(profile))
+        overlapping["runtime"]["gpu_bdfs"][0] = load_profile(
+            "qwen38-flash-uncensored"
+        )["runtime"]["gpu_bdfs"][0]
+        with patch(
+            "r9700.worker_pool.runtime_service.managed_state",
+            return_value={"profile": "qwen38-flash-uncensored"},
+        ):
+            with self.assertRaisesRegex(ConfigurationError, "overlaps"):
+                worker_pool._assert_disjoint_from_primary(overlapping)
 
     def test_vllm_workers_receive_the_rocm_triton_bootstrap(self) -> None:
         runtime = {
@@ -1418,6 +1700,61 @@ class ProductionProfileTests(unittest.TestCase):
                     ConfigurationError, "checkpoint validation failed"
                 ):
                     verify_model("fixture")
+
+    def test_model_verification_accepts_bound_huggingface_tree_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary)
+            shard = destination / "model.safetensors"
+            header = json.dumps(
+                {
+                    "weight": {
+                        "dtype": "F32",
+                        "shape": [1],
+                        "data_offsets": [0, 4],
+                    }
+                },
+                separators=(",", ":"),
+            ).encode()
+            shard.write_bytes(struct.pack("<Q", len(header)) + header + b"data")
+            revision = "2" * 40
+            tree_path = destination / ".cache/huggingface/trees" / f"{revision}.json"
+            tree_path.parent.mkdir(parents=True)
+            tree_path.write_text(
+                json.dumps(
+                    {
+                        "format_version": 1,
+                        "files": {
+                            shard.name: {"size": shard.stat().st_size},
+                        },
+                    }
+                )
+            )
+            model = {
+                "name": "fixture",
+                "repository": "example/model",
+                "revision": revision,
+                "expected_shards": 1,
+                "weight_pattern": "*.safetensors",
+                "required_files": [],
+                "checkpoint_weight_bytes": 4,
+                "source_evidence": {
+                    "kind": "huggingface_tree",
+                    "path": str(tree_path.relative_to(destination)),
+                    "sha256": sha256_file(tree_path),
+                },
+                "_sha256": "1" * 64,
+            }
+            with (
+                patch("r9700.models.load_model", return_value=model),
+                patch(
+                    "r9700.models.resolve_model_directory",
+                    return_value=destination,
+                ),
+            ):
+                payload = verify_model("fixture")
+
+            self.assertEqual(payload["resolved_revision"], revision)
+            self.assertEqual(payload["checkpoint"]["shard_count"], 1)
 
     def test_safetensors_weight_bytes_exclude_container_headers(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

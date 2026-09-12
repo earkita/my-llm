@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_on": "2026-09-08",
+  "generated_on": "2026-09-11",
   "source_repository": "llm-runtime (historical source only; not required)",
   "policy": "Only source profiles under profiles/runtime/production were selected; model, runtime and stack settings were flattened into one deployment file without extends.",
   "profiles": {
@@ -80,18 +80,72 @@
       ]
     },
     "qwen38-flash": {
-      "source_model": "profiles/models/qwen38-flash-next-fp8.json",
-      "source_model_sha256": "0da34499a11d54dc6315b7dec13ebee6c6064807a6728e3689b4488ac496e7b2",
+      "source_model": "https://huggingface.co/tcclaviger/Qwen3.8-Flash-Next-MXFP4-FP8",
+      "source_model_sha256": "f6adddb64dc6a54cfcc3ae9786f26a6b42b2a39d",
       "source_runtime": "profiles/runtime/production/qwen38-flash-next-fp8-8x-cache-safe-mtp2.json",
       "source_runtime_sha256": "22b4431b0c4ecfd74cb08b89ab815292bf4ce78ab2d0b71aab0ca446484f9f04",
       "target_profile": "profiles/production/qwen38-flash.json",
-    "target_profile_sha256": "39b23d0c15b4ebc62a7e0830d1c16b62760c39ac6099302c934c06b2e323c6b3",
+      "target_profile_sha256": "449d91edaaa94bab32cebe71d89aa238ff802c98aa9760bd55c14d0a5cf69d6b",
       "intentional_changes": [
-        "embedded stack preset",
-        "GPU BDF order updated for the post-relocation host topology captured on 2026-09-02",
-      "Claude Code defaults to the non-thinking Qwen alias because long-context reasoning loops under the current runtime",
-      "consolidated LiteLLM and every Claude Code model role on the single qwen3.8-flash-next-fast alias",
-      "disabled Claude Code's changing total-token and periodic TODO reminders"
+        "replaced the historical upstream FP8 deployment with the locally present tcclaviger MXFP4/FP8 checkpoint",
+        "assigned the main model to the first four fast-path R9700/gfx1201 GPUs with TP4 and EP4, leaving four GPUs for the 1+1+1+1 side allocation",
+        "retained MTP2 while routing FP8 MTP experts through Triton and compressed MXFP4 experts through OCP emulation",
+        "enabled FP8 KV cache using the checkpoint's 36 calibrated scale tensors",
+        "bound read-only Hugging Face tree evidence because the reference checkpoint must not be modified with a repository sidecar",
+        "split Claude Code between a dynamically selected thinking alias for main/Sonnet/Opus and a non-thinking fast alias for Haiku/small tasks, with LiteLLM normalizing high/max effort to xhigh",
+        "recorded complete finite checkpoint validation while leaving native gfx1201 runtime qualification pending"
+      ]
+    },
+    "qwen38-flash-uncensored": {
+      "source_model": "https://huggingface.co/dealignai/Qwen3.8-Flash-Next-UNCENSORED-FP8",
+      "source_model_sha256": "0df192cfd5b20fcd109fb63a5e1f663afa0341d8",
+      "source_runtime": "profiles/runtime/production/qwen38-flash-next-fp8-8x-cache-safe-mtp2.json",
+      "source_runtime_sha256": "22b4431b0c4ecfd74cb08b89ab815292bf4ce78ab2d0b71aab0ca446484f9f04",
+      "target_profile": "profiles/production/qwen38-flash-uncensored.json",
+      "target_profile_sha256": "b2f2abbbc30210b0e47da0ccbb186f64a0c3937b117265a7376ac5b28ab04384",
+      "intentional_changes": [
+        "converted the UNCENSORED FP8 checkpoint locally to the reference MXFP4/FP8 tensor schema without copying reference weights or scales",
+        "assigned the main model to the first four fast-path R9700/gfx1201 GPUs with TP4 and EP4, leaving four GPUs for the 1+1+1+1 side allocation",
+        "retained MTP2 while routing FP8 MTP experts through Triton and compressed MXFP4 experts through OCP emulation",
+        "kept KV cache in BF16/auto because reference-only calibrated FP8 KV activation scales were not copied",
+        "split Claude Code between a dynamically selected thinking alias for main/Sonnet/Opus and a non-thinking fast alias for Haiku/small tasks, with LiteLLM normalizing high/max effort to xhigh",
+        "recorded native gfx1201 startup, chat, reasoning, tool-call, short throughput, Claude Code thinking and Read/Edit/Bash evidence, plus a non-thinking fast-alias smoke test"
+      ]
+    },
+    "qwen38-4x27b": {
+      "source_model": "https://huggingface.co/amd/Qwen3.8-27B-Quark-AWQ-INT4-W4A16",
+      "source_model_sha256": "0f7ee2559e8dbc25879e1fe1677b2b10708b91a9",
+      "auxiliary_model": "https://huggingface.co/syvai/Qwen3.8-27B-DFlash2-W4A16",
+      "auxiliary_model_sha256": "4d30ec736ffc6b8688dc2ae2b502d9b48bdec279",
+      "source_runtime": "https://github.com/vllm-project/vllm/pull/48606",
+      "source_runtime_sha256": "52d2d48d01025f21a7010901bae31a49c86acac3",
+      "target_profile": "profiles/production/qwen38-4x27b.json",
+      "target_profile_sha256": "678f0b0a221034f9b52aa0ee40dbf9b23643d82f84c2a1558344798067226bcb",
+      "intentional_changes": [
+        "adapted the upstream Quark W4A16 linear scheme to the pinned Qwen runtime and selected the gfx1201 RDNAHybridW4A16 kernel",
+        "assigned the four GPUs outside the primary Qwen allocation as four independent TP1 data-parallel replicas",
+        "switched target and DFlash2 KV to standard FP8 E4M3 with explicit scale-1.0 provenance because neither checkpoint has calibrated KV scales and the pinned runtime has no dynamic calculate_kv_scales option",
+        "replaced the native MTP K1 drafter with the exact syvai compressed-tensors W4A16 DFlash2 revision at K4, using probabilistic draft sampling and Triton draft attention",
+        "patched the pinned vLLM image to derive DFlash context-KV rows through the selected packed W4A16 kernel and checkpoint scales instead of assuming a dense weight tensor",
+        "raised dedicated worker-card GPU utilization from 0.92 to 0.96 after the first DFlash2 start exposed 10.24 GiB KV versus 11.07 GiB required at the retained 131072 context limit",
+        "aligned native hybrid prefix-cache retention to the measured 1616-token scheduler block selected by DFlash2 with FP8 KV",
+        "retained max_num_batched_tokens 2048 after controlled local 32K tests showed 4096 and 8192 were slower while consuming more activation memory and reducing KV capacity",
+        "kept the previous MTP K1 and DFlash2 BF16-KV gfx1201 qualifications as historical evidence and qualified FP8 KV on all four local ranks, including reasoning, tools, prefix reuse, speculative acceptance, throughput, and the exact 131072-token boundary"
+      ]
+    },
+    "qwen-multi": {
+      "source_model": "profiles/production/qwen38-flash-uncensored.json + profiles/production/qwen38-4x27b.json",
+      "source_model_sha256": "53ef876b1e4aa6965a896db2cc3fe94c50781efb4c9db64ba8737df3cab41f4d",
+      "source_runtime": "manifest/vllm_qwen38flash_pr53896.json",
+      "source_runtime_sha256": "54e4576ecf3ef5591acf8b9f69c410154bfc4bbe72cbd2b398b58fb6dc226f4c",
+      "target_profile": "profiles/production/qwen-multi.json",
+      "target_profile_sha256": "5bed7ee54c1af76d79c877171b004aca90178277b506bc4d5cf64ccc37bd80ca",
+      "intentional_changes": [
+        "composed the pinned Qwen Flash UNCENSORED TP4/EP4 primary and Qwen3.8-27B DP4/TP1 worker pool without profile inheritance",
+        "pinned the worker component to the W4A16 DFlash2 K4 profile with FP8 E4M3 target and draft KV while preserving earlier BF16 and MTP results as historical evidence",
+        "reused the already-running compatible primary and proxy while gracefully restarting only the worker pool for its qualified FP8-KV DFlash2 image",
+        "exposed all four thinking and fast LiteLLM aliases under one managed stack",
+        "added explicit all-component status and graceful stop orchestration for the 4+1+1+1+1 topology"
       ]
     }
   },

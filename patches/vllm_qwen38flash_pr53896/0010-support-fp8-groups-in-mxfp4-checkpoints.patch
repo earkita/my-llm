@@ -1,0 +1,23 @@
+diff --git a/vllm/model_executor/layers/quantization/compressed_tensors/compressed_tensors.py b/vllm/model_executor/layers/quantization/compressed_tensors/compressed_tensors.py
+index 454116bf5..3247b3e78 100644
+--- a/vllm/model_executor/layers/quantization/compressed_tensors/compressed_tensors.py
++++ b/vllm/model_executor/layers/quantization/compressed_tensors/compressed_tensors.py
+@@ -807,7 +807,16 @@ class CompressedTensorsConfig(QuantizationConfig):
+                 layer_name=layer_name,
+             )
+ 
+-        act_quant_format = is_activation_quantization_format(format)
++        # A mixed MXFP4/FP8 checkpoint has a global MXFP4 container format,
++        # while individual attention and MTP groups still describe ordinary
++        # FP8 weight/activation quantization.  The global format must not hide
++        # those otherwise valid W8A8/W8A16 schemes.
++        mixed_mxfp4_fp8 = format == "mxfp4-pack-quantized" and (
++            self._is_fp8_w8a8(weight_quant, input_quant)
++            or self._is_fp8_w8a16(weight_quant, input_quant)
++        )
++        act_quant_format = (
++            is_activation_quantization_format(format) or mixed_mxfp4_fp8
++        )
+         if act_quant_format:
+             if self._is_fp8_w8a8(weight_quant, input_quant):
+                 if current_platform.is_xpu():

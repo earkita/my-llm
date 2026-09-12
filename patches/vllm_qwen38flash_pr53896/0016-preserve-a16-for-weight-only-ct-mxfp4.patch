@@ -1,0 +1,91 @@
+diff --git a/tests/quantization/test_compressed_tensors.py b/tests/quantization/test_compressed_tensors.py
+--- a/tests/quantization/test_compressed_tensors.py
++++ b/tests/quantization/test_compressed_tensors.py
+@@ -759,6 +759,43 @@ _DYNAMIC_INT8_ACT = QuantizationArgs(
+ )
+ 
+ 
++def test_mxfp4_weight_only_preserves_unquantized_activations(monkeypatch):
++    from vllm.model_executor.layers.quantization.compressed_tensors.schemes import (
++        compressed_tensors_w4a4_mxfp4 as mxfp4_scheme,
++    )
++
++    activation_keys = []
++    monkeypatch.setattr(
++        mxfp4_scheme,
++        "init_mxfp4_linear_kernel",
++        lambda activation_quant_key=None: activation_keys.append(
++            activation_quant_key
++        ),
++    )
++    weight_quant = QuantizationArgs(
++        num_bits=4,
++        type=QuantizationType.FLOAT,
++        strategy=QuantizationStrategy.GROUP.value,
++        symmetric=True,
++        dynamic=False,
++        group_size=32,
++    )
++    config = CompressedTensorsConfig(
++        target_scheme_map={},
++        ignore=[],
++        quant_format="mxfp4-pack-quantized",
++    )
++
++    scheme = config._get_scheme_from_parts(
++        weight_quant=weight_quant,
++        input_quant=None,
++        format="mxfp4-pack-quantized",
++    )
++
++    assert isinstance(scheme, CompressedTensorsW4A4Mxfp4)
++    assert activation_keys == [None]
++
++
+ @pytest.mark.parametrize(
+     "weight_bits,weight_strategy,input_act,output_act,format,expected_scheme",
+     [
+diff --git a/vllm/model_executor/layers/quantization/compressed_tensors/compressed_tensors.py b/vllm/model_executor/layers/quantization/compressed_tensors/compressed_tensors.py
+--- a/vllm/model_executor/layers/quantization/compressed_tensors/compressed_tensors.py
++++ b/vllm/model_executor/layers/quantization/compressed_tensors/compressed_tensors.py
+@@ -697,7 +697,7 @@ class CompressedTensorsConfig(QuantizationConfig):
+     def _get_scheme_from_parts(
+         self,
+         weight_quant: QuantizationArgs,
+-        input_quant: QuantizationArgs,
++        input_quant: QuantizationArgs | None,
+         output_quant: QuantizationArgs | None = None,
+         format: str | None = None,
+         layer_name: str | None = None,
+@@ -743,7 +743,7 @@ class CompressedTensorsConfig(QuantizationConfig):
+             return CompressedTensorsW4A4Fp4()
+ 
+         if self._is_mxfp4(weight_quant):
+-            return CompressedTensorsW4A4Mxfp4()
++            return CompressedTensorsW4A4Mxfp4(use_a16=input_quant is None)
+ 
+         if self._is_mxfp8(weight_quant):
+             return CompressedTensorsW8A8Mxfp8()
+diff --git a/vllm/model_executor/layers/quantization/compressed_tensors/schemes/compressed_tensors_w4a4_mxfp4.py b/vllm/model_executor/layers/quantization/compressed_tensors/schemes/compressed_tensors_w4a4_mxfp4.py
+--- a/vllm/model_executor/layers/quantization/compressed_tensors/schemes/compressed_tensors_w4a4_mxfp4.py
++++ b/vllm/model_executor/layers/quantization/compressed_tensors/schemes/compressed_tensors_w4a4_mxfp4.py
+@@ -33,14 +33,15 @@ class CompressedTensorsW4A4Mxfp4(CompressedTensorsScheme):
+     - Per-group E8M0 scales with group_size=32
+     - No global scale (unlike NVFP4)
+ 
+-    On SM100+ with FlashInfer: true W4A4 (activations dynamically quantized).
+-    Otherwise: W4A16 weight-only via Marlin.
++    When input activation quantization is declared, use true W4A4 where the
++    selected kernel supports it. With no input scheme, preserve A16/BF16
++    activations and apply only the checkpoint's MXFP4 weights.
+     """
+ 
+-    def __init__(self):
++    def __init__(self, use_a16: bool = False):
+         self.group_size = 32
+         self.kernel = init_mxfp4_linear_kernel(
+-            activation_quant_key=kMxfp4Dynamic,
++            activation_quant_key=None if use_a16 else kMxfp4Dynamic,
+         )
+ 
+     @classmethod

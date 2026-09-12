@@ -7,17 +7,17 @@
   },
   "env": {
     "ANTHROPIC_BASE_URL": "http://127.0.0.1:4000",
-    "ANTHROPIC_MODEL": "qwen3.8-flash-next-thinking",
-    "ANTHROPIC_SMALL_FAST_MODEL": "qwen3.8-flash-next-fast",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "qwen3.8-flash-next-fast",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "qwen3.8-flash-next-thinking",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": "qwen3.8-flash-next-thinking",
+    "ANTHROPIC_MODEL": "qwen3.8-27b-workers-thinking",
+    "ANTHROPIC_SMALL_FAST_MODEL": "qwen3.8-27b-workers-fast",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "qwen3.8-27b-workers-fast",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "qwen3.8-27b-workers-thinking",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "qwen3.8-27b-workers-thinking",
     "DISABLE_PROMPT_CACHING": "0",
     "CLAUDE_CODE_TODO_REMINDER_MODE": "off",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
     "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
-    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "262144",
-    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "262144",
+    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "131072",
+    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "131072",
     "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "90"
   }
 }

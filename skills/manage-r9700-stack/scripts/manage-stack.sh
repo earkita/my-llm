@@ -203,9 +203,18 @@ actual = (
     state.get("runtime"),
     state.get("runtime_mode"),
 )
+compatible = {
+    profile["name"],
+    profile.get("components", {}).get("primary", {}).get("compatible_profile"),
+}
+compatible.discard(None)
 present = [index for index, value in enumerate(actual[:3]) if value is not None]
-identity_matches = bool(present) and all(
-    actual[index] == expected[index] for index in present
+identity_matches = bool(present) and (
+    actual[0] is None or actual[0] in compatible
+) and all(
+    actual[index] == expected[index]
+    for index in (1, 2)
+    if actual[index] is not None
 )
 if mode is None:
     mode_matches = actual[3] in (None, "")

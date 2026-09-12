@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from . import proxy
+from . import proxy, service as runtime_service, worker_pool
 from .backends import runtime_backend
 from .config import (
     ConfigurationError,
@@ -29,6 +29,7 @@ STACK_SCRIPT = (
 )
 RUNTIME_UNIT = "r9700-runtime.service"
 PROXY_UNIT = "r9700-litellm-proxy.service"
+MULTI_STATE_PATH = ROOT / ".runtime" / "qwen-multi.json"
 
 
 def _running_state() -> dict[str, Any] | None:
@@ -47,6 +48,11 @@ def _proxy_running_state() -> dict[str, Any] | None:
 
 def _target(profile_name: str) -> tuple[str, dict[str, Any]]:
     profile = load_profile(profile_name)
+    if profile["runtime"].get("role") == "worker-pool":
+        raise ConfigurationError(
+            f"{profile_name} is a secondary worker pool; use "
+            f"'./run worker-pool start {profile_name}'"
+        )
     return str(profile["name"]), profile
 
 
@@ -57,6 +63,7 @@ def _state_matches_target(
     model_name: str,
     runtime_name: str,
     runtime_mode: str | None,
+    compatible_profiles: set[str] | None = None,
 ) -> bool:
     """Match both current and pre-runtime-mode managed state records."""
     expected = {
@@ -65,7 +72,19 @@ def _state_matches_target(
         "runtime": runtime_name,
     }
     present = [key for key in expected if state.get(key) is not None]
-    if not present or any(state.get(key) != expected[key] for key in present):
+    accepted_profiles = {profile_name, *(compatible_profiles or set())}
+    if (
+        not present
+        or (
+            state.get("profile") is not None
+            and state.get("profile") not in accepted_profiles
+        )
+        or any(
+            state.get(key) != expected[key]
+            for key in ("model", "runtime")
+            if state.get(key) is not None
+        )
+    ):
         return False
     active_mode = state.get("runtime_mode")
     if runtime_mode is None:
@@ -73,6 +92,101 @@ def _state_matches_target(
     # An experimental runtime must carry its explicit mode and runtime name;
     # an older ambiguous state must never be upgraded implicitly.
     return active_mode == runtime_mode and state.get("runtime") == runtime_name
+
+
+def _compatible_primary_profiles(profile: dict[str, Any]) -> set[str]:
+    components = profile.get("components")
+    if not isinstance(components, dict):
+        return set()
+    primary = components.get("primary")
+    if not isinstance(primary, dict):
+        return set()
+    compatible = primary.get("compatible_profile")
+    return {compatible} if isinstance(compatible, str) and compatible else set()
+
+
+def _ensure_worker_component(
+    profile: dict[str, Any],
+    *,
+    dry_run: bool,
+) -> dict[str, Any] | None:
+    components = profile.get("components")
+    if not isinstance(components, dict):
+        return None
+    component = components["worker_pool"]
+    worker_name = str(component["profile"])
+    expected = load_profile(worker_name)
+    try:
+        state = runtime_service.managed_state(
+            state_path=runtime_service.WORKER_POOL_STATE_PATH
+        )
+    except ConfigurationError:
+        state = None
+    if state is not None:
+        checks = {
+            "profile": state.get("profile") == worker_name,
+            "model": state.get("model") == expected["model"]["name"],
+            "runtime": state.get("runtime") == expected["runtime"]["name"],
+            "runtime_profile_sha256": (
+                state.get("runtime_profile_sha256")
+                == expected["runtime"]["_sha256"]
+            ),
+        }
+        if not all(checks.values()):
+            raise ConfigurationError(
+                "active worker pool differs from the multi-profile component: "
+                + str(checks)
+            )
+        print(
+            f"worker-pool already ready: profile={worker_name} "
+            f"PID={state['pid']} URL={state['url']}"
+        )
+        return state
+    worker_pool.start(worker_name, dry_run=dry_run)
+    if dry_run:
+        return None
+    return runtime_service.managed_state(
+        state_path=runtime_service.WORKER_POOL_STATE_PATH
+    )
+
+
+def _record_multi_state(
+    profile: dict[str, Any], worker_state: dict[str, Any] | None
+) -> None:
+    primary_state = managed_state()
+    try:
+        proxy_state = proxy.managed_state()
+    except ConfigurationError:
+        proxy_state = {}
+    runtime_service._atomic_json(
+        MULTI_STATE_PATH,
+        {
+            "schema_version": 1,
+            "profile": profile["name"],
+            "profile_sha256": profile["_sha256"],
+            "primary": {
+                "profile": primary_state.get("profile"),
+                "pid": primary_state.get("pid"),
+                "url": primary_state.get("url"),
+                "runtime_profile_sha256": primary_state.get(
+                    "runtime_profile_sha256"
+                ),
+            },
+            "worker_pool": {
+                "profile": (worker_state or {}).get("profile"),
+                "pid": (worker_state or {}).get("pid"),
+                "url": (worker_state or {}).get("url"),
+                "runtime_profile_sha256": (worker_state or {}).get(
+                    "runtime_profile_sha256"
+                ),
+            },
+            "proxy": {
+                "pid": proxy_state.get("pid"),
+                "url": proxy_state.get("url"),
+                "config_sha256": proxy_state.get("config_sha256"),
+            },
+        },
+    )
 
 
 def _desired_runtime(
@@ -189,6 +303,7 @@ def start(
             model_name=profile["model"]["name"],
             runtime_name=desired_runtime["name"],
             runtime_mode=runtime_mode,
+            compatible_profiles=_compatible_primary_profiles(profile),
         )
     )
     if state and not matches_running and not dry_run:
@@ -223,6 +338,13 @@ def start(
                 dry_run=dry_run,
             )
         )
+        worker_state = _ensure_worker_component(profile, dry_run=dry_run)
+        if not dry_run and profile.get("components"):
+            _record_multi_state(profile, worker_state)
+            print(
+                f"multi stack ready: profile={name} primary=:8000 "
+                "workers=:8100 litellm=:4000"
+            )
         return
     _run(
         _start_command(
@@ -234,6 +356,10 @@ def start(
             dry_run=dry_run,
         )
     )
+    worker_state = _ensure_worker_component(profile, dry_run=dry_run)
+    if not dry_run and profile.get("components"):
+        _record_multi_state(profile, worker_state)
+        print(f"multi runtime ready: profile={name} primary=:8000 workers=:8100")
 
 
 def stop(
@@ -242,7 +368,34 @@ def stop(
     proxy_timeout: int | None = None,
     with_litellm: bool = True,
     dry_run: bool = False,
+    profile_name: str | None = None,
 ) -> None:
+    multi_profile = load_profile(profile_name) if profile_name else None
+    if (
+        with_litellm
+        and multi_profile is not None
+        and isinstance(multi_profile.get("components"), dict)
+    ):
+        proxy_stop = [
+            str(ROOT / "skills" / "stop-litellm-proxy" / "scripts" / "stop-proxy.sh")
+        ]
+        runtime_stop = [str(STOP_SCRIPT)]
+        worker_stop = [str(ROOT / "run"), "worker-pool", "stop"]
+        if proxy_timeout is not None:
+            proxy_stop.extend(("--timeout", str(proxy_timeout)))
+        if timeout is not None:
+            runtime_stop.extend(("--timeout", str(timeout)))
+            worker_stop.extend(("--timeout", str(timeout)))
+        if dry_run:
+            proxy_stop.append("--dry-run")
+            runtime_stop.append("--dry-run")
+            worker_stop.append("--dry-run")
+        _run(proxy_stop)
+        _run(worker_stop)
+        _run(runtime_stop)
+        if not dry_run:
+            MULTI_STATE_PATH.unlink(missing_ok=True)
+        return
     if with_litellm:
         _run(
             _stack_stop_command(
@@ -320,6 +473,7 @@ def switch(
             model_name=profile["model"]["name"],
             runtime_name=desired_runtime["name"],
             runtime_mode=runtime_mode,
+            compatible_profiles=_compatible_primary_profiles(profile),
         )
     )
     if state and matches_running and with_litellm:
@@ -398,6 +552,19 @@ def _layout(profile: dict[str, Any]) -> tuple[str, int, str]:
     data = int(parallel.get("data", 1))
     gpu_count = tensor * pipeline * data
     backend = runtime_backend(runtime)
+    components = profile.get("components")
+    if isinstance(components, dict):
+        worker = load_profile(str(components["worker_pool"]["profile"]))
+        worker_parallel = worker["runtime"]["parallel"]
+        worker_count = (
+            int(worker_parallel["tensor"])
+            * int(worker_parallel["pipeline"])
+            * int(worker_parallel.get("data", 1))
+        )
+        primary_layout = f"TP{tensor}/PP{pipeline}"
+        if parallel.get("enable_expert_parallel"):
+            primary_layout += "/EP"
+        return backend, gpu_count + worker_count, primary_layout + "+DP4/TP1"
     if backend == "llama-cpp":
         return backend, gpu_count, "layer-split"
 
@@ -446,6 +613,7 @@ def list_profiles() -> None:
 
 def status() -> None:
     _print_component_status("Inference runtime", service_status, RUNTIME_UNIT)
+    _print_component_status("Qwen worker pool", worker_pool.status, worker_pool.UNIT)
     _print_component_status("LiteLLM proxy", proxy.status, PROXY_UNIT)
 
 

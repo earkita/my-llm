@@ -132,7 +132,11 @@ def _iommu() -> Check:
 
 def doctor(runtime_name: str, *, output: Path | None = None) -> dict:
     runtime = load_runtime(runtime_name)
-    world_size = runtime["parallel"]["tensor"] * runtime["parallel"]["pipeline"]
+    world_size = (
+        runtime["parallel"]["tensor"]
+        * runtime["parallel"]["pipeline"]
+        * runtime["parallel"].get("data", 1)
+    )
     checks = [_tool(name) for name in ("git", "gcc", "g++", "cmake", "ninja")]
     runtime_pm = _amdgpu_runtime_pm()
     checks.extend(

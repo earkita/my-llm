@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import ConfigurationError, ROOT, load_model, load_runtime
-from .service import managed_state
+from .service import managed_state, state_path_for_runtime
 
 
 LITERAL_EXPECTED = "serwer działa"
@@ -114,7 +114,7 @@ def test_api(
     url = url.rstrip("/")
     model = load_model(model_name)
     runtime = load_runtime(runtime_name, runtime_mode)
-    state = managed_state()
+    state = managed_state(state_path=state_path_for_runtime(runtime))
     expected_mode = runtime.get("active_experimental_mode")
     runtime_ok = state.get("runtime") == runtime["name"]
     runtime_hash_ok = (

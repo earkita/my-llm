@@ -1,0 +1,123 @@
+diff --git a/tests/v1/spec_decode/test_dflash2.py b/tests/v1/spec_decode/test_dflash2.py
+index 0bff2d5..23fc5cc 100644
+--- a/tests/v1/spec_decode/test_dflash2.py
++++ b/tests/v1/spec_decode/test_dflash2.py
+@@ -6,11 +6,34 @@ from types import SimpleNamespace
+ import pytest
+ import torch
+ 
++from vllm.model_executor.models.qwen3_dflash import _dflash_kv_weight_rows
+ from vllm.model_executor.models.qwen3_dflash2 import _grouped_conv, _score_edges
+ from vllm.v1.worker.gpu.spec_decode.dflash.speculator import DFlashSpeculator
+ from vllm.v1.worker.gpu.spec_decode.dflash2.speculator import DFlash2Speculator
+ 
+ 
++def test_packed_projection_materializes_dense_kv_rows():
++    class PackedProjection(torch.nn.Module):
++        input_size_per_partition = 4
++        orig_dtype = torch.float32
++
++        def __init__(self) -> None:
++            super().__init__()
++            self.weight_packed = torch.nn.Parameter(
++                torch.zeros(1, dtype=torch.int32), requires_grad=False
++            )
++            self.dense = torch.arange(24, dtype=torch.float32).reshape(6, 4)
++
++        def forward(self, inputs: torch.Tensor):
++            return inputs @ self.dense.t(), None
++
++    projection = PackedProjection()
++
++    actual = _dflash_kv_weight_rows(projection, q_size=2)
++
++    torch.testing.assert_close(actual, projection.dense[2:])
++
++
+ @pytest.mark.parametrize("block_size", [5, 8])
+ def test_grouped_conv_matches_reference(block_size: int):
+     torch.manual_seed(0)
+diff --git a/vllm/model_executor/models/qwen3_dflash.py b/vllm/model_executor/models/qwen3_dflash.py
+index f5a7bff..5984692 100644
+--- a/vllm/model_executor/models/qwen3_dflash.py
++++ b/vllm/model_executor/models/qwen3_dflash.py
+@@ -375,6 +375,42 @@ class DFlashQwen3DecoderLayer(nn.Module):
+         return hidden_states, residual
+ 
+ 
++_DFLASH_FP8 = (torch.float8_e4m3fn, torch.float8_e4m3fnuz)
++
++
++def _dflash_kv_weight_rows(qkv_proj, q_size: int) -> torch.Tensor:
++    """Return dense K/V rows for float and packed DFlash projections.
++
++    Packed compressed-tensors W4A16 projections do not expose a dense
++    ``weight`` parameter.  Running the projection over an identity matrix uses
++    its selected quantization kernel, including the checkpoint scales, and
++    produces the exact dense rows needed by the fused context-KV precompute.
++    """
++    weight = getattr(qkv_proj, "weight", None)
++    if (
++        weight is not None
++        and weight.dim() == 2
++        and weight.is_floating_point()
++        and weight.dtype not in _DFLASH_FP8
++    ):
++        return weight[q_size:]
++    dtype = getattr(qkv_proj, "orig_dtype", torch.bfloat16)
++    device = (
++        weight.device
++        if weight is not None
++        else next(qkv_proj.parameters()).device
++    )
++    identity = torch.eye(
++        qkv_proj.input_size_per_partition,
++        dtype=dtype,
++        device=device,
++    )
++    output = qkv_proj(identity)
++    if isinstance(output, tuple):
++        output = output[0]
++    return output[:, q_size:].t().contiguous()
++
++
+ @support_torch_compile
+ class DFlashQwen3Model(nn.Module):
+     decoder_layer_cls = DFlashQwen3DecoderLayer
+@@ -489,8 +525,19 @@ class DFlashQwen3Model(nn.Module):
+         self._hidden_norm_weight = self.hidden_norm.weight.data
+ 
+         # KV projection weights: [num_layers * 2 * kv_size, hidden_size]
+-        kv_weights = [a.qkv_proj.weight[a.q_size :] for a in layers_attn]
+-        self._fused_kv_weight = torch.cat(kv_weights, dim=0)
++        self._kv_source_attn = layers_attn
++        first_weight = getattr(layers_attn[0].qkv_proj, "weight", None)
++        if (
++            first_weight is None
++            or not first_weight.is_floating_point()
++            or first_weight.dtype in _DFLASH_FP8
++        ):
++            # Quantization post-processing happens after load_weights returns.
++            # Defer materializing the dense context-KV projection until first use.
++            self._fused_kv_weight = None
++        else:
++            kv_weights = [a.qkv_proj.weight[a.q_size :] for a in layers_attn]
++            self._fused_kv_weight = torch.cat(kv_weights, dim=0)
+         if has_bias:
+             kv_biases = [a.qkv_proj.bias[a.q_size :] for a in layers_attn]
+             self._fused_kv_bias: torch.Tensor | None = torch.cat(kv_biases, dim=0)
+@@ -562,6 +609,14 @@ class DFlashQwen3Model(nn.Module):
+             self._hidden_norm_weight,
+             self._rms_norm_eps,
+         )
++        if self._fused_kv_weight is None:
++            self._fused_kv_weight = torch.cat(
++                [
++                    _dflash_kv_weight_rows(attn.qkv_proj, attn.q_size)
++                    for attn in self._kv_source_attn
++                ],
++                dim=0,
++            )
+         all_kv_flat = F.linear(
+             normed_context_states, self._fused_kv_weight, self._fused_kv_bias
+         )

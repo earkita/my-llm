@@ -1,0 +1,128 @@
+diff --git a/tests/kernels/moe/test_b12x.py b/tests/kernels/moe/test_b12x.py
+index fa1dd44..ad1ded3 100644
+--- a/tests/kernels/moe/test_b12x.py
++++ b/tests/kernels/moe/test_b12x.py
+@@ -514,6 +514,56 @@ def test_compressed_tensors_mxfp4_preserves_checkpoint_packing(
+     assert processed_layers == [layer]
+ 
+ 
++def test_compressed_tensors_mxfp4_rocm_triton_uses_emulation_packing(
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    from vllm.model_executor.layers.quantization.compressed_tensors.compressed_tensors_moe import (  # noqa: E501
++        compressed_tensors_moe_w4a4_mxfp4 as ct_mxfp4,
++    )
++
++    monkeypatch.setattr(
++        ct_mxfp4.CutlassExpertsMxfp4,
++        "_supports_current_device",
++        lambda: False,
++    )
++    monkeypatch.setattr(ct_mxfp4.current_platform, "is_rocm", lambda: True)
++    monkeypatch.setattr(
++        ct_mxfp4,
++        "prepare_moe_fp4_layer_for_marlin",
++        lambda layer: pytest.fail("emulation must not use Marlin packing"),
++    )
++    moe_config = SimpleNamespace(w13_num_shards=2, moe_backend="triton")
++    method = ct_mxfp4.CompressedTensorsW4A4Mxfp4MoEMethod(moe_config)
++    assert method.mxfp4_backend == Mxfp4MoeBackend.EMULATION
++    processed_layers: list[torch.nn.Module] = []
++    fake_experts = SimpleNamespace(
++        process_weights_after_loading=processed_layers.append
++    )
++    kernel = SimpleNamespace(fused_experts=fake_experts)
++    monkeypatch.setattr(ct_mxfp4, "make_mxfp4_moe_kernel", lambda **_: kernel)
++    layer = torch.nn.Module()
++    layer._expert_routing_tables = lambda: ()
++    method.create_weights(
++        layer,
++        num_experts=2,
++        hidden_size=64,
++        intermediate_size_per_partition=32,
++        params_dtype=torch.bfloat16,
++    )
++    w13_packed_data = layer.w13_weight_packed.data
++    w2_packed_data = layer.w2_weight_packed.data
++
++    method.process_weights_after_loading(layer)
++
++    assert layer.w13_weight.data.data_ptr() == w13_packed_data.data_ptr()
++    assert layer.w2_weight.data.data_ptr() == w2_packed_data.data_ptr()
++    assert method.moe_quant_config._a1.dtype is None
++    assert method.moe_quant_config._a2.dtype is None
++    assert method.moe_quant_config._w1.dtype == "mxfp4"
++    assert method.moe_quant_config._w2.dtype == "mxfp4"
++    assert processed_layers == [layer]
++
++
+ def test_b12x_mxfp4_falls_back_to_a16(
+     monkeypatch: pytest.MonkeyPatch,
+ ) -> None:
+diff --git a/vllm/model_executor/layers/quantization/compressed_tensors/compressed_tensors_moe/compressed_tensors_moe_w4a4_mxfp4.py b/vllm/model_executor/layers/quantization/compressed_tensors/compressed_tensors_moe/compressed_tensors_moe_w4a4_mxfp4.py
+index f7d12c8..797cbe3 100644
+--- a/vllm/model_executor/layers/quantization/compressed_tensors/compressed_tensors_moe/compressed_tensors_moe_w4a4_mxfp4.py
++++ b/vllm/model_executor/layers/quantization/compressed_tensors/compressed_tensors_moe/compressed_tensors_moe_w4a4_mxfp4.py
+@@ -14,6 +14,7 @@ from vllm.model_executor.layers.fused_moe import (
+ from vllm.model_executor.layers.fused_moe.config import (
+     FusedMoEQuantConfig,
+     mxfp4_moe_quant_config,
++    mxfp4_w4a16_moe_quant_config,
+ )
+ from vllm.model_executor.layers.fused_moe.experts.cutlass_moe import (
+     CutlassExpertsMxfp4,
+@@ -27,6 +28,7 @@ from vllm.model_executor.layers.fused_moe.experts.xpu_moe import (
+ from vllm.model_executor.layers.fused_moe.oracle.mxfp4 import (
+     B12X_BACKENDS,
+     Mxfp4MoeBackend,
++    backend_to_kernel_cls,
+     make_mxfp4_moe_kernel,
+     make_mxfp4_moe_quant_config,
+     select_mxfp4_moe_backend,
+@@ -53,11 +55,19 @@ class CompressedTensorsW4A4Mxfp4MoEMethod(CompressedTensorsMoEMethod):
+         # repacks weights and scales.
+         self.use_cutlass_mxfp4 = CutlassExpertsMxfp4._supports_current_device()
+         self.experts_cls: type[mk.FusedMoEExperts]
+-        if moe.moe_backend == "b12x":
++        if moe.moe_backend in ("b12x", "emulation"):
+             self.mxfp4_backend, experts_cls = select_mxfp4_moe_backend(moe)
+             assert experts_cls is not None
+             self.experts_cls = experts_cls
+             self.use_cutlass_mxfp4 = False
++        elif current_platform.is_rocm() and moe.moe_backend == "triton":
++            # The runner-wide backend must remain Triton for FP8 MTP experts.
++            # Compressed MXFP4 weights use their checkpoint layout directly
++            # through OCP emulation because ROCm has no Marlin repacker.
++            self.mxfp4_backend = Mxfp4MoeBackend.EMULATION
++            self.experts_cls = backend_to_kernel_cls(self.mxfp4_backend)[0]
++            self.use_cutlass_mxfp4 = False
++            logger.info_once("Using OCP MX emulation for compressed MXFP4 MoE")
+         elif self.use_cutlass_mxfp4:
+             logger.info_once("Using CutlassExpertsMxfp4 for MXFP4 MoE")
+             self.experts_cls = CutlassExpertsMxfp4
+@@ -146,6 +156,14 @@ class CompressedTensorsW4A4Mxfp4MoEMethod(CompressedTensorsMoEMethod):
+                 w1_scale=layer.w13_weight_scale,
+                 w2_scale=layer.w2_weight_scale,
+             )
++        elif self.mxfp4_backend == Mxfp4MoeBackend.EMULATION:
++            # Compressed-tensors MXFP4 groups are weight-only unless an
++            # activation scheme is declared. Preserve BF16 activations while
++            # the emulation backend dequantizes the packed weights on demand.
++            return mxfp4_w4a16_moe_quant_config(
++                w1_scale=layer.w13_weight_scale,
++                w2_scale=layer.w2_weight_scale,
++            )
+         else:
+             # b12x selects W4A8 or W4A16; XPU uses W4A4; Marlin uses W4A16.
+             return make_mxfp4_moe_quant_config(
+@@ -197,7 +215,9 @@ class CompressedTensorsW4A4Mxfp4MoEMethod(CompressedTensorsMoEMethod):
+             layer.w2_weight_scale = torch.nn.Parameter(
+                 torch.stack(swizzled_w2), requires_grad=False
+             )
+-        elif self.mxfp4_backend in B12X_BACKENDS or current_platform.is_xpu():
++        elif self.mxfp4_backend in B12X_BACKENDS or self.mxfp4_backend == (
++            Mxfp4MoeBackend.EMULATION
++        ) or current_platform.is_xpu():
+             pass
+         else:
+             logger.warning_once(

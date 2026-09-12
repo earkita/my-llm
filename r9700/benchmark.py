@@ -20,7 +20,8 @@ from .config import (
     validate_compatibility,
 )
 from .backends import backend_manifest_sha256, runtime_backend
-from .service import managed_state
+from .backends.common import visible_devices
+from .service import managed_state, state_path_for_runtime
 
 
 def _percentile(values: list[float], quantile: float) -> float:
@@ -43,7 +44,7 @@ def _data_parallel_gpu_groups(runtime: dict[str, Any]) -> list[list[int]]:
     parallel = runtime["parallel"]
     data_parallel_size = parallel.get("data", 1)
     devices_per_instance = parallel["tensor"] * parallel["pipeline"]
-    gpu_order = runtime["gpu_order"]
+    gpu_order = [int(device) for device in visible_devices(runtime)]
     return [
         gpu_order[
             rank * devices_per_instance : (rank + 1) * devices_per_instance
@@ -229,7 +230,7 @@ def benchmark(
             "benchmark exceeds scheduler sessions of the selected DP rank"
         )
     url = url.rstrip("/")
-    state = managed_state()
+    state = managed_state(state_path=state_path_for_runtime(runtime))
     if (
         state.get("url") != url
         or state.get("model") != model["name"]

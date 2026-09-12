@@ -9,9 +9,11 @@ from pathlib import Path
 from . import (
     api,
     benchmark as benchmark_module,
+    claude_qualification,
     doctor as doctor_module,
     launcher,
     proxy,
+    worker_pool,
 )
 from .config import (
     ConfigurationError,
@@ -219,6 +221,15 @@ def _tests(args: argparse.Namespace) -> None:
             output=args.output,
         )
 
+    def claude_code() -> None:
+        if args.output is None:
+            raise ConfigurationError("claude-code test requires --output")
+        claude_qualification.qualify(
+            profile_name=profile,
+            output=args.output,
+            timeout=args.timeout,
+        )
+
     actions = {
         "unit": unit,
         "host": host,
@@ -226,6 +237,7 @@ def _tests(args: argparse.Namespace) -> None:
         "patch": patch,
         "gpu": gpu,
         "api": api_test,
+        "claude-code": claude_code,
         "lifecycle": lifecycle,
     }
     if args.tier == "all":
@@ -299,6 +311,10 @@ def parser() -> argparse.ArgumentParser:
     )
     launcher_stop.add_argument("--timeout", type=int)
     launcher_stop.add_argument("--proxy-timeout", type=int)
+    launcher_stop.add_argument(
+        "--profile",
+        help="stop all components of an explicitly named multi profile",
+    )
     stop_lifecycle = launcher_stop.add_mutually_exclusive_group()
     stop_lifecycle.add_argument(
         "--with-litellm",
@@ -367,6 +383,34 @@ def parser() -> argparse.ArgumentParser:
     proxy_logs.add_argument("--follow", action="store_true")
     proxy_logs.add_argument("--lines", type=int, default=100)
     proxy_commands.add_parser("status")
+
+    worker_pool_parser = commands.add_parser(
+        "worker-pool", help="manage a secondary data-parallel worker pool"
+    )
+    worker_pool_commands = worker_pool_parser.add_subparsers(
+        dest="worker_pool_command", required=True
+    )
+    worker_pool_start = worker_pool_commands.add_parser("start")
+    worker_pool_start.add_argument("profile", nargs="?", default=worker_pool.DEFAULT_PROFILE)
+    worker_pool_start.add_argument("--host", default=worker_pool.DEFAULT_HOST)
+    worker_pool_start.add_argument("--port", type=int, default=worker_pool.DEFAULT_PORT)
+    worker_pool_start.add_argument("--ready-timeout", type=int, default=1200)
+    worker_pool_start.add_argument("--required-power-cap-w", type=int, default=285)
+    worker_pool_start.add_argument("--dry-run", action="store_true")
+    worker_pool_commands.add_parser("status")
+    worker_pool_stop = worker_pool_commands.add_parser("stop")
+    worker_pool_stop.add_argument("--timeout", type=int, default=240)
+    worker_pool_stop.add_argument("--dry-run", action="store_true")
+    worker_pool_logs = worker_pool_commands.add_parser("logs")
+    worker_pool_logs.add_argument("--follow", action="store_true")
+    worker_pool_logs.add_argument("--lines", type=int, default=100)
+    worker_pool_supervise = worker_pool_commands.add_parser(
+        "supervise", help=argparse.SUPPRESS
+    )
+    worker_pool_supervise.add_argument("--profile", required=True)
+    worker_pool_supervise.add_argument("--host", required=True)
+    worker_pool_supervise.add_argument("--port", required=True, type=int)
+    worker_pool_supervise.add_argument("--ready-timeout", required=True, type=int)
     proxy_test = proxy_commands.add_parser("test")
     proxy_test.add_argument("--timeout", type=float, default=120)
 
@@ -396,7 +440,7 @@ def parser() -> argparse.ArgumentParser:
 
     test_parser = commands.add_parser("test", help="run a named verification tier")
     test_parser.add_argument(
-        "tier", choices=("unit", "host", "runtime", "patch", "gpu", "api", "lifecycle", "all")
+        "tier", choices=("unit", "host", "runtime", "patch", "gpu", "api", "claude-code", "lifecycle", "all")
     )
     _common_profile(test_parser)
     test_parser.add_argument("--url", default="http://127.0.0.1:8000")
@@ -499,6 +543,7 @@ def main(argv: list[str] | None = None) -> int:
                     proxy_timeout=args.proxy_timeout,
                     with_litellm=args.with_litellm,
                     dry_run=args.dry_run,
+                    profile_name=args.profile,
                 )
             else:
                 launcher.logs(
@@ -555,6 +600,29 @@ def main(argv: list[str] | None = None) -> int:
                 proxy.test(timeout=args.timeout)
             else:
                 proxy.logs(follow=args.follow, lines=args.lines)
+        elif args.command == "worker-pool":
+            if args.worker_pool_command == "start":
+                worker_pool.start(
+                    args.profile,
+                    host=args.host,
+                    port=args.port,
+                    ready_timeout=args.ready_timeout,
+                    required_power_cap_w=args.required_power_cap_w,
+                    dry_run=args.dry_run,
+                )
+            elif args.worker_pool_command == "status":
+                return worker_pool.status()
+            elif args.worker_pool_command == "stop":
+                worker_pool.stop(timeout=args.timeout, dry_run=args.dry_run)
+            elif args.worker_pool_command == "supervise":
+                worker_pool.supervise(
+                    args.profile,
+                    host=args.host,
+                    port=args.port,
+                    ready_timeout=args.ready_timeout,
+                )
+            else:
+                worker_pool.logs(follow=args.follow, lines=args.lines)
         elif args.command == "cache":
             action = {
                 "prepare": kv_cache.prepare,

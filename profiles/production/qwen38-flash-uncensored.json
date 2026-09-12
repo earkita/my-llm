@@ -1,28 +1,29 @@
 {
   "schema_version": 1,
-  "name": "qwen38-flash",
+  "name": "qwen38-flash-uncensored",
   "status": "production-ready",
-  "description": "Qwen3.8 Flash-Next MXFP4/FP8 profile on four R9700 GPUs",
+  "description": "Qwen3.8 Flash-Next UNCENSORED MXFP4/FP8 main profile on four R9700 GPUs",
   "model": {
     "schema_version": 1,
-    "name": "qwen38-flash-next-mxfp4-fp8",
+    "name": "qwen38-flash-next-uncensored-mxfp4-fp8",
     "family": "qwen4_exp",
     "format": "safetensors",
-    "repository": "tcclaviger/Qwen3.8-Flash-Next-MXFP4-FP8",
-    "revision": "f6adddb64dc6a54cfcc3ae9786f26a6b42b2a39d",
-    "default_directory": "/mnt/ai/models/qwen/Qwen3.8-Flash-Next-MXFP4-FP8",
-    "served_name": "qwen3.8-flash-next-mxfp4-fp8",
-    "expected_shards": 132,
+    "repository": "dealignai/Qwen3.8-Flash-Next-UNCENSORED-FP8",
+    "revision": "0df192cfd5b20fcd109fb63a5e1f663afa0341d8",
+    "default_directory": "/mnt/ai/models/qwen/Qwen3.8-Flash-Next-UNCENSORED-MXFP4-FP8",
+    "served_name": "qwen3.8-flash-next-uncensored-mxfp4-fp8",
+    "expected_shards": 131,
     "index_file": "model.safetensors.index.json",
-    "checkpoint_weight_bytes": 125789603234,
+    "checkpoint_weight_bytes": 125789603090,
     "required_files": [
       "config.json",
+      "conversion-provenance.json",
       "generation_config.json",
       "model.safetensors.index.json",
-      "model-kvscales.safetensors",
       "tokenizer.json",
       "tokenizer_config.json",
       "chat_template.jinja",
+      "merges.txt",
       "vocab.json",
       "LICENSE"
     ],
@@ -32,17 +33,13 @@
       "*.jinja",
       "tokenizer*",
       "vocab.json",
+      "merges.txt",
       "LICENSE",
       "README.md"
     ],
     "supports_dspark": false,
     "supports_mtp": true,
     "supports_qsa": true,
-    "source_evidence": {
-      "kind": "huggingface_tree",
-      "path": ".cache/huggingface/trees/f6adddb64dc6a54cfcc3ae9786f26a6b42b2a39d.json",
-      "sha256": "335a6806b2dc0335b3bec9eac17673b2627119f5a5b3f38b5f639e3ed7235207"
-    },
     "vllm": {
       "tokenizer_mode": "auto",
       "tool_call_parser": "qwen3_coder",
@@ -52,22 +49,21 @@
       "language_model_only": true
     },
     "file_sha256": {
-      "README.md": "e85dc5b46417be8e37a671e7490a3d444be3319dbaedb800c802440a4cf41799",
+      "README.md": "dd9ca91fb9fb4f63d8cc4615971b263e49770891c8706ce71cb4c8866d7f289d",
       "chat_template.jinja": "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041",
-      "config.json": "916e53da0c8e2fe08059a7fc2253e0f128b2234c65ff829b8637711b036c87ed",
-      "generation_config.json": "e70c136c1b78ddc1fb0905bac8e733a4dc448d4f852a5dd75143fffc70be550e",
-      "model-kvscales.safetensors": "3a3698152f997a8f9afc67235d13941ae896d8ea08211969e0210ccab4de8fe2",
-      "model.safetensors.index.json": "f39c5de4470500a7a72822bdf7a4a89e0414ca8b4908e9ecfee9fc9b36f10f1e",
+      "config.json": "fe82c6474b3ce4f7a5d1e236a716f2088b8f17bcb03d08e54298d3a2ce62b132",
+      "conversion-provenance.json": "03dababea02f125e6c9607255b0b7e506c5825b92da6cffaa6e69c4b24d9b17f",
+      "model.safetensors.index.json": "44957661ab0f3d00a636fc2cd5c7083bc3f844ee3026ab3e024793cffe3f6e3f",
       "tokenizer.json": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3",
       "tokenizer_config.json": "b11349aafa7cdc6a320767cf7ceb29ed82f7eda5d65e8e0819e76f0ce947bf27"
     }
   },
   "runtime": {
     "schema_version": 1,
-    "name": "qwen38-flash-next-mxfp4-fp8-4xr9700-tp4-ep4-mtp2-fp8kv",
+    "name": "qwen38-flash-next-uncensored-mxfp4-fp8-4xr9700-tp4-ep4-mtp2",
     "status": "production-ready",
     "recipe": "vllm_qwen38flash_pr53896",
-    "description": "Qwen3.8 Flash-Next compressed-tensors MXFP4/FP8 on four gfx1201 R9700 GPUs with TP4/EP4, CPU-resident FP8 PLE, calibrated FP8 KV cache, and MTP2",
+    "description": "Qwen3.8 Flash-Next UNCENSORED compressed-tensors MXFP4/FP8 on four gfx1201 R9700 GPUs with TP4/EP4, CPU-resident FP8 PLE, BF16 KV cache, and MTP2",
     "required_model_family": "qwen4_exp",
     "required_patches": [
       "0010",
@@ -104,7 +100,7 @@
       "gpu_memory_utilization": 0.95
     },
     "cache": {
-      "dtype": "fp8",
+      "dtype": "auto",
       "block_size": 16,
       "prefix_cache": true,
       "cpu_offload_gb": 0,
@@ -161,7 +157,7 @@
     }
   },
   "stack": {
-    "description": "Production Qwen3.8 Flash-Next MXFP4/FP8 MTP2 coding stack",
+    "description": "Production Qwen3.8 Flash-Next UNCENSORED MXFP4/FP8 MTP2 coding stack",
     "litellm_aliases": [
       "qwen3.8-flash-next-thinking",
       "qwen3.8-flash-next-fast"
@@ -189,8 +185,8 @@
     }
   },
   "verification": {
-    "scope": "checkpoint-only-pending-gfx1201-runtime",
-    "verified_context": 0,
-    "notes": "The local 132-file checkpoint, its quantization metadata, calibrated FP8 KV scales, tensor index, and Hugging Face tree evidence were verified without changing the checkpoint. The split thinking/fast Claude templates and high/max-to-xhigh hook passed offline control-plane tests, but runtime startup, generation, Claude Code, prefix-cache behavior, and the configured 262144-token context have not yet been exercised for this base checkpoint on R9700/gfx1201; MI350 compatibility is not accepted as RDNA4 evidence."
+    "scope": "gfx1201-4gpu-checkpoint-api-and-claude-code",
+    "verified_context": 320,
+    "notes": "Validated on four physical R9700/gfx1201 GPUs on 2026-09-11: complete finite checkpoint, managed vLLM and LiteLLM startup, plain chat, parsed reasoning, parsed tool call, exact 256+64-token benchmark, and a 21/21 Claude Code qualification with high normalized to xhigh, nine visible thinking blocks, a nine-turn Read/Edit/Bash repair, and a fast-alias case with zero thinking blocks. Native prefix cache is enabled with retention interval 800, but its full-context hit behavior and the configured 262144-token limit were not exercised end-to-end. MI350 compatibility is not accepted as RDNA4 evidence."
   }
 }

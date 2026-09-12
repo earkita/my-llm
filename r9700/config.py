@@ -91,6 +91,32 @@ def _validate_model(profile: dict[str, Any], path: Path) -> None:
         raise ConfigurationError(
             f"checkpoint_weight_bytes must be a positive integer: {path}"
         )
+    source_evidence = profile.get("source_evidence")
+    if source_evidence is not None:
+        if not isinstance(source_evidence, dict):
+            raise ConfigurationError(f"model source_evidence must be an object: {path}")
+        if source_evidence.get("kind") != "huggingface_tree":
+            raise ConfigurationError(
+                f"unsupported model source_evidence kind: {path}"
+            )
+        evidence_path = Path(str(source_evidence.get("path", "")))
+        if (
+            evidence_path.is_absolute()
+            or not evidence_path.parts
+            or ".." in evidence_path.parts
+        ):
+            raise ConfigurationError(
+                f"model source_evidence path must be a safe relative path: {path}"
+            )
+        digest = source_evidence.get("sha256")
+        if not (
+            isinstance(digest, str)
+            and len(digest) == 64
+            and all(character in "0123456789abcdefABCDEF" for character in digest)
+        ):
+            raise ConfigurationError(
+                f"model source_evidence SHA-256 is invalid: {path}"
+            )
     auxiliary_artifacts = profile.get("auxiliary_artifacts", [])
     if not isinstance(auxiliary_artifacts, list):
         raise ConfigurationError(f"auxiliary_artifacts must be a list: {path}")
@@ -128,6 +154,87 @@ def _validate_model(profile: dict[str, Any], path: Path) -> None:
             raise ConfigurationError(
                 f"auxiliary artifact SHA-256 is invalid: {path}"
             )
+
+
+def _validate_component_pin(
+    component: dict[str, Any],
+    *,
+    profile_key: str,
+    path: Path,
+) -> dict[str, Any]:
+    component_name = component.get(profile_key)
+    digest = component.get("profile_sha256")
+    if not isinstance(component_name, str) or not component_name:
+        raise ConfigurationError(
+            f"deployment component requires {profile_key}: {path}"
+        )
+    if Path(component_name).name != component_name:
+        raise ConfigurationError(
+            f"deployment component profile must be a production name: {path}"
+        )
+    if not (
+        isinstance(digest, str)
+        and len(digest) == 64
+        and all(character in "0123456789abcdefABCDEF" for character in digest)
+    ):
+        raise ConfigurationError(
+            f"deployment component profile_sha256 is invalid: {path}"
+        )
+    component_path = _profile_path(component_name)
+    component_profile = load_json(component_path)
+    actual_digest = canonical_sha256(component_profile)
+    if actual_digest != digest:
+        raise ConfigurationError(
+            f"deployment component {component_name} hash mismatch: "
+            f"expected {digest}, got {actual_digest}"
+        )
+    return component_profile
+
+
+def _validate_components(profile: dict[str, Any], path: Path) -> None:
+    components = profile.get("components")
+    if components is None:
+        return
+    if not isinstance(components, dict) or set(components) != {
+        "primary",
+        "worker_pool",
+    }:
+        raise ConfigurationError(
+            f"deployment components must contain primary and worker_pool: {path}"
+        )
+    primary = components["primary"]
+    worker = components["worker_pool"]
+    if not isinstance(primary, dict) or not isinstance(worker, dict):
+        raise ConfigurationError(f"deployment components must be objects: {path}")
+    primary_profile = _validate_component_pin(
+        primary,
+        profile_key="compatible_profile",
+        path=path,
+    )
+    worker_profile = _validate_component_pin(
+        worker,
+        profile_key="profile",
+        path=path,
+    )
+    if profile["model"] != primary_profile.get("model") or profile[
+        "runtime"
+    ] != primary_profile.get("runtime"):
+        raise ConfigurationError(
+            f"multi deployment must embed the pinned primary model/runtime: {path}"
+        )
+    if worker_profile.get("runtime", {}).get("role") != "worker-pool":
+        raise ConfigurationError(
+            f"multi deployment worker component is not a worker pool: {path}"
+        )
+    aliases = set(profile["stack"]["litellm_aliases"])
+    expected_aliases = set(primary_profile.get("stack", {}).get("litellm_aliases", []))
+    expected_aliases.update(
+        worker_profile.get("stack", {}).get("litellm_aliases", [])
+    )
+    if aliases != expected_aliases:
+        raise ConfigurationError(
+            f"multi deployment must expose all component LiteLLM aliases: {path}"
+        )
 
 
 def load_profile(name_or_path: str) -> dict[str, Any]:
@@ -184,6 +291,7 @@ def load_profile(name_or_path: str) -> dict[str, Any]:
     validate_compatibility(model, runtime)
     for mode in runtime.get("experimental_modes", {}):
         activate_runtime_mode(model, runtime, mode)
+    _validate_components(profile, path)
     if runtime.get("llama_cpp", {}).get("speculative_type") == "draft-dflash":
         draft_model = runtime["llama_cpp"].get("draft_model")
         matches = [
@@ -328,6 +436,9 @@ def validate_runtime(profile: dict[str, Any]) -> None:
             f"runtime backend {backend} differs from recipe {recipe} "
             f"backend {recipe_metadata['backend']}"
         )
+    role = profile.get("role", "primary")
+    if role not in ("primary", "worker-pool"):
+        raise ConfigurationError(f"unsupported runtime role: {role}")
     required_patches = profile.get("required_patches", [])
     if not isinstance(required_patches, list) or any(
         not isinstance(value, str) for value in required_patches
@@ -355,6 +466,14 @@ def validate_runtime(profile: dict[str, Any]) -> None:
     if not isinstance(enable_expert_parallel, bool):
         raise ConfigurationError("parallel.enable_expert_parallel must be boolean")
     world_size = parallel["tensor"] * parallel["pipeline"] * parallel.get("data", 1)
+    if role == "worker-pool" and (
+        parallel["tensor"] != 1
+        or parallel["pipeline"] != 1
+        or parallel.get("data", 1) < 2
+    ):
+        raise ConfigurationError(
+            "worker-pool runtime requires TP1, PP1 and data parallel size >= 2"
+        )
     gpu_order = profile.get("gpu_order")
     if not isinstance(gpu_order, list) or len(gpu_order) < world_size:
         raise ConfigurationError(

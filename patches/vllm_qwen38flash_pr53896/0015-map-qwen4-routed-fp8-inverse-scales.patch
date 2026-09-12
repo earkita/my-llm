@@ -1,0 +1,35 @@
+diff --git a/tests/models/qwen4_exp/test_qsa_amd.py b/tests/models/qwen4_exp/test_qsa_amd.py
+--- a/tests/models/qwen4_exp/test_qsa_amd.py
++++ b/tests/models/qwen4_exp/test_qsa_amd.py
+@@ -108,7 +108,7 @@ def test_ple_fp8_embedding_dequantizes_with_checkpoint_scale() -> None:
+         ),
+         (
+             "layers.0.mlp.experts.7.up_proj.weight_scale_inv",
+-            "layers.0.mlp.experts.7.up_proj.weight_scale_inv",
++            "layers.0.mlp.experts.7.up_proj.weight_scale",
+         ),
+     ],
+ )
+diff --git a/vllm/models/qwen4_exp/amd/model.py b/vllm/models/qwen4_exp/amd/model.py
+--- a/vllm/models/qwen4_exp/amd/model.py
++++ b/vllm/models/qwen4_exp/amd/model.py
+@@ -131,14 +131,14 @@ def _remap_qsa_cache_scale_name(
+ 
+ 
+ def _remap_fp8_linear_scale_name(name: str) -> str:
+-    """Map serialized FP8 inverse-scale names to CT linear parameters.
++    """Map serialized FP8 inverse-scale names to CT parameters.
+ 
+-    Expert loaders consume their checkpoint-native ``weight_scale_inv``
+-    names directly. Compressed-tensors Linear methods instead register the
+-    same dequantization scale as ``weight_scale``.
++    Compressed-tensors Linear and MoE methods register the checkpoint's
++    dequantization scale as ``weight_scale`` even when a source checkpoint
++    serializes it under the ``weight_scale_inv`` name.
+     """
+ 
+     suffix = ".weight_scale_inv"
+-    if name.endswith(suffix) and ".experts." not in name:
++    if name.endswith(suffix):
+         return f"{name[: -len(suffix)]}.weight_scale"
+     return name

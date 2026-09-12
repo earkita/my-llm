@@ -126,6 +126,72 @@ def _verify_auxiliary_artifacts(model: dict) -> list[dict[str, object]]:
     return verified
 
 
+def _verify_huggingface_tree_evidence(
+    model: dict, destination: Path
+) -> dict[str, object]:
+    evidence = model.get("source_evidence")
+    if not isinstance(evidence, dict) or evidence.get("kind") != "huggingface_tree":
+        raise ConfigurationError(
+            f"model source manifest is absent: {destination / '.model-source.json'}"
+        )
+    relative = Path(str(evidence.get("path", "")))
+    if relative.is_absolute() or not relative.parts or ".." in relative.parts:
+        raise ConfigurationError("model source evidence path is unsafe")
+    evidence_path = destination / relative
+    if not evidence_path.is_file():
+        raise ConfigurationError(f"model source evidence is absent: {evidence_path}")
+    expected_digest = str(evidence.get("sha256", ""))
+    actual_digest = _sha256_file(evidence_path)
+    if actual_digest.lower() != expected_digest.lower():
+        raise ConfigurationError("model source evidence SHA-256 differs")
+    if evidence_path.name != f"{model['revision']}.json":
+        raise ConfigurationError("Hugging Face tree evidence has another revision")
+    try:
+        tree = json.loads(evidence_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ConfigurationError("Hugging Face tree evidence is invalid") from exc
+    files = tree.get("files") if isinstance(tree, dict) else None
+    if (
+        not isinstance(tree, dict)
+        or tree.get("format_version") != 1
+        or not isinstance(files, dict)
+    ):
+        raise ConfigurationError("Hugging Face tree evidence has an invalid schema")
+
+    from .model_worker import validate
+
+    try:
+        checkpoint = validate(model, destination)
+    except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
+        raise ConfigurationError(f"model checkpoint validation failed: {exc}") from exc
+    for name, size in checkpoint["shard_sizes"].items():
+        record = files.get(name)
+        if not isinstance(record, dict) or record.get("size") != size:
+            raise ConfigurationError(
+                f"checkpoint shard differs from Hugging Face tree evidence: {name}"
+            )
+    for name in model.get("required_files", []):
+        record = files.get(name)
+        path = destination / name
+        if not isinstance(record, dict) or record.get("size") != path.stat().st_size:
+            raise ConfigurationError(
+                f"required file differs from Hugging Face tree evidence: {name}"
+            )
+    return {
+        "schema_version": 1,
+        "repository": model["repository"],
+        "revision": model["revision"],
+        "resolved_revision": model["revision"],
+        "profile_sha256": model["_sha256"],
+        "checkpoint": checkpoint,
+        "source_evidence": {
+            "kind": "huggingface_tree",
+            "path": str(evidence_path),
+            "sha256": actual_digest,
+        },
+    }
+
+
 def download_model(
     model_name: str,
     *,
@@ -187,7 +253,9 @@ def verify_model(model_name: str, directory: str | None = None) -> dict:
     destination = resolve_model_directory(model, directory)
     manifest_path = destination / ".model-source.json"
     if not manifest_path.is_file():
-        raise ConfigurationError(f"model source manifest is absent: {manifest_path}")
+        payload = _verify_huggingface_tree_evidence(model, destination)
+        payload["auxiliary_artifacts"] = _verify_auxiliary_artifacts(model)
+        return payload
     try:
         payload = json.loads(manifest_path.read_text())
     except (OSError, json.JSONDecodeError) as exc:
