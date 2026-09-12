@@ -11,12 +11,14 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from r9700.live_throughput import (  # noqa: E402,F401
     CompletionAccumulator,
+    Endpoint,
     LiveDecodeRate,
     METRICS,
     OPTIONAL_METRICS,
     _cache_capacities,
     _cache_capacity,
     _completion,
+    _dashboard,
     _delta,
     _metrics,
     _metrics_by_engine,

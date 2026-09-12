@@ -173,6 +173,8 @@ prefill, decode, TTFT i E2E. Dla kompletnego układu Qwen 4+1+1+1+1:
 scripts/watch-qwen-live.sh
 ```
 
+Polecenie otwiera odświeżany dashboard terminalowy zamiast przewijanej listy.
+
 Szczegóły: [architektura](docs/architecture.md),
 [operacje](docs/operations.md), [dowody i ograniczenia](docs/verification.md),
 [Qwen w Claude Code](docs/qwen38-claude-code.md),

@@ -89,10 +89,11 @@ bez generowania dodatkowego ruchu:
 scripts/watch-qwen-live.sh
 ```
 
-Każdy worker ma osobny wiersz `WORKER/e0`--`WORKER/e3`. Wynik `COMPLETE`
-podaje dokładny server-side prefill/decode, TTFT, E2E, trafienia prefix cache
-i akceptację DFlash2; `LIVE` pokazuje kroczący decode, kolejkę, KV oraz
-telemetrię przypisanej R9700.
+Dashboard odświeża jedną tabelę zamiast przewijać terminal. Każdy worker ma
+osobny wiersz `W0`--`W3`, a `MAIN` reprezentuje główny TP4. Sekcja ostatnich
+requestów podaje dokładny server-side prefill/decode, TTFT, trafienia prefix
+cache i akceptację DFlash2; główna tabela pokazuje kroczący decode, kolejkę,
+KV oraz telemetrię przypisanej R9700.
 
 Można także przekazać pierwsze zadanie bez otwierania pustej sesji:
 

@@ -577,6 +577,211 @@ def _print(payload: dict[str, Any], *, json_lines: bool) -> None:
     )
 
 
+def _dashboard_identity(payload: dict[str, Any]) -> str:
+    if payload["source"] == "MAIN":
+        return "MAIN"
+    return f"W{payload['engine']}"
+
+
+def _dashboard_gpu(payload: dict[str, Any]) -> tuple[str, str, str, str, str]:
+    summary = payload.get("gpu")
+    if not isinstance(summary, dict):
+        return "-", "-", "-", "-", "-"
+    gpu_ids = ",".join(str(value) for value in summary["gpu_ids"])
+    gfx = "-"
+    if summary["gfx_percent_mean"] is not None:
+        gfx = f"{summary['gfx_percent_mean']:.0f}%"
+        if len(summary["gpu_ids"]) > 1:
+            gfx += (
+                f"[{summary['gfx_percent_min']:.0f}-"
+                f"{summary['gfx_percent_max']:.0f}]"
+            )
+    clock = (
+        f"{summary['clock_mhz_mean']:.0f}"
+        if summary["clock_mhz_mean"] is not None
+        else "-"
+    )
+    power = (
+        f"{summary['power_watts_total']:.0f}"
+        if summary["power_watts_total"] is not None
+        else "-"
+    )
+    umc = (
+        f"{summary['umc_percent_mean']:.0f}%"
+        if summary["umc_percent_mean"] is not None
+        else "-"
+    )
+    return gpu_ids, gfx, umc, clock, power
+
+
+def _dashboard_ratio(value: Any, numerator: str, denominator: str) -> str:
+    if not isinstance(value, dict) or not value.get(denominator):
+        return "-"
+    return (
+        f"{value[numerator]}/{value[denominator]} "
+        f"{value[numerator] / value[denominator] * 100:.0f}%"
+    )
+
+
+def _color(text: str, code: str, *, enabled: bool) -> str:
+    return f"\033[{code}m{text}\033[0m" if enabled else text
+
+
+def _dashboard(
+    payloads: list[dict[str, Any]],
+    endpoints: list[Endpoint],
+    completions: deque[dict[str, Any]],
+    *,
+    interval: float,
+    width: int,
+    color: bool,
+) -> str:
+    now = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+    title = _color("QWEN MULTI — LIVE", "1;36", enabled=color)
+    lines = [f"{title}    {now}    refresh {interval:g}s", ""]
+    endpoint_text = []
+    for endpoint in endpoints:
+        capacities = list(endpoint.capacities.values())
+        topology = "TP4" if endpoint.label == "MAIN" else f"DP{len(capacities)}"
+        capacity = f"{capacities[0]:,}" if capacities else "?"
+        suffix = "/engine" if len(capacities) > 1 else ""
+        endpoint_text.append(
+            f"{endpoint.label} {topology} {endpoint.url}  KV {capacity}{suffix}"
+        )
+    if width >= 120:
+        lines.extend(["  •  ".join(endpoint_text), ""])
+    else:
+        lines.extend([*endpoint_text, ""])
+
+    wide = width >= 140
+    if wide:
+        header = (
+            f"{'MODEL':<6} {'GPU':<9} {'PHASE':<7} {'R/Q':>5} {'KV':>7} "
+            f"{'KV TOK/S~':>10} {'DEC~':>8} {'CACHE':<15} {'SPEC':<14} "
+            f"{'GFX':>12} {'UMC':>6} {'CLK':>6} {'PWR':>6}"
+        )
+    else:
+        header = (
+            f"{'MODEL':<6} {'PHASE':<7} {'R/Q':>5} {'KV':>7} "
+            f"{'KV TOK/S~':>10} {'DEC~':>8} {'GFX':>10}"
+        )
+    lines.append(_color(header, "1", enabled=color))
+    lines.append("─" * min(len(header), width))
+
+    phase_colors = {
+        "decode": "1;32",
+        "prefill": "1;33",
+        "queued": "1;31",
+        "idle": "2",
+    }
+    ordered = sorted(
+        payloads,
+        key=lambda payload: (
+            payload["source"] != "MAIN",
+            int(payload["engine"]),
+        ),
+    )
+    for payload in ordered:
+        identity = _dashboard_identity(payload)
+        phase_value = str(payload["phase"]).upper()
+        phase = _color(
+            f"{phase_value:<7}",
+            phase_colors.get(str(payload["phase"]), "0"),
+            enabled=color,
+        )
+        requests = f"{payload['running_requests']}/{payload['waiting_requests']}"
+        cache = _dashboard_ratio(
+            payload.get("request_cache"), "cached_tokens", "cache_query_tokens"
+        )
+        spec = _dashboard_ratio(
+            payload.get("request_speculative"),
+            "spec_accepted_tokens",
+            "spec_draft_tokens",
+        )
+        gpu_ids, gfx, umc, clock, power = _dashboard_gpu(payload)
+        if wide:
+            line = (
+                f"{identity:<6} {gpu_ids:<9.9} {phase} {requests:>5} "
+                f"{payload['kv_cache_percent']:6.2f}% "
+                f"{payload['kv_growth_tokens_per_second']:10.1f} "
+                f"{payload['live_decode_tokens_per_second']:8.1f} "
+                f"{cache:<15.15} {spec:<14.14} {gfx:>12.12} "
+                f"{umc:>6.6} {clock:>6.6} {power:>6.6}"
+            )
+        else:
+            line = (
+                f"{identity:<6} {phase} {requests:>5} "
+                f"{payload['kv_cache_percent']:6.2f}% "
+                f"{payload['kv_growth_tokens_per_second']:10.1f} "
+                f"{payload['live_decode_tokens_per_second']:8.1f} {gfx:>10.10}"
+            )
+        lines.append(line)
+
+    aggregate_decode = sum(
+        payload["live_decode_tokens_per_second"] for payload in payloads
+    )
+    aggregate_kv_growth = sum(
+        payload["kv_growth_tokens_per_second"] for payload in payloads
+    )
+    total_running = sum(payload["running_requests"] for payload in payloads)
+    total_waiting = sum(payload["waiting_requests"] for payload in payloads)
+    lines.extend(
+        [
+            "",
+            _color(
+                f"TOTAL  run={total_running} wait={total_waiting}  "
+                f"KV-growth~={aggregate_kv_growth:.1f} tok/s  "
+                f"decode~={aggregate_decode:.1f} tok/s",
+                "1;36",
+                enabled=color,
+            ),
+            "",
+            _color("OSTATNIE ZAKOŃCZONE REQUESTY", "1", enabled=color),
+        ]
+    )
+    if not completions:
+        lines.append("  Brak — uruchom monitor przed zadaniem, aby zebrać pełne dane.")
+    for payload in completions:
+        stamp = str(payload["timestamp"])[11:19]
+        identity = _dashboard_identity(payload)
+        completion = payload.get("completion")
+        if not isinstance(completion, dict):
+            line = f"  {stamp} {identity:<4} wynik niepełny — monitor dołączony w trakcie"
+        else:
+            cache = (
+                f"{completion['cached_tokens']}/{completion['cache_query_tokens']} "
+                f"{completion['cache_hit_percent']:.0f}%"
+            )
+            spec = ""
+            if completion["spec_draft_tokens"]:
+                spec = (
+                    f"  spec {completion['spec_accepted_tokens']}/"
+                    f"{completion['spec_draft_tokens']} "
+                    f"{completion['spec_acceptance_percent']:.0f}%"
+                )
+            line = (
+                f"  {stamp} {identity:<4} prompt {completion['prompt_tokens']}  "
+                f"output {completion['output_tokens']}  "
+                f"prefill {completion['prefill_tokens_per_second']:.1f}  "
+                f"uncached {completion['uncached_prefill_tokens_per_second']:.1f}  "
+                f"decode {completion['decode_tokens_per_second']:.1f} tok/s  "
+                f"TTFT {completion['mean_ttft_seconds']:.2f}s  "
+                f"E2E {completion['mean_e2e_seconds']:.2f}s  cache {cache}{spec}"
+            )
+        lines.append(line[:width])
+    lines.extend(
+        [
+            "",
+            _color(
+                "R/Q = running/queued   ~ = estymata   COMPLETE = dokładne vLLM   Ctrl-C = wyjście",
+                "2",
+                enabled=color,
+            ),
+        ]
+    )
+    return "\n".join(lines)
+
+
 def follow(
     endpoints: list[Endpoint],
     *,
@@ -586,6 +791,7 @@ def follow(
     json_lines: bool,
     with_gpu: bool,
     samples: int,
+    dashboard: bool = False,
 ) -> None:
     started_at = time.perf_counter()
     initial = {
@@ -603,35 +809,64 @@ def follow(
     )
     deadline = started_at
     iteration = 0
-    while samples == 0 or iteration < samples:
-        gpu_metrics = _gpu_snapshot(all_gpu_ids) if with_gpu else {}
-        for endpoint in endpoints:
-            current = _metrics_by_engine(endpoint.url)
-            for engine in sorted(current, key=lambda value: int(value)):
-                key = (endpoint.label, engine)
-                if key not in monitors:
-                    monitors[key] = EngineMonitor(
-                        endpoint,
-                        engine,
-                        current[engine],
-                        time.perf_counter(),
-                        window=window,
+    completions: deque[dict[str, Any]] = deque(maxlen=5)
+    if dashboard:
+        sys.stdout.write("\033[?25l\033[2J")
+        sys.stdout.flush()
+    try:
+        while samples == 0 or iteration < samples:
+            payloads = []
+            gpu_metrics = _gpu_snapshot(all_gpu_ids) if with_gpu else {}
+            for endpoint in endpoints:
+                current = _metrics_by_engine(endpoint.url)
+                for engine in sorted(current, key=lambda value: int(value)):
+                    key = (endpoint.label, engine)
+                    if key not in monitors:
+                        monitors[key] = EngineMonitor(
+                            endpoint,
+                            engine,
+                            current[engine],
+                            time.perf_counter(),
+                            window=window,
+                        )
+                    payload = monitors[key].observe(
+                        current[engine], time.perf_counter()
                     )
-                payload = monitors[key].observe(current[engine], time.perf_counter())
-                payload["gpu"] = _gpu_summary(
-                    endpoint.gpu_ids_for_engine(engine), gpu_metrics
+                    payload["gpu"] = _gpu_summary(
+                        endpoint.gpu_ids_for_engine(engine), gpu_metrics
+                    )
+                    payloads.append(payload)
+                    if payload["completion"] is not None or payload[
+                        "completion_unavailable"
+                    ]:
+                        completions.appendleft(payload)
+                    if not dashboard and (
+                        include_idle
+                        or payload["active"]
+                        or payload["completion"] is not None
+                        or payload["completion_unavailable"]
+                    ):
+                        _print(payload, json_lines=json_lines)
+            if dashboard:
+                width = max(shutil.get_terminal_size((140, 24)).columns, 60)
+                view = _dashboard(
+                    payloads,
+                    endpoints,
+                    completions,
+                    interval=interval,
+                    width=width,
+                    color=True,
                 )
-                if (
-                    include_idle
-                    or payload["active"]
-                    or payload["completion"] is not None
-                    or payload["completion_unavailable"]
-                ):
-                    _print(payload, json_lines=json_lines)
-        iteration += 1
-        deadline += interval
-        if samples == 0 or iteration < samples:
-            time.sleep(max(deadline - time.perf_counter(), 0.0))
+                sys.stdout.write("\033[H" + view + "\033[J")
+                sys.stdout.flush()
+            iteration += 1
+            deadline += interval
+            if samples == 0 or iteration < samples:
+                time.sleep(max(deadline - time.perf_counter(), 0.0))
+    finally:
+        if dashboard:
+            sys.stdout.write("\033[?25h\n")
+            sys.stdout.flush()
 
 
 def _endpoints(target: str, *, with_gpu: bool) -> list[Endpoint]:
@@ -673,6 +908,11 @@ def main() -> int:
     parser.add_argument(
         "--json-lines", action="store_true", help="emit machine-readable JSONL"
     )
+    parser.add_argument(
+        "--dashboard",
+        action="store_true",
+        help="redraw one terminal dashboard instead of appending lines",
+    )
     parser.add_argument("--interval", type=float, default=1.0)
     parser.add_argument("--window", type=float, default=10.0)
     parser.add_argument(
@@ -686,23 +926,33 @@ def main() -> int:
         parser.error("--interval and --window must be positive")
     if args.samples < 0:
         parser.error("--samples cannot be negative")
+    if args.dashboard and args.json_lines:
+        parser.error("--dashboard and --json-lines are mutually exclusive")
+
+    dashboard = args.dashboard and sys.stdout.isatty()
+    if args.dashboard and not dashboard:
+        print(
+            "dashboard requested without a TTY; falling back to stream output",
+            file=sys.stderr,
+        )
 
     try:
         endpoints = _endpoints(args.target, with_gpu=args.gpu)
-        for endpoint in endpoints:
-            capacities = ",".join(
-                f"e{engine}:{capacity}"
-                for engine, capacity in sorted(
-                    endpoint.capacities.items(), key=lambda item: int(item[0])
+        if not dashboard:
+            for endpoint in endpoints:
+                capacities = ",".join(
+                    f"e{engine}:{capacity}"
+                    for engine, capacity in sorted(
+                        endpoint.capacities.items(), key=lambda item: int(item[0])
+                    )
                 )
-            )
-            print(
-                f"following={endpoint.label} url={endpoint.url} "
-                f"profile={endpoint.profile} runtime={endpoint.runtime} "
-                f"kv_capacity_tokens={capacities}",
-                file=sys.stderr if args.json_lines else sys.stdout,
-                flush=True,
-            )
+                print(
+                    f"following={endpoint.label} url={endpoint.url} "
+                    f"profile={endpoint.profile} runtime={endpoint.runtime} "
+                    f"kv_capacity_tokens={capacities}",
+                    file=sys.stderr if args.json_lines else sys.stdout,
+                    flush=True,
+                )
         follow(
             endpoints,
             interval=args.interval,
@@ -711,6 +961,7 @@ def main() -> int:
             json_lines=args.json_lines,
             with_gpu=args.gpu,
             samples=args.samples,
+            dashboard=dashboard,
         )
     except KeyboardInterrupt:
         print("monitor stopped", flush=True)

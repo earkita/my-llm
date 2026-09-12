@@ -1,4 +1,5 @@
 import importlib.util
+from collections import deque
 from pathlib import Path
 import tempfile
 import unittest
@@ -216,6 +217,64 @@ class MultiEngineMetricTests(unittest.TestCase):
                 MONITOR._cache_capacities(path),
                 {"0": 249999, "1": 250106},
             )
+
+
+class DashboardTests(unittest.TestCase):
+    def test_dashboard_renders_one_model_row_without_ansi_when_disabled(self) -> None:
+        endpoint = MONITOR.Endpoint(
+            label="MAIN",
+            url="http://127.0.0.1:8000",
+            profile="qwen",
+            runtime="qwen-runtime",
+            log_path=Path("runtime.log"),
+            capacities={"0": 616228},
+            gpu_ids=(6, 4, 5, 0),
+        )
+        payload = {
+            "timestamp": "2026-09-12T18:00:00+02:00",
+            "source": "MAIN",
+            "engine": "0",
+            "phase": "decode",
+            "running_requests": 1,
+            "waiting_requests": 0,
+            "kv_cache_percent": 12.5,
+            "kv_growth_tokens_per_second": 900.0,
+            "live_decode_tokens_per_second": 31.5,
+            "request_cache": {
+                "cached_tokens": 800,
+                "cache_query_tokens": 1000,
+            },
+            "request_speculative": {
+                "spec_accepted_tokens": 7,
+                "spec_draft_tokens": 10,
+            },
+            "gpu": {
+                "gpu_ids": [6, 4, 5, 0],
+                "gfx_percent_mean": 99.0,
+                "gfx_percent_min": 98.0,
+                "gfx_percent_max": 100.0,
+                "umc_percent_mean": 40.0,
+                "clock_mhz_mean": 2300.0,
+                "power_watts_total": 700.0,
+            },
+        }
+
+        view = MONITOR._dashboard(
+            [payload],
+            [endpoint],
+            deque(),
+            interval=1.0,
+            width=160,
+            color=False,
+        )
+
+        self.assertIn("QWEN MULTI — LIVE", view)
+        self.assertIn("MAIN", view)
+        self.assertIn("DECODE", view)
+        self.assertIn("31.5", view)
+        self.assertIn("800/1000 80%", view)
+        self.assertIn("7/10 70%", view)
+        self.assertNotIn("\033[", view)
 
 if __name__ == "__main__":
     unittest.main()

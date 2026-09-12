@@ -13,5 +13,5 @@ python="$repo_root/.venv/bin/python"
 exec "$python" "$script_dir/watch-claude-throughput.py" \
   --target all \
   --gpu \
-  --include-idle \
+  --dashboard \
   "$@"
