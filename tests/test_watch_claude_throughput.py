@@ -1,5 +1,6 @@
 import importlib.util
 from pathlib import Path
+import tempfile
 import unittest
 
 
@@ -48,6 +49,8 @@ class CompletionAccumulatorTests(unittest.TestCase):
                 decode_seconds=1,
                 ttft_seconds=2,
                 e2e_seconds=3,
+                spec_draft_tokens=28,
+                spec_accepted_tokens=21,
             )
         )
 
@@ -61,9 +64,13 @@ class CompletionAccumulatorTests(unittest.TestCase):
         self.assertEqual(completion["cache_query_tokens"], 100)
         self.assertEqual(completion["cache_hit_percent"], 80)
         self.assertEqual(completion["prefill_tokens_per_second"], 50)
+        self.assertEqual(completion["uncached_prefill_tokens_per_second"], 10)
         self.assertEqual(completion["decode_tokens_per_second"], 20)
         self.assertEqual(completion["mean_ttft_seconds"], 2)
         self.assertEqual(completion["mean_e2e_seconds"], 3)
+        self.assertEqual(completion["spec_draft_tokens"], 28)
+        self.assertEqual(completion["spec_accepted_tokens"], 21)
+        self.assertEqual(completion["spec_acceptance_percent"], 75)
 
     def test_marks_completion_partial_when_attached_mid_request(self) -> None:
         accumulator = MONITOR.CompletionAccumulator(
@@ -177,6 +184,38 @@ class LiveDecodeRateTests(unittest.TestCase):
         self.assertEqual(tracker.observe(3.0, 125, active=True), 0)
         self.assertEqual(tracker.observe(4.0, 135, active=True), 10)
 
+
+class MultiEngineMetricTests(unittest.TestCase):
+    def test_parser_keeps_worker_engine_counters_separate(self) -> None:
+        lines = []
+        all_metrics = {**MONITOR.METRICS, **MONITOR.OPTIONAL_METRICS}
+        for engine, multiplier in (("0", 1), ("1", 2)):
+            for index, name in enumerate(all_metrics.values(), start=1):
+                lines.append(
+                    f'{name}{{engine="{engine}",model_name="qwen"}} '
+                    f"{index * multiplier}"
+                )
+
+        parsed = MONITOR._parse_metrics("\n".join(lines))
+
+        self.assertEqual(set(parsed), {"0", "1"})
+        self.assertEqual(parsed["0"]["prompt_tokens"], 4)
+        self.assertEqual(parsed["1"]["prompt_tokens"], 8)
+        self.assertEqual(parsed["0"]["spec_draft_tokens"], 13)
+        self.assertEqual(parsed["1"]["spec_accepted_tokens"], 28)
+
+    def test_cache_capacity_parser_maps_each_data_parallel_engine(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "runtime.log"
+            path.write_text(
+                "(EngineCore_DP1 pid=2) GPU KV cache size: 250,106 tokens\n"
+                "(EngineCore_DP0 pid=1) GPU KV cache size: 249,999 tokens\n"
+            )
+
+            self.assertEqual(
+                MONITOR._cache_capacities(path),
+                {"0": 249999, "1": 250106},
+            )
 
 if __name__ == "__main__":
     unittest.main()

@@ -82,6 +82,18 @@ innego projektu. Dedykowane uruchomienie pięcioagentowe:
 scripts/claude-qwen-team.sh
 ```
 
+Pasywny podgląd szybkości głównego modelu i wszystkich czterech workerów,
+bez generowania dodatkowego ruchu:
+
+```bash
+scripts/watch-qwen-live.sh
+```
+
+Każdy worker ma osobny wiersz `WORKER/e0`--`WORKER/e3`. Wynik `COMPLETE`
+podaje dokładny server-side prefill/decode, TTFT, E2E, trafienia prefix cache
+i akceptację DFlash2; `LIVE` pokazuje kroczący decode, kolejkę, KV oraz
+telemetrię przypisanej R9700.
+
 Można także przekazać pierwsze zadanie bez otwierania pustej sesji:
 
 ```bash

@@ -167,10 +167,10 @@ robocze pozostają w `profiles/dev/`.
 
 Podczas pracy Claude Code można bez restartu obserwować kolejkę, zajęcie KV i
 estymowany postęp prefillu, a po zakończeniu żądania dokładny server-side
-prefill, decode, TTFT i E2E:
+prefill, decode, TTFT i E2E. Dla kompletnego układu Qwen 4+1+1+1+1:
 
 ```bash
-.venv/bin/python scripts/watch-claude-throughput.py
+scripts/watch-qwen-live.sh
 ```
 
 Szczegóły: [architektura](docs/architecture.md),

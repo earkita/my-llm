@@ -102,25 +102,36 @@ zweryfikowanym checkpointem:
 ./run launcher start glm53-flash-uncensored
 ```
 
-Live throughput podczas pracy Claude Code można odczytywać bezpośrednio z
-metryk silnika vLLM:
+Live throughput podczas pracy Claude Code można odczytywać pasywnie,
+bez wysyłania dodatkowego promptu. Dla całego `qwen-multi`, łącznie z
+przypisaniem statystyk `amd-smi` do głównego TP4 i każdej repliki workera:
 
 ```bash
-.venv/bin/python scripts/watch-claude-throughput.py
+scripts/watch-qwen-live.sh
 ```
 
-Wiersz `LIVE` jest próbkowany co sekundę. Pokazuje liczbę aktywnych i
-oczekujących żądań, zajęcie KV oraz wygładzoną estymatę wzrostu KV w oknie
-10 sekund; ze względu na chunked prefill wartość chwilowa jest skokowa. Po
-zakończeniu wiersz `COMPLETE` wylicza z delt liczników dokładne server-side
-liczby tokenów, trafienia APC (`cached=HITS/QUERIES`), prefill tok/s, decode
-tok/s, TTFT i E2E. Bieżący wiersz `LIVE` pokazuje tę samą deltę APC od początku
-obserwowanego requestu oraz `decode~`, czyli kroczącą szybkość generowania
-wyliczoną z przyrostu rzeczywistych tokenów wyjściowych w ostatnich `--window`
-sekundach. Wartość zerowa przed pierwszym tokenem oznacza fazę prefill, a po
-zakończeniu miarodajnym wynikiem pozostaje dokładne `decode=` z `COMPLETE`.
-Gdy żądania się nakładają, wynik `COMPLETE` jest agregatem tych żądań. Pomiar
-obejmuje również ruch przechodzący przez LiteLLM.
+`MAIN/e0` oznacza główny model TP4, a `WORKER/e0`--`WORKER/e3` cztery osobne
+repliki TP1. Wiersz `LIVE` pokazuje fazę, kolejkę, KV, kroczącą szybkość decode,
+APC, speculative acceptance oraz GFX/UMC/zegar/moc. `kv-growth~` jest tylko
+wygładzoną estymatą przyrostu tokenów KV; przy cache hitach, zwalnianiu bloków
+i przejściu do decode może być skokowe lub zerowe. Miarodajny wynik pojawia się
+w `COMPLETE`: `prefill=` liczy wszystkie tokeny promptu, `uncached=` odejmuje
+trafienia APC, a `decode=`, TTFT i E2E pochodzą z delt liczników vLLM dla
+konkretnego silnika.
+
+Widok pojedynczego komponentu, zapis JSONL i ograniczona liczba próbek:
+
+```bash
+.venv/bin/python scripts/watch-claude-throughput.py --target main --gpu
+.venv/bin/python scripts/watch-claude-throughput.py --target workers --gpu
+.venv/bin/python scripts/watch-claude-throughput.py \
+  --target all --json-lines --samples 60 > logs/qwen-live.jsonl
+```
+
+Domyślne okno `decode~` i `kv-growth~` ma 10 sekund i można je zmienić przez
+`--window`. Monitor obejmuje także ruch przechodzący przez LiteLLM. Jeżeli
+zostanie dołączony w połowie requestu, oznaczy pierwszy wynik jako niepełny;
+następne requesty będą liczone od początku.
 
 Na aktualnej maszynie monitor działa także jako odczytowa usługa użytkownika:
 
