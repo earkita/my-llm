@@ -10,6 +10,7 @@ from . import (
     api,
     benchmark as benchmark_module,
     claude_qualification,
+    claude_team_qualification,
     doctor as doctor_module,
     launcher,
     proxy,
@@ -230,6 +231,15 @@ def _tests(args: argparse.Namespace) -> None:
             timeout=args.timeout,
         )
 
+    def claude_team() -> None:
+        if args.output is None:
+            raise ConfigurationError("claude-team test requires --output")
+        claude_team_qualification.qualify(
+            profile_name=profile,
+            output=args.output,
+            timeout=args.timeout,
+        )
+
     actions = {
         "unit": unit,
         "host": host,
@@ -238,6 +248,7 @@ def _tests(args: argparse.Namespace) -> None:
         "gpu": gpu,
         "api": api_test,
         "claude-code": claude_code,
+        "claude-team": claude_team,
         "lifecycle": lifecycle,
     }
     if args.tier == "all":
@@ -440,7 +451,7 @@ def parser() -> argparse.ArgumentParser:
 
     test_parser = commands.add_parser("test", help="run a named verification tier")
     test_parser.add_argument(
-        "tier", choices=("unit", "host", "runtime", "patch", "gpu", "api", "claude-code", "lifecycle", "all")
+        "tier", choices=("unit", "host", "runtime", "patch", "gpu", "api", "claude-code", "claude-team", "lifecycle", "all")
     )
     _common_profile(test_parser)
     test_parser.add_argument("--url", default="http://127.0.0.1:8000")

@@ -16,6 +16,7 @@ stop_proxy="$repo_root/skills/stop-litellm-proxy/scripts/stop-proxy.sh"
 run="$repo_root/run"
 profiles_dir="$repo_root/profiles/production"
 claude_settings="$repo_root/.claude/settings.local.json"
+claude_agents="$repo_root/.claude/agents.local.json"
 runtime_state="$repo_root/.runtime/service.json"
 
 preset=glm53-flash
@@ -126,6 +127,7 @@ if ((dry_run)); then
   if [[ $action == start ]]; then
     printf '# preset %s\n' "$preset"
     printf 'materialize embedded Claude settings -> %q\n' "$claude_settings"
+    printf 'materialize embedded Claude agents -> %q\n' "$claude_agents"
     "${runtime_start_command[@]}" --dry-run
     "${proxy_start_command[@]}" --dry-run
   else
@@ -159,21 +161,32 @@ fi
 }
 
 activate_claude_settings() {
-  "$python" - "$profile_path" "$claude_settings" <<'PY'
+  "$python" - "$profile_path" "$claude_settings" "$claude_agents" <<'PY'
 import json
 import os
 import pathlib
 import sys
 
 source = pathlib.Path(sys.argv[1])
-target = pathlib.Path(sys.argv[2])
+settings_target = pathlib.Path(sys.argv[2])
+agents_target = pathlib.Path(sys.argv[3])
 profile = json.loads(source.read_text(encoding="utf-8"))
 content = json.dumps(profile["stack"]["claude_settings"], indent=2) + "\n"
-target.parent.mkdir(parents=True, exist_ok=True)
-temporary = target.with_suffix(target.suffix + ".tmp")
+settings_target.parent.mkdir(parents=True, exist_ok=True)
+temporary = settings_target.with_suffix(settings_target.suffix + ".tmp")
 temporary.write_text(content, encoding="utf-8")
-os.replace(temporary, target)
-print(f"Claude Code settings activated: {target}")
+os.replace(temporary, settings_target)
+print(f"Claude Code settings activated: {settings_target}")
+
+agents = profile["stack"].get("claude_agents")
+if agents:
+    content = json.dumps(agents, indent=2) + "\n"
+    temporary = agents_target.with_suffix(agents_target.suffix + ".tmp")
+    temporary.write_text(content, encoding="utf-8")
+    os.replace(temporary, agents_target)
+    print(f"Claude Code agents activated: {agents_target}")
+else:
+    agents_target.unlink(missing_ok=True)
 PY
 }
 

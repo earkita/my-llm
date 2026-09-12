@@ -139,13 +139,14 @@
       "source_runtime": "manifest/vllm_qwen38flash_pr53896.json",
       "source_runtime_sha256": "54e4576ecf3ef5591acf8b9f69c410154bfc4bbe72cbd2b398b58fb6dc226f4c",
       "target_profile": "profiles/production/qwen-multi.json",
-      "target_profile_sha256": "5bed7ee54c1af76d79c877171b004aca90178277b506bc4d5cf64ccc37bd80ca",
+      "target_profile_sha256": "cdaddbbae170d225c218fb65fc75f69bfe1f08f740751359f536aa6099e0957a",
       "intentional_changes": [
         "composed the pinned Qwen Flash UNCENSORED TP4/EP4 primary and Qwen3.8-27B DP4/TP1 worker pool without profile inheritance",
         "pinned the worker component to the W4A16 DFlash2 K4 profile with FP8 E4M3 target and draft KV while preserving earlier BF16 and MTP results as historical evidence",
         "reused the already-running compatible primary and proxy while gracefully restarting only the worker pool for its qualified FP8-KV DFlash2 image",
         "exposed all four thinking and fast LiteLLM aliases under one managed stack",
-        "added explicit all-component status and graceful stop orchestration for the 4+1+1+1+1 topology"
+        "added explicit all-component status and graceful stop orchestration for the 4+1+1+1+1 topology",
+        "embedded and qualified an active main Qwen lead plus four background Claude Code worker roles with explicit routing, bounded responsibilities, and reproducible launch validation"
       ]
     }
   },

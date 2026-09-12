@@ -149,6 +149,24 @@ class ProductionProfileTests(unittest.TestCase):
         finally:
             path.unlink(missing_ok=True)
 
+    def test_profile_loader_rejects_claude_agent_on_undeclared_alias(self) -> None:
+        path = ROOT / "tests" / "invalid-claude-agent-profile.json"
+        source = json.loads(
+            (ROOT / "profiles" / "production" / "qwen-multi.json").read_text()
+        )
+        source["name"] = path.stem
+        source["stack"]["claude_agents"]["qwen-worker-explorer"][
+            "model"
+        ] = "undeclared-model"
+        path.write_text(json.dumps(source))
+        try:
+            with self.assertRaisesRegex(
+                ConfigurationError, "undeclared LiteLLM alias"
+            ):
+                load_profile(str(path))
+        finally:
+            path.unlink(missing_ok=True)
+
     def test_only_required_recipes_and_assets_are_present(self) -> None:
         expected = {
             "vllm_deepseekv4flash_v0.28",
@@ -381,6 +399,25 @@ class ProductionProfileTests(unittest.TestCase):
                     self.assertEqual(model_names, {"glm-5.3-flash-high"})
                 elif len(aliases) == 1:
                     self.assertEqual(model_names, {aliases[0]})
+
+    def test_claude_agent_templates_match_embedded_profiles(self) -> None:
+        templates_root = ROOT / "templates" / ".claude"
+        expected = {
+            profile["name"]: profile["stack"]["claude_agents"]
+            for name in PROFILE_NAMES
+            if "claude_agents" in (profile := load_profile(name))["stack"]
+        }
+        actual_paths = {
+            path.name.removesuffix(".agents.json"): path
+            for path in templates_root.glob("*/*.agents.json")
+        }
+
+        self.assertEqual(set(actual_paths), set(expected))
+        for profile_name, agents in expected.items():
+            with self.subTest(profile=profile_name):
+                self.assertEqual(
+                    json.loads(actual_paths[profile_name].read_text()), agents
+                )
 
     def test_qwen_claude_stack_splits_thinking_and_fast_roles(self) -> None:
         for name in ("qwen38-flash", "qwen38-flash-uncensored"):
@@ -676,6 +713,48 @@ class ProductionProfileTests(unittest.TestCase):
                 compatible_profiles={"qwen38-flash-uncensored"},
             )
         )
+
+    def test_qwen_multi_defines_one_active_lead_and_four_workers(self) -> None:
+        stack = load_profile("qwen-multi")["stack"]
+        settings = stack["claude_settings"]
+        agents = stack["claude_agents"]
+
+        self.assertEqual(settings["teammateMode"], "in-process")
+        self.assertEqual(
+            settings["env"]["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"], "1"
+        )
+        self.assertEqual(
+            settings["env"]["ANTHROPIC_MODEL"],
+            "qwen3.8-flash-next-thinking",
+        )
+        self.assertEqual(
+            set(agents),
+            {
+                "qwen-team-lead",
+                "qwen-worker-explorer",
+                "qwen-worker-implementer-a",
+                "qwen-worker-implementer-b",
+                "qwen-worker-verifier",
+            },
+        )
+        self.assertEqual(
+            agents["qwen-team-lead"]["model"],
+            "qwen3.8-flash-next-thinking",
+        )
+        for name in (
+            "qwen-worker-implementer-a",
+            "qwen-worker-implementer-b",
+            "qwen-worker-verifier",
+        ):
+            self.assertEqual(
+                agents[name]["model"], "qwen3.8-27b-workers-thinking"
+            )
+        self.assertEqual(
+            agents["qwen-worker-explorer"]["model"],
+            "qwen3.8-27b-workers-fast",
+        )
+        self.assertNotIn("Edit", agents["qwen-worker-explorer"]["tools"])
+        self.assertNotIn("Edit", agents["qwen-worker-verifier"]["tools"])
 
     def test_qwen_multi_stop_plan_includes_all_three_services(self) -> None:
         with patch("r9700.launcher._run") as run:

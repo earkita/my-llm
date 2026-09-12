@@ -128,6 +128,26 @@ Po starcie wybranego profilu Qwen interaktywny Claude Code uruchamia się przez
   --output logs/validation/claude-code-qwen38-flash-uncensored-thinking.json
 ```
 
+Wspólny profil `qwen-multi` ma również workflow pięcioagentowy. Główny
+Flash-Next pozostaje aktywnym architektem, implementuje rdzeń i integruje
+wynik, a cztery nazwane role kierują równoległe zadania do puli Qwen 27B DP4:
+
+```bash
+./run launcher start qwen-multi
+scripts/claude-qwen-team.sh
+```
+
+Definicje są osadzone w profilu produkcyjnym i przechowywane odtwarzalnie w
+`templates/.claude/qwen-multi/qwen-multi.agents.json`. Explorer i verifier są
+pozbawieni edycji; dwa implementery muszą otrzymać rozłączne zakresy plików.
+Powtarzalny gate routingu głównego modelu i czterech równoległych ról:
+
+```bash
+./run test claude-team \
+  --profile qwen-multi \
+  --output logs/validation/qwen-multi-claude-team.json
+```
+
 Start odbywa się wyłącznie przez użytkownikową jednostkę
 `r9700-runtime.service`. Skrypty nie wykonują rebootu, resetu GPU ani SIGKILL.
 

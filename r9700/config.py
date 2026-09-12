@@ -50,6 +50,55 @@ def _contains_extends(value: Any) -> bool:
     return False
 
 
+def _validate_claude_agents(stack: dict[str, Any], path: Path) -> None:
+    agents = stack.get("claude_agents")
+    if agents is None:
+        return
+    if not isinstance(agents, dict) or not agents:
+        raise ConfigurationError(
+            f"deployment stack claude_agents must be a non-empty object: {path}"
+        )
+
+    aliases = set(stack["litellm_aliases"])
+    for name, agent in agents.items():
+        if not (
+            isinstance(name, str)
+            and name
+            and name.isascii()
+            and name == name.lower()
+            and name[0].isalnum()
+            and name[-1].isalnum()
+            and all(character.isalnum() or character == "-" for character in name)
+        ):
+            raise ConfigurationError(
+                f"Claude agent names must use lowercase letters, digits, and hyphens: {path}"
+            )
+        if not isinstance(agent, dict):
+            raise ConfigurationError(
+                f"Claude agent {name!r} must be an object: {path}"
+            )
+        for field in ("description", "model", "prompt"):
+            value = agent.get(field)
+            if not isinstance(value, str) or not value.strip():
+                raise ConfigurationError(
+                    f"Claude agent {name!r} requires non-empty {field}: {path}"
+                )
+        if agent["model"] not in aliases:
+            raise ConfigurationError(
+                f"Claude agent {name!r} uses an undeclared LiteLLM alias: {path}"
+            )
+        tools = agent.get("tools")
+        if tools is not None and not (
+            isinstance(tools, list)
+            and tools
+            and all(isinstance(tool, str) and tool for tool in tools)
+            and len(tools) == len(set(tools))
+        ):
+            raise ConfigurationError(
+                f"Claude agent {name!r} tools must be unique non-empty strings: {path}"
+            )
+
+
 def _validate_model(profile: dict[str, Any], path: Path) -> None:
     if profile.get("schema_version") != 1:
         raise ConfigurationError(f"unsupported model profile schema: {path}")
@@ -286,6 +335,7 @@ def load_profile(name_or_path: str) -> dict[str, Any]:
         raise ConfigurationError(
             f"deployment stack must contain unique LiteLLM aliases: {path}"
         )
+    _validate_claude_agents(stack, path)
     _validate_model(model, path)
     validate_runtime(runtime)
     validate_compatibility(model, runtime)

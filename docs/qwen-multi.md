@@ -8,8 +8,9 @@
   TP1, czyli DP4, na porcie `8100`, z zewnętrznym drafterem
   `Qwen3.8-27B-DFlash2-W4A16` K4;
 - LiteLLM publikuje aliasy obu klas na porcie `4000`;
-- Claude Code domyślnie używa głównego Flash-Next; aliasy workerów można
-  wybrać jawnie.
+- zwykły Claude Code domyślnie używa głównego Flash-Next, a dedykowany
+  workflow zespołowy uruchamia go jako aktywnego leada wraz z czterema
+  nazwanymi workerami 27B.
 
 Profil nie używa `extends`. Osadza kompletny model, runtime i ustawienia stosu
 głównego, a komponent workerów wiąże nazwą i SHA-256 kompletnego,
@@ -51,9 +52,56 @@ Alias główny: `qwen3.8-flash-next-thinking`; szybki wariant bez thinking:
 `qwen3.8-27b-workers-thinking` i `qwen3.8-27b-workers-fast`.
 
 Szablon Claude Code znajduje się w
-`templates/.claude/qwen-multi/qwen-multi.settings.local.json`. Thinking dla
+`templates/.claude/qwen-multi/qwen-multi.settings.local.json`, a definicje
+agentów w `templates/.claude/qwen-multi/qwen-multi.agents.json`. Thinking dla
 głównego modelu pozostaje włączony, a effort `high`/`max` jest normalizowany
 przez LiteLLM do obsługiwanego przez Qwen `xhigh`.
+
+## Workflow: główny Qwen + cztery workery
+
+Główna sesja nie jest pasywnym routerem. Typ `qwen-team-lead` działa na
+`qwen3.8-flash-next-thinking` i odpowiada za pełną analizę, architekturę,
+implementację przekrojowego lub najbardziej ryzykownego fragmentu, decyzje
+integracyjne, końcowy przegląd oraz walidację. Cztery role boczne działają na
+puli DP4:
+
+| Rola | Alias | Zakres |
+| --- | --- | --- |
+| `qwen-worker-explorer` | `qwen3.8-27b-workers-fast` | read-only discovery i zależności |
+| `qwen-worker-implementer-a` | `qwen3.8-27b-workers-thinking` | pierwszy rozłączny zakres plików |
+| `qwen-worker-implementer-b` | `qwen3.8-27b-workers-thinking` | drugi rozłączny zakres plików |
+| `qwen-worker-verifier` | `qwen3.8-27b-workers-thinking` | read-only testy, regresje i review |
+
+Launcher materializuje osadzone definicje jako ignorowany plik
+`.claude/agents.local.json`. Wrapper przekazuje go przez `claude --agents`,
+więc role są dostępne również wtedy, gdy skrypt zostanie uruchomiony z katalogu
+innego projektu. Dedykowane uruchomienie pięcioagentowe:
+
+```bash
+./run launcher start qwen-multi
+scripts/claude-qwen-team.sh
+```
+
+Można także przekazać pierwsze zadanie bez otwierania pustej sesji:
+
+```bash
+scripts/claude-qwen-team.sh \
+  "Zaimplementuj zmianę, używając głównego Qwena i dokładnie czterech workerów."
+```
+
+Ustawienie `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` oraz tryb
+`teammateMode=in-process` są częścią profilu. Lead ma zachować własny zakres
+implementacji, przydzielić workerom rozłączne pliki, czekać na wszystkie cztery
+raporty i samodzielnie zintegrować wynik. Workery nie mogą wykonywać commitów,
+push, stash, resetów ani zarządzać usługami. Explorer i verifier nie mają
+narzędzi edycji.
+
+Oba aliasy workerów wskazują wspólny endpoint DP4. Cztery równoległe żądania
+są rozkładane na cztery repliki TP1; uruchamianie większej liczby aktywnych
+workerów nie zwiększa fizycznej równoległości i tworzy kolejkę. Ponieważ
+teammates w trybie in-process współdzielą checkout, zakresy zapisujących
+workerów muszą być rozłączne. Do konkurencyjnych implementacji tych samych
+plików należy użyć osobnych Git worktree zamiast wspólnego zespołu.
 
 ## Kwalifikacja na 8×R9700/gfx1201
 
@@ -79,6 +127,29 @@ Historyczny smoke test przez wspólny endpoint LiteLLM zwrócił HTTP 200 i `fin
 workerów i główny runtime; żadna usługa nie została zatrzymana podczas tej
 kontroli.
 
+12 września workflow Claude Code `2.1.197` przeszedł dodatkowy gate 24/24.
+Główny `qwen-team-lead` został rozpoznany jako
+`qwen3.8-flash-next-thinking`, wywołał dokładnie cztery typy workerów z
+unikalnymi nazwami i `run_in_background=true`, a wszystkie cztery starty
+nastąpiły przed pierwszym zakończeniem. Osobne, równoczesne próby ról
+potwierdziły `qwen3.8-27b-workers-fast` dla explorera oraz
+`qwen3.8-27b-workers-thinking` dla obu implementerów i verifiera. Czasy prób
+wyniosły odpowiednio 3.84, 2.45, 2.83 i 2.62 s; wszystkie przedziały nakładały
+się w czasie. Nie wystąpiły odmowy narzędzi ani zmiany worktree. Headless
+`--print` kończy fazę leada po pierwszej odpowiedzi otrzymanej już po czterech
+startach, dlatego komplet odpowiedzi i aliasy ról gate sprawdza w osobnej
+równoległej fazie; interaktywna sesja pozostaje otwarta i zbiera powiadomienia
+teammates normalnie.
+
+Powtarzalna komenda i ignorowany raport:
+
+```bash
+./run test claude-team \
+  --profile qwen-multi \
+  --output logs/validation/qwen-multi-claude-team.json \
+  --timeout 300
+```
+
 Minimalna powtarzalna kontrola po starcie:
 
 ```bash
@@ -86,6 +157,9 @@ Minimalna powtarzalna kontrola po starcie:
 ./run model verify qwen-multi
 ./run model verify qwen38-4x27b
 ./run proxy test --timeout 120
+./run test claude-team \
+  --profile qwen-multi \
+  --output logs/validation/qwen-multi-claude-team.json
 ./run test unit
 ./run install --profile qwen-multi --dry-run
 ./run doctor --profile qwen-multi
