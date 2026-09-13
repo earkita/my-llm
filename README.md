@@ -174,6 +174,25 @@ scripts/watch-qwen-live.sh
 ```
 
 Polecenie otwiera odświeżany dashboard terminalowy zamiast przewijanej listy.
+Dowolny alias aktywnego profilu LiteLLM można mierzyć jedną komendą. Tryb
+domyślny mierzy produkcyjną ścieżkę proxy, `--direct` wysyła ten sam rozmiar
+obciążenia i parametry aliasu bezpośrednio przez OpenAI Chat vLLM, a `--raw`
+mierzy stałą długość przez greedy completions z
+`ignore_eos`:
+
+```bash
+scripts/bench --list
+scripts/bench qwen3.8-flash-next-fast decode
+scripts/bench qwen3.8-flash-next-fast decode --direct
+scripts/bench qwen3.8-flash-next-fast decode --raw
+```
+
+Klient benchmarkowy uwzględnia dokładne liczniki `usage` również wtedy, gdy
+LiteLLM umieszcza `choices` i `usage` w jednym końcowym zdarzeniu SSE. Do
+porównania dwóch osobnych uruchomień podaj ten sam `--seed-base`; bez niego
+skrypt celowo zmienia dane wejściowe, aby poprzedni prefix cache nie zanieczyścił
+wyniku. Dla aliasu używającego backendu Anthropic `--direct` omija proxy, ale
+nie odtwarza protokołu Anthropic `/v1/messages`.
 
 Szczegóły: [architektura](docs/architecture.md),
 [operacje](docs/operations.md), [dowody i ograniczenia](docs/verification.md),

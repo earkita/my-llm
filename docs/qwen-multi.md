@@ -95,6 +95,56 @@ requestów podaje dokładny server-side prefill/decode, TTFT, trafienia prefix
 cache i akceptację DFlash2; główna tabela pokazuje kroczący decode, kolejkę,
 KV oraz telemetrię przypisanej R9700.
 
+Aktywny, powtarzalny pomiar przez oficjalny klient `vllm bench serve` przyjmuje
+alias LiteLLM oraz scenariusz. Domyślny pomiar obejmuje produkcyjne proxy;
+`--direct` zachowuje rozmiar obciążenia i parametry samplingu aktywnego aliasu,
+lecz kieruje ruch przez OpenAI Chat prosto do odpowiedniego vLLM. Dla aliasu
+opartego o Anthropic nie odtwarza to protokołu `/v1/messages`. `--raw` używa
+greedy `/v1/completions` z
+`ignore_eos`, aby zmierzyć stałą długość i maksymalną przepustowość silnika:
+
+```bash
+scripts/bench --list
+scripts/bench qwen3.8-flash-next-fast decode
+scripts/bench qwen3.8-flash-next-fast decode --direct
+scripts/bench qwen3.8-flash-next-fast decode --raw
+scripts/bench qwen3.8-27b-workers-fast prefill
+scripts/bench qwen3.8-27b-workers-fast decode --direct --worker-rank 2
+```
+
+Narzędzie przyjmuje tylko aliasy przypisane do aktualnie aktywnego profilu,
+aby nazwa nie została przypadkiem zmierzona na niewłaściwym backendzie.
+`--direct` odczytuje z aktywnego LiteLLM wyłącznie dozwolone parametry
+generowania aliasu; `--raw` nie potrzebuje metadanych proxy.
+
+Wyniki LiteLLM korzystają z dokładnych liczników `usage` także dla końcowego
+zdarzenia SSE zawierającego jednocześnie `choices` i `usage`. Przy porównaniu
+osobnych przebiegów ustaw identyczny `--seed-base`; domyślnie kolejne przebiegi
+mają inne prompty, by nie odziedziczyć trafień prefix cache.
+Klucz LiteLLM pobiera przez `scripts/claude-litellm-key.sh` i przekazuje wyłącznie
+w środowisku procesu klienta; nie zapisuje go w komendzie ani raporcie.
+
+Domyślnie uruchamiane są scenariusze `interactive`, `prefill`, `decode` i
+`prefix`; worker pool dostaje dodatkowo `pool` z concurrency 4. Krótki pomiar
+jednego scenariusza albo konkretnej repliki DP4:
+
+```bash
+scripts/bench qwen3.8-flash-next-fast decode
+scripts/bench qwen3.8-27b-workers-fast prefill --direct --worker-rank 2
+```
+
+Każde uruchomienie domyślnie zmienia seed, aby kolejny pomiar losowych promptów
+nie odziedziczył prefix cache poprzedniego. Do porównania dokładnie tych samych
+promptów między main i workerem należy przekazać obu komendom ten sam, zapisany
+`--seed-base`, na przykład `--seed-base 20260912`.
+
+Surowe wyniki i zbiorczy raport trafiają do
+`logs/benchmarks/qwen-multi/COMPONENT/TIMESTAMP/` jako JSON i HTML. Wartość
+`effective prefill tok/s` jest liczona jako rzeczywista liczba tokenów wejścia
+podzielona przez TTFT, więc obejmuje HTTP i scheduler. Decode jest odwrotnością
+TPOT i oznacza zaakceptowane tokeny widziane przez klienta, również przy
+spekulacji. Nie są to liczniki samego kernela GPU.
+
 Można także przekazać pierwsze zadanie bez otwierania pustej sesji:
 
 ```bash
