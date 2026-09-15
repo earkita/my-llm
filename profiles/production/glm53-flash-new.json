@@ -1,0 +1,226 @@
+{
+  "schema_version": 1,
+  "name": "glm53-flash-new",
+  "status": "production-ready",
+  "description": "Production GLM-5.3-Flash W4A16 on the v0.31 ROCm 10 runtime with DFlash2 K4, FP8 KV, automatic prefix caching, 256K context, and full-and-piecewise HIP graphs",
+  "model": {
+    "schema_version": 1,
+    "name": "glm53-flash-w4a16-mtp",
+    "family": "glm5next",
+    "format": "safetensors",
+    "repository": "canada-quant/GLM-5.3-Flash-W4A16-MTP",
+    "revision": "6aade65289ed1e253f80fae0be12949f0d600f25",
+    "source_profile_sha256": "83da55b0d531725934f0777303da2c912ad7c154d05510f65649a314628ad640",
+    "default_directory": "/mnt/ai/models/glm/GLM-5.3-Flash-W4A16-MTP",
+    "served_name": "glm-5.3-flash-w4a16",
+    "expected_shards": 11,
+    "index_file": "model.safetensors.index.json",
+    "checkpoint_weight_bytes": 190808238708,
+    "required_files": [
+      "README.md",
+      "chat_template.jinja",
+      "config.json",
+      "generation_config.json",
+      "model.safetensors.index.json",
+      "processor_config.json",
+      "tokenizer.json",
+      "tokenizer_config.json"
+    ],
+    "file_sha256": {
+      "config.json": "d4e721c7f18a45f5d9e2083d423bd15d707c43f60d3669fd1c48e52562e2000a",
+      "model.safetensors.index.json": "046a1fa35a55b7776bf716490040e8f68b80097b911628966f12588e75ca16c2"
+    },
+    "allow_patterns": [
+      "*.json",
+      "*.safetensors",
+      "*.jinja",
+      "README.md",
+      "recipe.yaml"
+    ],
+    "supports_dspark": false,
+    "supports_mtp": true,
+    "supports_dflash": true,
+    "auxiliary_artifacts": [
+      {
+        "name": "dflash2-drafter",
+        "repository": "incoai/GLM-5.3-Flash-DFlash2",
+        "revision": "bf582e4eacc1810f76656d1811693ff6c6737d2a",
+        "filename": "model.safetensors",
+        "path": "/mnt/ai/models/glm/GLM-5.3-Flash-DFlash2-HF-bf582e4/model.safetensors",
+        "size_bytes": 2342169800,
+        "sha256": "b038e1d9d1e7833fa3880c2c0135ba9b673013f03da1b29fb831931584759dac"
+      },
+      {
+        "name": "dflash2-config",
+        "repository": "incoai/GLM-5.3-Flash-DFlash2",
+        "revision": "bf582e4eacc1810f76656d1811693ff6c6737d2a",
+        "filename": "config.json",
+        "path": "/mnt/ai/models/glm/GLM-5.3-Flash-DFlash2-HF-bf582e4/config.json",
+        "size_bytes": 1273,
+        "sha256": "c4aeac0101196a6e26705b34c45230bcd0c7c68ee2d2d1efdb242087f3712573"
+      }
+    ],
+    "vllm": {
+      "tokenizer_mode": "auto",
+      "tool_call_parser": "glm47",
+      "reasoning_parser": "glm45",
+      "quantization": "compressed-tensors",
+      "enable_auto_tool_choice": true,
+      "trust_remote_code": false,
+      "language_model_only": true
+    }
+  },
+  "runtime": {
+    "schema_version": 1,
+    "name": "glm53-flash-w4a16-rocm10-8xr9700-tp8-dflash2-k4-fp8kv-apc-256k-full-piecewise",
+    "status": "production-ready",
+    "recipe": "vllm_glm53flashrocm10_v0.31",
+    "description": "Qualified W4A16 production runtime with DFlash2 K4, FP8 KV, automatic prefix caching, 256K context, and full-and-piecewise HIP graphs on gfx1201",
+    "required_model_family": "glm5next",
+    "required_patches": [
+      "0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008",
+      "0009", "0010", "0011", "0012", "0013", "0014", "0015", "0016",
+      "0017", "0018", "0019", "0020", "0021", "0022", "0023", "0024",
+      "0025", "0026", "0027", "0028", "0029", "0030", "0031", "0032"
+    ],
+    "gpu_order": [
+      0,
+      1,
+      2,
+      3,
+      7,
+      4,
+      5,
+      6
+    ],
+    "gpu_bdfs": [
+      "0000:e3:00.0",
+      "0000:c3:00.0",
+      "0000:c6:00.0",
+      "0000:03:00.0",
+      "0000:23:00.0",
+      "0000:e6:00.0",
+      "0000:07:00.0",
+      "0000:0a:00.0"
+    ],
+    "parallel": {
+      "tensor": 8,
+      "pipeline": 1,
+      "data": 1,
+      "enable_expert_parallel": false,
+      "disable_custom_all_reduce": true
+    },
+    "limits": {
+      "max_model_len": 262144,
+      "max_num_seqs": 1,
+      "max_num_batched_tokens": 4096,
+      "gpu_memory_utilization": 0.95,
+      "kv_cache_memory_bytes": 2200000000
+    },
+    "cache": {
+      "dtype": "fp8",
+      "block_size": 16,
+      "prefix_cache": true,
+      "prefix_cache_retention_interval": 1280,
+      "cpu_offload_gb": 0
+    },
+    "enable_prompt_tokens_details": true,
+    "scheduler": {
+      "async": false,
+      "enforce_eager": false
+    },
+    "multimodal": {
+      "language_model_only": true
+    },
+    "loading": {
+      "format": "safetensors",
+      "max_parallel_workers": 1
+    },
+    "transport": {
+      "p2p_disable": 0,
+      "shm_disable": 1,
+      "socket_ifname": "lo",
+      "runtime_connect": 1,
+      "hsa_legacy_ipc": 0
+    },
+    "shutdown": {
+      "request_timeout_seconds": 0,
+      "worker_timeout_seconds": 60,
+      "process_grace_seconds": 120
+    },
+    "attention_backend": "ROCM_AITER_MLA_SPARSE",
+    "moe_backend": "triton",
+    "linear_backend": "auto",
+    "speculative_config": {
+      "model_artifact": "dflash2-drafter",
+      "method": "dflash",
+      "num_speculative_tokens": 4,
+      "draft_tensor_parallel_size": 8,
+      "attention_backend": "TRITON_ATTN",
+      "kv_cache_dtype": "fp8",
+      "enforce_eager": false
+    },
+    "compilation_config": {
+      "cudagraph_mode": "FULL_AND_PIECEWISE",
+      "cudagraph_capture_sizes": [1, 2, 3, 4, 5],
+      "cudagraph_num_of_warmups": 1
+    },
+    "environment": {
+      "VLLM_TARGET_DEVICE": "rocm",
+      "VLLM_USE_V2_MODEL_RUNNER": "1",
+      "VLLM_ROCM_USE_AITER": "1",
+      "VLLM_ROCM_USE_AITER_FP8BMM": "0",
+      "VLLM_ROCM_USE_AITER_FP4BMM": "0",
+      "VLLM_DISABLE_PYNCCL": "1",
+      "VLLM_KV_CACHE_LAYOUT": "LBHNC",
+      "VLLM_USE_BREAKABLE_CUDAGRAPH": "1",
+      "SAFETENSORS_FAST_GPU": "1",
+      "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+      "ROCBLAS_USE_HIPBLASLT": "0"
+    },
+    "hardware_topology": {
+      "captured_on": "2026-09-14",
+      "motherboard": "ASUS Pro WS WRX90E-SAGE SE",
+      "note": "Eight gfx1201 R9700 devices in the measured fast-first order. NVIDIA remains the display adapter and is excluded by explicit ROCm platform selection."
+    }
+  },
+  "stack": {
+    "description": "Production GLM-5.3 Flash W4A16 DFlash2 K4 256K stack",
+    "litellm_aliases": [
+      "glm-5.3-flash-new-high"
+    ],
+    "claude_settings": {
+      "apiKeyHelper": "bash -c 'exec \"${MY_LLM_REPO_ROOT:-$HOME/ai/my-llm}/scripts/claude-litellm-key.sh\"'",
+      "totalTokensReminder": "off",
+      "permissions": {
+        "defaultMode": "acceptEdits",
+        "allow": [
+          "Read",
+          "Bash"
+        ]
+      },
+      "env": {
+        "ANTHROPIC_BASE_URL": "http://127.0.0.1:4000",
+        "ANTHROPIC_MODEL": "glm-5.3-flash-new-high",
+        "ANTHROPIC_SMALL_FAST_MODEL": "glm-5.3-flash-new-high",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-5.3-flash-new-high",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.3-flash-new-high",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.3-flash-new-high",
+        "DISABLE_PROMPT_CACHING": "1",
+        "CLAUDE_CODE_TODO_REMINDER_MODE": "off",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+        "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
+        "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "262144",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "262144",
+        "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "90"
+      }
+    }
+  },
+  "verification": {
+    "scope": "gfx1201-glm53-w4a16-dflash2-fp8kv-apc-256k-production",
+    "verified_context": 262144,
+    "verified_on": "2026-09-15",
+    "best_runtime_mode": "default",
+    "notes": "Promoted from the matched development qualification. One full 262,016+128 raw boundary request passed at 1223.9 prefill tok/s, 214.1 s TTFT, and 35.7 decode tok/s. A two-request 262,080+32 prefix-cache test reduced TTFT from 214.44 s to 2.729 s (78.6x). FULL_AND_PIECEWISE graphs beat eager and FULL_DECODE_ONLY for short coding decode, the default RCCL path beat PyNccl, and max_num_batched_tokens=4096 beat 8192 for 256K prefill. Repeated boundary stability and coding-quality qualification remain follow-up checks."
+  }
+}

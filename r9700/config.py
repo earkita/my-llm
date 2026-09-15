@@ -33,11 +33,16 @@ def load_json(path: Path) -> dict[str, Any]:
 
 
 def _profile_path(name_or_path: str) -> Path:
-    candidate = Path(name_or_path)
-    if candidate.is_absolute() or candidate.parent != Path("."):
-        return candidate.expanduser().resolve()
-    suffix = "" if candidate.suffix else ".json"
-    return PRODUCTION_PROFILE_ROOT / f"{name_or_path}{suffix}"
+    candidate = Path(name_or_path).expanduser()
+    if not candidate.suffix:
+        candidate = candidate.with_suffix(".json")
+    if candidate.is_absolute():
+        return candidate.resolve()
+    if candidate.parent == Path("."):
+        return (PRODUCTION_PROFILE_ROOT / candidate).resolve()
+    if candidate.parts[0] == "profiles":
+        return (ROOT / candidate).resolve()
+    return (ROOT / "profiles" / candidate).resolve()
 
 
 def _contains_extends(value: Any) -> bool:
@@ -291,8 +296,9 @@ def load_profile(name_or_path: str) -> dict[str, Any]:
 
     A deployment owns its model, runtime, and coding-stack settings. Inheritance
     is deliberately rejected so that one reviewed file is the complete launch
-    contract. Development profiles are accepted only through an explicit path
-    below ``profiles/dev``; name-based discovery remains production-only.
+    contract. A bare name resolves below ``profiles/production``. A
+    directory-qualified name such as ``dev/example`` resolves below
+    ``profiles``; a leading ``profiles/`` and the ``.json`` suffix are optional.
     """
     path = _profile_path(name_or_path)
     profile = load_json(path)

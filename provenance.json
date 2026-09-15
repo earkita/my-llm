@@ -60,6 +60,25 @@
         "set max_num_batched_tokens to 4096 for the production prefill budget"
       ]
     },
+    "glm53-flash-new": {
+      "source_model": "https://huggingface.co/canada-quant/GLM-5.3-Flash-W4A16-MTP/commit/6aade65289ed1e253f80fae0be12949f0d600f25",
+      "source_model_sha256": "6aade65289ed1e253f80fae0be12949f0d600f25",
+      "auxiliary_model": "https://huggingface.co/incoai/GLM-5.3-Flash-DFlash2/commit/bf582e4eacc1810f76656d1811693ff6c6737d2a",
+      "auxiliary_model_sha256": "bf582e4eacc1810f76656d1811693ff6c6737d2a",
+      "source_runtime": "https://github.com/vllm-project/vllm/commit/7fbd44cbe0a90b9c8fd3a94a0f0401ac4b1bc719",
+      "source_runtime_sha256": "7fbd44cbe0a90b9c8fd3a94a0f0401ac4b1bc719",
+      "target_profile": "profiles/production/glm53-flash-new.json",
+      "target_profile_sha256": "13db6143b5d242c2499a9108f964cd08ea4f3c0e85747b93499461fdf63673f3",
+      "intentional_changes": [
+        "promoted the qualified W4A16 development deployment as a flat production profile without experimental modes",
+        "selected DFlash2 K4, FP8 target and draft KV, synchronous scheduling, and FULL_AND_PIECEWISE breakable HIP graphs",
+        "set the qualified 262144-token context with a measured 317682-token KV capacity from a 2200000000-byte fixed reservation",
+        "retained max_num_batched_tokens 4096 after matched 32K and full-boundary 256K comparisons against 8192",
+        "kept the default RCCL communication path after PyNccl reduced short decode throughput and vLLM rejected custom all-reduce on gfx1201",
+        "created the dedicated glm-5.3-flash-new-high LiteLLM and Claude Code alias so the 256K qualification is not confused with the existing shared 512K GLM alias",
+        "removed the ignored VLLM_ROCM_USE_AITER_FP4_ASM_GEMM environment variable from the promoted profile"
+      ]
+    },
     "glm53-flash-uncensored": {
       "source_model": "https://huggingface.co/dealignai/GLM-5.3-Flash-UNCENSORED-FP8",
       "source_model_sha256": "d21b19569d30e6f471c433b11e672b3bbb80552a",
@@ -120,7 +139,7 @@
       "source_runtime": "https://github.com/vllm-project/vllm/pull/48606",
       "source_runtime_sha256": "52d2d48d01025f21a7010901bae31a49c86acac3",
       "target_profile": "profiles/production/qwen38-4x27b.json",
-      "target_profile_sha256": "678f0b0a221034f9b52aa0ee40dbf9b23643d82f84c2a1558344798067226bcb",
+      "target_profile_sha256": "03e6f0429f479d588cf7ba7835661d4198183d6ab3fa68f38116190c533b2b43",
       "intentional_changes": [
         "adapted the upstream Quark W4A16 linear scheme to the pinned Qwen runtime and selected the gfx1201 RDNAHybridW4A16 kernel",
         "assigned the four GPUs outside the primary Qwen allocation as four independent TP1 data-parallel replicas",
@@ -130,7 +149,8 @@
         "raised dedicated worker-card GPU utilization from 0.92 to 0.96 after the first DFlash2 start exposed 10.24 GiB KV versus 11.07 GiB required at the retained 131072 context limit",
         "aligned native hybrid prefix-cache retention to the measured 1616-token scheduler block selected by DFlash2 with FP8 KV",
         "retained max_num_batched_tokens 2048 after controlled local 32K tests showed 4096 and 8192 were slower while consuming more activation memory and reducing KV capacity",
-        "kept the previous MTP K1 and DFlash2 BF16-KV gfx1201 qualifications as historical evidence and qualified FP8 KV on all four local ranks, including reasoning, tools, prefix reuse, speculative acceptance, throughput, and the exact 131072-token boundary"
+        "kept the previous MTP K1 and DFlash2 BF16-KV gfx1201 qualifications as historical evidence and qualified FP8 KV on all four local ranks, including reasoning, tools, prefix reuse, speculative acceptance, throughput, and the exact 131072-token boundary",
+        "exposed a dedicated low-effort thinking route for latency-sensitive coding workers"
       ]
     },
     "qwen-multi": {
@@ -139,15 +159,16 @@
       "source_runtime": "manifest/vllm_qwen38flash_pr53896.json",
       "source_runtime_sha256": "54e4576ecf3ef5591acf8b9f69c410154bfc4bbe72cbd2b398b58fb6dc226f4c",
       "target_profile": "profiles/production/qwen-multi.json",
-      "target_profile_sha256": "4f0d6321e3b5552ad81f781c52674c6edd454344e4e5377b42d20b39f6cf3bd5",
+      "target_profile_sha256": "e13c781568ac8d1305b0f088a5f14106178b9e6230160f6087716d81885b5c9c",
       "intentional_changes": [
         "composed the pinned Qwen Flash UNCENSORED TP4/EP4 primary and Qwen3.8-27B DP4/TP1 worker pool without profile inheritance",
         "pinned the worker component to the W4A16 DFlash2 K4 profile with FP8 E4M3 target and draft KV while preserving earlier BF16 and MTP results as historical evidence",
         "materialized Claude Code auto-compaction at the qualified 262144-token context boundary with a 90 percent threshold",
         "reused the already-running compatible primary and proxy while gracefully restarting only the worker pool for its qualified FP8-KV DFlash2 image",
-        "exposed all four thinking and fast LiteLLM aliases under one managed stack",
+        "exposed the main thinking and fast aliases plus worker thinking, low-effort, and fast aliases under one managed stack",
         "added explicit all-component status and graceful stop orchestration for the 4+1+1+1+1 topology",
-        "embedded and qualified an active main Qwen lead plus four background Claude Code worker roles with explicit routing, bounded responsibilities, and reproducible launch validation"
+        "embedded and qualified an active main Qwen lead plus four background Claude Code worker roles with explicit routing, bounded responsibilities, and reproducible launch validation",
+        "routed both implementation workers through the dedicated low-effort thinking alias while retaining full thinking for independent verification"
       ]
     }
   },

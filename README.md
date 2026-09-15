@@ -11,6 +11,7 @@ dedykowanym magazynie modeli wskazanym przez profile produkcyjne.
 |---|---|---:|---|---:|---|
 | `deepseek-v4-flash` | vLLM 0.28 | 6 | TP1/PP6 | 1,048,576 | DSpark K5 |
 | `glm53-flash` | vLLM `main` `7fbd44c`, ROCm 10 | 8 | TP8/no-EP | 786,432 | packed MXFP4 GEMV + DFlash2 K4, FP8 KV |
+| `glm53-flash-new` | vLLM `main` `7fbd44c`, ROCm 10 | 8 | TP8/no-EP | 262,144 | W4A16 + DFlash2 K4, FP8 KV, HIP graphs |
 | `glm53-flash-uncensored` | vLLM `main` `7fbd44c`, ROCm 10 | 8 | TP8/no-EP | 786,432 | packed MXFP4 GEMV + DFlash2 K4, FP8 KV |
 | `qwen38-flash` | vLLM 0.28 | 4 | TP4/EP4 | 262,144 | MTP K2, FP8 KV |
 | `qwen38-flash-uncensored` | vLLM 0.28 | 4 | TP4/EP4 | 262,144 | MTP K2, BF16 KV |
@@ -25,8 +26,9 @@ odrzuca każdy profil, w którym wystąpi.
 Szablony Claude Code są pogrupowane według rodziny modelu w
 `templates/.claude/MODEL/`. Wewnątrz katalogu każdy plik nosi nazwę profilu,
 np. `glm53-flash/glm53-flash-uncensored.settings.local.json`. Wszystkie
-szablony z grupy `glm53-flash` używają dla ról Claude wspólnej nazwy
-`glm-5.3-flash-high`, a oba warianty Qwen używają
+dotychczasowe profile MXFP4 z grupy `glm53-flash` używają dla ról Claude
+wspólnej nazwy `glm-5.3-flash-high`; profil W4A16 `glm53-flash-new` używa
+osobnego aliasu 256K `glm-5.3-flash-new-high`. Oba warianty Qwen używają
 `qwen3.8-flash-next-thinking` dla ról głównych oraz
 `qwen3.8-flash-next-fast` dla Haiku i zadań szybkich. Proxy wiąże oba aliasy
 dynamicznie z checkpointem aktywnego profilu i normalizuje nieobsługiwane
@@ -55,6 +57,7 @@ checkoutów.
 ./run launcher
 ./run launcher list
 ./run launcher start glm53-flash
+./run launcher start glm53-flash-new
 ./run launcher start qwen38-flash
 ./run launcher start qwen38-flash-uncensored
 ./run launcher switch qwen38-flash
@@ -80,13 +83,18 @@ checkoutów.
 ./run profiles show glm53-flash
 
 ./run install --profile glm53-flash
+./run install --profile glm53-flash-new
 ./run model verify glm53-flash
+./run model verify glm53-flash-new
 ./run model verify qwen38-flash
 ./run model verify qwen38-flash-uncensored
 
 # domyślnie: v0.29, MRV2, TP8/no-EP, packed MXFP4 GEMV,
 # DFlash2 K4, FP8 KV, 768K i Vision
 ./run launcher start glm53-flash
+
+# W4A16, DFlash2 K4, FP8 KV, 256K i pełne/odcinkowe grafy HIP
+./run launcher start glm53-flash-new
 
 # osobny checkpoint UNCENSORED, ten sam zakwalifikowany runtime v0.29
 ./run launcher start glm53-flash-uncensored
@@ -164,6 +172,11 @@ Parallel, packed RDNA4 MXFP4 decode GEMV, DFlash2 K4, FP8 KV,
 kontekstu 786,432 tokenów i TP8-sharded Vision; prefix cache i CPU offload są
 wyłączone. Profile produkcyjne nie zawierają `experimental_modes`; warianty
 robocze pozostają w `profiles/dev/`.
+
+`glm53-flash-new` używa osobnego checkpointu W4A16 i recepty v0.31, zachowuje
+DFlash2 K4 oraz FP8 KV, a zakwalifikowany limit wynosi 262144 tokeny. Jego
+osobny alias `glm-5.3-flash-new-high` zapobiega reklamowaniu limitu 512K
+starszych profili MXFP4.
 
 Podczas pracy Claude Code można bez restartu obserwować kolejkę, zajęcie KV i
 estymowany postęp prefillu, a po zakończeniu żądania dokładny server-side

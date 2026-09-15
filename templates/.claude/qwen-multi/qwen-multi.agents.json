@@ -16,7 +16,7 @@
   },
   "qwen-worker-implementer-a": {
     "description": "Qwen 27B implementation worker for the first disjoint file or module slice assigned by the lead.",
-    "model": "qwen3.8-27b-workers-thinking",
+    "model": "qwen3.8-27b-workers-low",
     "tools": [
       "Read",
       "Grep",
@@ -29,7 +29,7 @@
   },
   "qwen-worker-implementer-b": {
     "description": "Qwen 27B implementation worker for the second disjoint file or module slice assigned by the lead.",
-    "model": "qwen3.8-27b-workers-thinking",
+    "model": "qwen3.8-27b-workers-low",
     "tools": [
       "Read",
       "Grep",

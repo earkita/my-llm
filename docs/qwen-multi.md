@@ -49,7 +49,8 @@ Niezależna diagnostyka nadal jest dostępna przez `./run service ...`,
 
 Alias główny: `qwen3.8-flash-next-thinking`; szybki wariant bez thinking:
 `qwen3.8-flash-next-fast`. Workery są dostępne jako
-`qwen3.8-27b-workers-thinking` i `qwen3.8-27b-workers-fast`.
+`qwen3.8-27b-workers-thinking`, `qwen3.8-27b-workers-low` i
+`qwen3.8-27b-workers-fast`.
 
 Szablon Claude Code znajduje się w
 `templates/.claude/qwen-multi/qwen-multi.settings.local.json`, a definicje
@@ -68,8 +69,8 @@ puli DP4:
 | Rola | Alias | Zakres |
 | --- | --- | --- |
 | `qwen-worker-explorer` | `qwen3.8-27b-workers-fast` | read-only discovery i zależności |
-| `qwen-worker-implementer-a` | `qwen3.8-27b-workers-thinking` | pierwszy rozłączny zakres plików |
-| `qwen-worker-implementer-b` | `qwen3.8-27b-workers-thinking` | drugi rozłączny zakres plików |
+| `qwen-worker-implementer-a` | `qwen3.8-27b-workers-low` | pierwszy rozłączny zakres plików |
+| `qwen-worker-implementer-b` | `qwen3.8-27b-workers-low` | drugi rozłączny zakres plików |
 | `qwen-worker-verifier` | `qwen3.8-27b-workers-thinking` | read-only testy, regresje i review |
 
 Launcher materializuje osadzone definicje jako ignorowany plik
@@ -159,7 +160,7 @@ raporty i samodzielnie zintegrować wynik. Workery nie mogą wykonywać commitó
 push, stash, resetów ani zarządzać usługami. Explorer i verifier nie mają
 narzędzi edycji.
 
-Oba aliasy workerów wskazują wspólny endpoint DP4. Cztery równoległe żądania
+Wszystkie aliasy workerów wskazują wspólny endpoint DP4. Cztery równoległe żądania
 są rozkładane na cztery repliki TP1; uruchamianie większej liczby aktywnych
 workerów nie zwiększa fizycznej równoległości i tworzy kolejkę. Ponieważ
 teammates w trybie in-process współdzielą checkout, zakresy zapisujących

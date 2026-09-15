@@ -42,6 +42,7 @@ from r9700.service import start
 REQUIRED_PROFILE_NAMES = {
     "deepseek-v4-flash",
     "glm53-flash",
+    "glm53-flash-new",
     "glm53-flash-uncensored",
     "qwen38-flash",
     "qwen38-flash-uncensored",
@@ -61,6 +62,15 @@ GLM_V029_EXPERIMENTS = str(
 
 
 class ProductionProfileTests(unittest.TestCase):
+    def test_directory_qualified_profile_name_resolves_below_profiles(self) -> None:
+        profile = load_profile("dev/glm53-flash-rocm10-gluon")
+
+        self.assertEqual(profile["name"], "glm53-flash-rocm10-gluon")
+        self.assertEqual(
+            Path(profile["_path"]),
+            ROOT / "profiles/dev/glm53-flash-rocm10-gluon.json",
+        )
+
     @patch("r9700.install._install_vllm")
     def test_install_all_skips_backends_without_a_registered_recipe(
         self, install_vllm
@@ -396,7 +406,7 @@ class ProductionProfileTests(unittest.TestCase):
                 aliases = profile["stack"]["litellm_aliases"]
                 model_names = {template["env"][key] for key in model_keys}
                 if model_directory == "glm53-flash":
-                    self.assertEqual(model_names, {"glm-5.3-flash-high"})
+                    self.assertEqual(model_names, set(aliases))
                 elif len(aliases) == 1:
                     self.assertEqual(model_names, {aliases[0]})
 
@@ -538,6 +548,7 @@ class ProductionProfileTests(unittest.TestCase):
         config = (ROOT / "config" / "litellm.yaml").read_text()
         for alias, thinking in (
             ("qwen3.8-27b-workers-thinking", True),
+            ("qwen3.8-27b-workers-low", True),
             ("qwen3.8-27b-workers-fast", False),
         ):
             with self.subTest(alias=alias):
@@ -552,6 +563,10 @@ class ProductionProfileTests(unittest.TestCase):
                 )
                 self.assertIn(f"enable_thinking: {str(thinking).lower()}", block)
                 self.assertIn("max_input_tokens: 131072", block)
+                if alias == "qwen3.8-27b-workers-low":
+                    self.assertIn("reasoning_effort: low", block)
+                    self.assertIn("preserve_thinking: false", block)
+                    self.assertIn("supports_low_reasoning_effort: true", block)
 
     def test_no_production_profile_enables_cpu_offload(self) -> None:
         for name in PROFILE_NAMES:
@@ -578,6 +593,7 @@ class ProductionProfileTests(unittest.TestCase):
         expectations = {
             "deepseek-v4-flash": ("--pipeline-parallel-size", "6"),
             GLM_PROFILE: ("--quantization", "quark"),
+            "glm53-flash-new": ("--quantization", "compressed-tensors"),
             "qwen38-4x27b": ("--data-parallel-size", "4"),
             "qwen38-flash": ("--tensor-parallel-size", "4"),
             "qwen38-flash-uncensored": ("--tensor-parallel-size", "4"),
@@ -744,11 +760,14 @@ class ProductionProfileTests(unittest.TestCase):
         for name in (
             "qwen-worker-implementer-a",
             "qwen-worker-implementer-b",
-            "qwen-worker-verifier",
         ):
             self.assertEqual(
-                agents[name]["model"], "qwen3.8-27b-workers-thinking"
+                agents[name]["model"], "qwen3.8-27b-workers-low"
             )
+        self.assertEqual(
+            agents["qwen-worker-verifier"]["model"],
+            "qwen3.8-27b-workers-thinking",
+        )
         self.assertEqual(
             agents["qwen-worker-explorer"]["model"],
             "qwen3.8-27b-workers-fast",
@@ -1021,8 +1040,53 @@ class ProductionProfileTests(unittest.TestCase):
             "524288",
         )
 
+    def test_glm_w4a16_new_is_promoted_as_a_flat_256k_profile(self) -> None:
+        profile = load_profile("glm53-flash-new")
+        model = profile["model"]
+        runtime = profile["runtime"]
+
+        self.assertEqual(model["vllm"]["quantization"], "compressed-tensors")
+        self.assertEqual(runtime["recipe"], "vllm_glm53flashrocm10_v0.31")
+        self.assertNotIn("experimental_modes", runtime)
+        self.assertEqual(runtime["limits"]["max_model_len"], 262144)
+        self.assertEqual(runtime["limits"]["max_num_batched_tokens"], 4096)
+        self.assertEqual(runtime["limits"]["kv_cache_memory_bytes"], 2200000000)
+        self.assertEqual(runtime["cache"]["dtype"], "fp8")
+        self.assertTrue(runtime["cache"]["prefix_cache"])
+        self.assertFalse(runtime["scheduler"]["enforce_eager"])
+        self.assertEqual(
+            runtime["compilation_config"]["cudagraph_mode"],
+            "FULL_AND_PIECEWISE",
+        )
+        self.assertEqual(
+            runtime["environment"]["VLLM_USE_BREAKABLE_CUDAGRAPH"], "1"
+        )
+        self.assertNotIn(
+            "VLLM_ROCM_USE_AITER_FP4_ASM_GEMM", runtime["environment"]
+        )
+        self.assertEqual(
+            profile["stack"]["litellm_aliases"],
+            ["glm-5.3-flash-new-high"],
+        )
+        self.assertEqual(
+            profile["stack"]["claude_settings"]["env"][
+                "CLAUDE_CODE_MAX_CONTEXT_TOKENS"
+            ],
+            "262144",
+        )
+
+        request = {
+            "model": "glm-5.3-flash-new-high",
+            "tools": [{"name": "Read", "input_schema": {"type": "object"}}],
+        }
+        self.assertTrue(enforce_glm53_strict_tools(request)["tools"][0]["strict"])
+
     def test_glm_production_profile_has_a_matching_human_summary(self) -> None:
-        for profile_name in (GLM_PROFILE, "glm53-flash-uncensored"):
+        for profile_name in (
+            GLM_PROFILE,
+            "glm53-flash-new",
+            "glm53-flash-uncensored",
+        ):
             profile = load_profile(profile_name)
             runtime = profile["runtime"]
             summary = (
@@ -1559,6 +1623,20 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(command[1:3], ["--profile", "deepseek-v4-flash"])
         self.assertIn("--dry-run", command)
 
+    def test_launcher_preserves_explicit_development_profile_path(self) -> None:
+        profile_path = "profiles/dev/glm53-flash-rocm10-gluon.json"
+        with (
+            patch("r9700.launcher.managed_state", return_value=None),
+            patch("r9700.launcher.subprocess.run") as run,
+        ):
+            run.return_value.returncode = 0
+            launcher.start(profile_path, with_litellm=False, dry_run=True)
+
+        command = run.call_args.args[0]
+        self.assertEqual(Path(command[0]), launcher.START_SCRIPT)
+        self.assertEqual(command[1:3], ["--profile", profile_path])
+        self.assertIn("--dry-run", command)
+
     def test_launcher_runtime_only_switch_stops_before_starting(self) -> None:
         state = {
             "profile": GLM_PROFILE,
@@ -1642,6 +1720,7 @@ class ProductionProfileTests(unittest.TestCase):
             patch(
                 "r9700.proxy.load_profile",
                 return_value={
+                    "name": "qwen38-flash",
                     "stack": {
                         "litellm_aliases": [
                             "qwen3.8-flash-next-fp8",
@@ -1684,6 +1763,21 @@ class ProductionProfileTests(unittest.TestCase):
                 }
             ),
             "qwen38-flash",
+        )
+
+    def test_proxy_resolves_explicit_development_profile_path(self) -> None:
+        profile_path = ROOT / "profiles/dev/glm53-flash-rocm10-gluon.json"
+        profile = load_profile(str(profile_path))
+
+        self.assertEqual(
+            proxy._active_served_model(
+                {
+                    "profile": profile["name"],
+                    "profile_path": str(profile_path),
+                    "profile_sha256": profile["_sha256"],
+                }
+            ),
+            (profile["name"], profile["model"]["served_name"]),
         )
 
     def test_launcher_stack_switch_stops_both_components_first(self) -> None:

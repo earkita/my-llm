@@ -150,7 +150,7 @@
     },
     "worker_pool": {
       "profile": "qwen38-4x27b",
-      "profile_sha256": "48dfccbd48dc5e4a9f00eb3a7d90b64edd893279195e655fc25f69b9f9a61fce",
+      "profile_sha256": "36565c4aba53d178ed7c489ee1f3d6aa2520920926a671420a3cfa74bbbc3086",
       "url": "http://127.0.0.1:8100"
     }
   },
@@ -160,6 +160,7 @@
       "qwen3.8-flash-next-thinking",
       "qwen3.8-flash-next-fast",
       "qwen3.8-27b-workers-thinking",
+      "qwen3.8-27b-workers-low",
       "qwen3.8-27b-workers-fast"
     ],
     "claude_settings": {
@@ -199,13 +200,13 @@
       },
       "qwen-worker-implementer-a": {
         "description": "Qwen 27B implementation worker for the first disjoint file or module slice assigned by the lead.",
-        "model": "qwen3.8-27b-workers-thinking",
+        "model": "qwen3.8-27b-workers-low",
         "tools": ["Read", "Grep", "Glob", "Edit", "Write", "Bash"],
         "prompt": "Implement only the first bounded slice assigned by the lead. Respect its file ownership and do not edit files owned by the lead or another worker. Inspect existing code before changing it, preserve unrelated user changes, use the repository's supported tools and environment, and run focused tests for your slice. Do not commit, push, stash, reset, stop services, or perform destructive operations. Return the files changed, tests run, results, assumptions, and any integration notes."
       },
       "qwen-worker-implementer-b": {
         "description": "Qwen 27B implementation worker for the second disjoint file or module slice assigned by the lead.",
-        "model": "qwen3.8-27b-workers-thinking",
+        "model": "qwen3.8-27b-workers-low",
         "tools": ["Read", "Grep", "Glob", "Edit", "Write", "Bash"],
         "prompt": "Implement only the second bounded slice assigned by the lead. Respect its file ownership and do not edit files owned by the lead or another worker. Inspect existing code before changing it, preserve unrelated user changes, use the repository's supported tools and environment, and run focused tests for your slice. Do not commit, push, stash, reset, stop services, or perform destructive operations. Return the files changed, tests run, results, assumptions, and any integration notes."
       },

@@ -18,17 +18,17 @@ output_dir=
 dry_run=0
 pin_data_parallel=0
 data_parallel_rank=
-prompt_variant_offset=0
+seed_base=
 telemetry=0
 telemetry_interval=0.25
 
 usage() {
-  printf 'Usage: %s [--profile NAME|PATH] [--runtime-mode NAME] [--url URL] [--prompt-tokens N | --full-context] [--output-tokens N] [--concurrency N] [--repetitions N] [--warmup N] [--prompt-variant-offset N] [--timeout SECONDS] [--output-dir DIR] [--pin-data-parallel | --data-parallel-rank N] [--telemetry] [--telemetry-interval SECONDS] [--dry-run]\n' "$0"
+  printf 'Usage: %s [--profile NAME|PATH] [--runtime-mode NAME] [--url URL] [--prompt-tokens N | --full-context] [--output-tokens N] [--concurrency N] [--repetitions N] [--warmup N] [--seed-base N] [--timeout SECONDS] [--output-dir DIR] [--data-parallel-rank N] [--telemetry] [--telemetry-interval SECONDS] [--dry-run]\n' "$0"
 }
 
 while (($#)); do
   case "$1" in
-    --profile|--runtime-mode|--url|--prompt-tokens|--output-tokens|--concurrency|--repetitions|--warmup|--prompt-variant-offset|--timeout|--output-dir|--data-parallel-rank|--telemetry-interval)
+    --profile|--runtime-mode|--url|--prompt-tokens|--output-tokens|--concurrency|--repetitions|--warmup|--seed-base|--prompt-variant-offset|--timeout|--output-dir|--data-parallel-rank|--telemetry-interval)
       (($# >= 2)) || { printf 'missing value for %s\n' "$1" >&2; exit 2; }
       case "$1" in
         --profile) profile=$2 ;;
@@ -39,7 +39,8 @@ while (($#)); do
         --concurrency) concurrency=$2 ;;
         --repetitions) repetitions=$2 ;;
         --warmup) warmup=$2 ;;
-        --prompt-variant-offset) prompt_variant_offset=$2 ;;
+        --seed-base) seed_base=$2 ;;
+        --prompt-variant-offset) seed_base=$2 ;;
         --timeout) timeout=$2 ;;
         --output-dir) output_dir=$2 ;;
         --data-parallel-rank) data_parallel_rank=$2 ;;
@@ -81,26 +82,39 @@ if [[ -n $runtime_mode ]]; then
 fi
 if [[ -n $output_dir ]]; then
   validation_output=$output_dir/api-$stamp.json
-  benchmark_output=$output_dir/benchmark-$stamp.json
+  benchmark_dir=$output_dir/llm-bench-$stamp
   telemetry_output=$output_dir/telemetry-$stamp.json
 else
   validation_output=$repo_root/logs/validation/api-$profile_label-$stamp.json
-  benchmark_output=$repo_root/logs/benchmarks/$profile_label-c$concurrency-${prompt_tokens}x${output_tokens}-$stamp.json
+  benchmark_dir=$repo_root/logs/benchmarks/$profile_label/primary/$stamp-llm-bench
   telemetry_output=$repo_root/logs/telemetry/$profile_label-c$concurrency-${prompt_tokens}x${output_tokens}-$stamp.json
 fi
+benchmark_output=$benchmark_dir/summary.json
 
 api_command=("$repo_root/run" test api --profile "$profile" --url "$url" --timeout "$timeout" --output "$validation_output")
-benchmark_command=("$repo_root/run" benchmark --profile "$profile" --url "$url" --prompt-tokens "$prompt_tokens" --output-tokens "$output_tokens" --concurrency "$concurrency" --repetitions "$repetitions" --warmup "$warmup" --timeout "$timeout" --output "$benchmark_output")
+benchmark_command=(
+  "$repo_root/scripts/bench" "$profile" decode --raw
+  --skip-ready-check
+  --input-tokens "$prompt_tokens"
+  --output-tokens "$output_tokens"
+  --concurrency "$concurrency"
+  --requests "$repetitions"
+  --warmups "$warmup"
+  --output-dir "$benchmark_dir"
+)
 if [[ -n $runtime_mode ]]; then
   api_command+=(--runtime-mode "$runtime_mode")
   benchmark_command+=(--runtime-mode "$runtime_mode")
 fi
-benchmark_command+=(--prompt-variant-offset "$prompt_variant_offset")
-if ((pin_data_parallel)); then
-  benchmark_command+=(--pin-data-parallel)
+if [[ -n $seed_base ]]; then
+  benchmark_command+=(--seed-base "$seed_base")
 fi
 if [[ -n $data_parallel_rank ]]; then
-  benchmark_command+=(--data-parallel-rank "$data_parallel_rank")
+  benchmark_command+=(--worker-rank "$data_parallel_rank")
+fi
+if ((pin_data_parallel)); then
+  printf '%s\n' '--pin-data-parallel is not supported by the official vLLM Bench client; select one rank with --data-parallel-rank' >&2
+  exit 2
 fi
 telemetry_command=(
   "$repo_root/.venv/bin/python" "$script_dir/measure-runtime-telemetry.py"

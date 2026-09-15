@@ -96,9 +96,18 @@ if [[ $action == status ]]; then
   exit
 fi
 
-profile_path="$profiles_dir/$preset.json"
+if [[ $preset == /* ]]; then
+  profile_path=$preset
+elif [[ $preset == profiles/* ]]; then
+  profile_path="$repo_root/$preset"
+elif [[ $preset == */* ]]; then
+  profile_path="$repo_root/profiles/$preset"
+else
+  profile_path="$profiles_dir/$preset.json"
+fi
+[[ $profile_path == *.json ]] || profile_path="${profile_path}.json"
 [[ -f $profile_path ]] || {
-  printf 'unknown production preset: %s\n' "$preset" >&2
+  printf 'unknown deployment profile: %s\n' "$preset" >&2
   exit 2
 }
 

@@ -6,6 +6,7 @@ from typing import Any
 GLM53_MODEL_NAMES = frozenset(
     {
         "glm-5.3-flash-high",
+        "glm-5.3-flash-new-high",
         "glm-5.3-flash-quark-mxfp4",
     }
 )

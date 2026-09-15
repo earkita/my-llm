@@ -99,15 +99,51 @@ def _canonical_sha256(payload: dict[str, Any]) -> str:
 
 
 def _profile_path(repo_root: Path, value: str) -> Path:
-    candidate = Path(value)
-    if candidate.suffix == ".json" or candidate.is_absolute() or "/" in value:
-        path = candidate if candidate.is_absolute() else repo_root / candidate
+    candidate = Path(value).expanduser()
+    if not candidate.suffix:
+        candidate = candidate.with_suffix(".json")
+    if candidate.is_absolute():
+        path = candidate
+    elif candidate.parent == Path("."):
+        path = repo_root / "profiles" / "production" / candidate
+    elif candidate.parts[0] == "profiles":
+        path = repo_root / candidate
     else:
-        path = repo_root / "profiles" / "production" / f"{value}.json"
+        path = repo_root / "profiles" / candidate
     path = path.resolve()
     if not path.is_file():
         raise RuntimeError(f"profile does not exist: {path}")
     return path
+
+
+def _state_profile_reference(
+    repo_root: Path, routing_state: dict[str, Any]
+) -> str:
+    profile_path = routing_state.get("profile_path")
+    if isinstance(profile_path, str) and profile_path:
+        return profile_path
+    profile_name = routing_state.get("profile")
+    if not isinstance(profile_name, str) or not profile_name:
+        raise RuntimeError("LiteLLM state does not identify its active profile")
+    production_name = Path(profile_name)
+    if not production_name.suffix:
+        production_name = production_name.with_suffix(".json")
+    production_path = (
+        repo_root / "profiles" / "production" / production_name
+    ).resolve()
+    if production_path.is_file():
+        return profile_name
+    runtime_state_path = repo_root / ".runtime" / "service.json"
+    if runtime_state_path.is_file():
+        runtime_state = _load_json(runtime_state_path)
+        runtime_profile_path = runtime_state.get("profile_path")
+        if (
+            runtime_state.get("profile") == profile_name
+            and isinstance(runtime_profile_path, str)
+            and runtime_profile_path
+        ):
+            return runtime_profile_path
+    return profile_name
 
 
 def _resolve_component_profile(
@@ -144,6 +180,7 @@ def resolve_target(
     component: str,
     *,
     require_active: bool,
+    runtime_mode: str | None = None,
 ) -> Target:
     requested_path = _profile_path(repo_root, profile_name)
     requested = _load_json(requested_path)
@@ -158,6 +195,10 @@ def resolve_target(
     runtime = profile.get("runtime", {})
     if not isinstance(model, dict) or not isinstance(runtime, dict):
         raise RuntimeError("profile must embed model and runtime objects")
+    if runtime_mode is not None:
+        from r9700.config import activate_runtime_mode
+
+        runtime = activate_runtime_mode(model, runtime, runtime_mode)
     if runtime.get("recipe") is None:
         raise RuntimeError("profile runtime has no recipe")
     state: dict[str, Any] = {}
@@ -166,6 +207,7 @@ def resolve_target(
         expected = {
             "model": model.get("name"),
             "runtime": runtime.get("name"),
+            "runtime_mode": runtime.get("active_experimental_mode"),
             "recipe": runtime.get("recipe"),
             "runtime_profile_sha256": _canonical_sha256(runtime),
         }
@@ -232,9 +274,12 @@ def resolve_alias_target(
         else gateway_state_path
     )
     routing_state = _load_json(routing_state_path)
-    profile_name = routing_state.get("profile")
+    profile_reference = _state_profile_reference(repo_root, routing_state)
+    profile_path = _profile_path(repo_root, profile_reference)
+    profile = _load_json(profile_path)
+    profile_name = profile.get("name")
     if not isinstance(profile_name, str) or not profile_name:
-        raise RuntimeError("LiteLLM state does not identify its active profile")
+        raise RuntimeError(f"profile has no valid name: {profile_path}")
     if requested_profile is not None:
         requested_name = _load_json(_profile_path(repo_root, requested_profile)).get(
             "name"
@@ -249,7 +294,6 @@ def resolve_alias_target(
             raise RuntimeError(
                 f"{routing_state_path} does not point to a live process"
             )
-    profile = _load_json(_profile_path(repo_root, profile_name))
     active_aliases = profile.get("stack", {}).get("litellm_aliases", [])
     if alias not in active_aliases:
         raise RuntimeError(
@@ -265,7 +309,7 @@ def resolve_alias_target(
         if alias in worker_aliases:
             component = "worker-pool"
     target = resolve_target(
-        repo_root, profile_name, component, require_active=require_active
+        repo_root, str(profile_path), component, require_active=require_active
     )
     if access_mode != "litellm":
         return replace(target, access_mode=access_mode, alias=alias)
@@ -438,7 +482,13 @@ def _selected_scenarios(component: str, values: list[str] | None) -> list[Scenar
 
 
 def _apply_overrides(args: argparse.Namespace, scenarios: list[Scenario]) -> list[Scenario]:
-    overrides = (args.input_tokens, args.output_tokens, args.requests, args.concurrency)
+    overrides = (
+        args.input_tokens,
+        args.output_tokens,
+        args.requests,
+        args.concurrency,
+        args.warmups,
+    )
     if any(value is not None for value in overrides) and len(scenarios) != 1:
         raise RuntimeError(
             "dimension overrides require exactly one explicit --scenario"
@@ -458,6 +508,7 @@ def _apply_overrides(args: argparse.Namespace, scenarios: list[Scenario]) -> lis
             output_tokens=selected(args.output_tokens, scenario.output_tokens),
             requests=selected(args.requests, scenario.requests),
             concurrency=selected(args.concurrency, scenario.concurrency),
+            warmups=selected(args.warmups, scenario.warmups),
         )
     ]
 
@@ -473,6 +524,8 @@ def validate_scenario(
     )
     if any(value < 1 for value in dimensions):
         raise RuntimeError(f"invalid dimensions for scenario {scenario.name}")
+    if scenario.warmups < 0:
+        raise RuntimeError(f"invalid warmup count for scenario {scenario.name}")
     if scenario.input_tokens + scenario.output_tokens > target.max_model_len:
         raise RuntimeError(
             f"scenario {scenario.name} exceeds context {target.max_model_len}"
@@ -496,6 +549,8 @@ def build_command(
     scenario: Scenario,
     output_dir: Path,
     worker_rank: int | None,
+    *,
+    skip_ready_check: bool = False,
 ) -> list[str]:
     via_litellm = target.access_mode == "litellm"
     raw_engine = target.access_mode == "raw"
@@ -533,7 +588,7 @@ def build_command(
         "--metric-percentiles",
         "50,90,95,99",
         "--ready-check-timeout-sec",
-        "30",
+        "0" if skip_ready_check else "30",
         "--save-result",
         "--save-detailed",
         "--result-dir",
@@ -676,6 +731,7 @@ def print_summary(rows: list[dict[str, Any]]) -> None:
         "TPOT ms",
         "DECODE tok/s",
         "OUT tok/s",
+        "SPEC %",
     )
     rendered = []
     for row in rows:
@@ -693,6 +749,7 @@ def print_summary(rows: list[dict[str, Any]]) -> None:
                 _number(row["tpot_mean_ms"], 2),
                 _number(row["decode_tokens_per_second"]),
                 _number(row["output_throughput_tokens_per_second"]),
+                _number(row["spec_decode_acceptance_percent"], 1),
             )
         )
     widths = [
@@ -790,6 +847,8 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--output-tokens", type=int)
     result.add_argument("--requests", type=int)
     result.add_argument("--concurrency", type=int)
+    result.add_argument("--warmups", type=int)
+    result.add_argument("--runtime-mode")
     result.add_argument(
         "--seed-base",
         type=int,
@@ -797,6 +856,14 @@ def parser() -> argparse.ArgumentParser:
     )
     result.add_argument("--output-dir", type=Path)
     result.add_argument("--dry-run", action="store_true")
+    result.add_argument(
+        "--skip-ready-check",
+        action="store_true",
+        help=(
+            "skip vLLM Bench's initial prompt probe after readiness was "
+            "validated separately; avoids priming automatic prefix caching"
+        ),
+    )
     result.add_argument("--overwrite", action="store_true")
     return result
 
@@ -811,10 +878,8 @@ def main(argv: list[str] | None = None) -> int:
             endpoint = gateway_state.get("probe_url") or gateway_state.get("url")
             if not isinstance(endpoint, str) or not endpoint:
                 raise RuntimeError("LiteLLM state does not contain a usable URL")
-            profile_name = gateway_state.get("profile")
-            if not isinstance(profile_name, str) or not profile_name:
-                raise RuntimeError("LiteLLM state does not identify its active profile")
-            profile = _load_json(_profile_path(REPO_ROOT, profile_name))
+            profile_reference = _state_profile_reference(REPO_ROOT, gateway_state)
+            profile = _load_json(_profile_path(REPO_ROOT, profile_reference))
             configured = set(profile.get("stack", {}).get("litellm_aliases", []))
             exposed = set(
                 _models(endpoint.rstrip("/"), _litellm_key(REPO_ROOT))
@@ -823,6 +888,10 @@ def main(argv: list[str] | None = None) -> int:
                 print(model)
             return 0
         if args.litellm_model:
+            if args.runtime_mode is not None:
+                raise RuntimeError(
+                    "--runtime-mode is only valid with an explicit profile target"
+                )
             access_mode = "raw" if args.raw else "direct" if args.direct else "litellm"
             target = resolve_alias_target(
                 REPO_ROOT,
@@ -854,7 +923,10 @@ def main(argv: list[str] | None = None) -> int:
                 args.profile,
                 args.component or "primary",
                 require_active=not args.dry_run,
+                runtime_mode=args.runtime_mode,
             )
+            if args.raw:
+                target = replace(target, access_mode="raw")
         if target.component != "worker-pool" and args.worker_rank != 0:
             raise RuntimeError("--worker-rank is only valid for worker-pool")
         scenarios = _apply_overrides(
@@ -912,7 +984,14 @@ def main(argv: list[str] | None = None) -> int:
             commands.append(
                 (
                     scenario,
-                    build_command(vllm, target, scenario, output_dir, worker_rank),
+                    build_command(
+                        vllm,
+                        target,
+                        scenario,
+                        output_dir,
+                        worker_rank,
+                        skip_ready_check=args.skip_ready_check,
+                    ),
                 )
             )
         if args.dry_run:

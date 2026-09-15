@@ -57,6 +57,28 @@ class BenchmarkVllmProfileTests(unittest.TestCase):
             request_overrides={},
         )
 
+    def test_profile_path_defaults_to_production_and_accepts_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            production = root / "profiles" / "production"
+            development = root / "profiles" / "dev"
+            production.mkdir(parents=True)
+            development.mkdir(parents=True)
+            production_profile = production / "main.json"
+            development_profile = development / "experiment.json"
+            production_profile.write_text("{}")
+            development_profile.write_text("{}")
+
+            self.assertEqual(BENCHMARK._profile_path(root, "main"), production_profile)
+            self.assertEqual(
+                BENCHMARK._profile_path(root, "dev/experiment"),
+                development_profile,
+            )
+            self.assertEqual(
+                BENCHMARK._profile_path(root, "profiles/dev/experiment.json"),
+                development_profile,
+            )
+
     def test_worker_command_pins_single_rank(self) -> None:
         scenario = BENCHMARK.SCENARIOS["decode"]
         command = BENCHMARK.build_command(
@@ -118,6 +140,40 @@ class BenchmarkVllmProfileTests(unittest.TestCase):
         self.assertIn("--ignore-eos", command)
         temperature = command.index("--temperature")
         self.assertEqual(command[temperature + 1], "0")
+
+    def test_ready_check_can_be_skipped_after_external_api_gate(self) -> None:
+        command = BENCHMARK.build_command(
+            Path("/runtime/bin/vllm"),
+            BENCHMARK.replace(self.target(), access_mode="raw"),
+            BENCHMARK.SCENARIOS["decode"],
+            Path("/results"),
+            0,
+            skip_ready_check=True,
+        )
+
+        timeout = command.index("--ready-check-timeout-sec")
+        self.assertEqual(command[timeout + 1], "0")
+
+    def test_scenario_overrides_include_warmups(self) -> None:
+        args = BENCHMARK.parser().parse_args(
+            [
+                "--profile",
+                "example",
+                "--scenario",
+                "decode",
+                "--requests",
+                "3",
+                "--warmups",
+                "0",
+            ]
+        )
+
+        scenarios = BENCHMARK._apply_overrides(
+            args, [BENCHMARK.SCENARIOS["decode"]]
+        )
+
+        self.assertEqual(scenarios[0].requests, 3)
+        self.assertEqual(scenarios[0].warmups, 0)
 
     def test_direct_chat_command_applies_alias_parameters(self) -> None:
         target = BENCHMARK.replace(
@@ -345,6 +401,60 @@ class BenchmarkVllmProfileTests(unittest.TestCase):
             self.assertEqual(direct.access_mode, "direct")
             self.assertEqual(raw.endpoint, "http://127.0.0.1:8100")
             self.assertEqual(raw.access_mode, "raw")
+
+    def test_litellm_alias_resolves_active_development_profile_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            development = root / "profiles" / "dev"
+            runtime = root / ".runtime"
+            (runtime / "litellm").mkdir(parents=True)
+            development.mkdir(parents=True)
+            profile_path = development / "experiment.json"
+            profile = {
+                "name": "experiment",
+                "model": {
+                    "name": "model-internal",
+                    "served_name": "model-served",
+                    "default_directory": "/models/experiment",
+                    "revision": "revision",
+                },
+                "runtime": {
+                    "name": "experiment-runtime",
+                    "recipe": "vllm_recipe",
+                    "limits": {"max_model_len": 1000, "max_num_seqs": 1},
+                    "parallel": {"data": 1},
+                    "cache": {"dtype": "fp8", "prefix_cache": False},
+                },
+                "stack": {"litellm_aliases": ["experiment-high"]},
+            }
+            profile_path.write_text(json.dumps(profile))
+            (runtime / "service.json").write_text(
+                json.dumps(
+                    {
+                        "profile": "experiment",
+                        "profile_path": str(profile_path),
+                    }
+                )
+            )
+            (runtime / "litellm" / "service.json").write_text(
+                json.dumps(
+                    {
+                        "profile": "experiment",
+                        "probe_url": "http://127.0.0.1:4000",
+                    }
+                )
+            )
+
+            target = BENCHMARK.resolve_alias_target(
+                root,
+                "experiment-high",
+                access_mode="litellm",
+                require_active=False,
+            )
+
+            self.assertEqual(target.requested_profile, "experiment")
+            self.assertEqual(target.profile_path, profile_path)
+            self.assertEqual(target.served_name, "experiment-high")
 
     def test_direct_alias_parameters_exclude_routing_and_secrets(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

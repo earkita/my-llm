@@ -331,7 +331,7 @@ def start(
             service_wait(timeout=ready_timeout)
         _run(
             _stack_start_command(
-                name,
+                profile_name,
                 ready_timeout=ready_timeout,
                 proxy_ready_timeout=proxy_ready_timeout,
                 runtime_mode=runtime_mode,
@@ -348,7 +348,7 @@ def start(
         return
     _run(
         _start_command(
-            name,
+            profile_name,
             host=host,
             port=port,
             ready_timeout=ready_timeout,
@@ -442,7 +442,7 @@ def switch(
                 "configure TARGET_* and LITELLM_* in .env for the full stack"
             )
         _stack_start_command(
-            name,
+            profile_name,
             ready_timeout=ready_timeout,
             proxy_ready_timeout=proxy_ready_timeout,
             runtime_mode=runtime_mode,
@@ -455,7 +455,7 @@ def switch(
         )
     else:
         _start_command(
-            name,
+            profile_name,
             host=host,
             port=port,
             ready_timeout=ready_timeout,
@@ -478,7 +478,7 @@ def switch(
     )
     if state and matches_running and with_litellm:
         start(
-            name,
+            profile_name,
             ready_timeout=ready_timeout,
             proxy_ready_timeout=proxy_ready_timeout,
             with_litellm=True,
@@ -508,7 +508,7 @@ def switch(
         )
 
     start(
-        name,
+        profile_name,
         host=host,
         port=port,
         ready_timeout=ready_timeout,

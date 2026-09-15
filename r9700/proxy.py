@@ -178,9 +178,26 @@ def _active_profile_name(runtime_state: dict[str, Any]) -> str:
     )
 
 
-def _active_served_model(runtime_state: dict[str, Any]) -> tuple[str, str]:
+def _active_profile(runtime_state: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     profile_name = _active_profile_name(runtime_state)
-    profile = load_profile(profile_name)
+    profile_reference = runtime_state.get("profile_path", profile_name)
+    if not isinstance(profile_reference, str) or not profile_reference:
+        profile_reference = profile_name
+    profile = load_profile(profile_reference)
+    if profile["name"] != profile_name:
+        raise ConfigurationError(
+            "managed runtime profile path resolves to a different deployment"
+        )
+    expected_sha256 = runtime_state.get("profile_sha256")
+    if expected_sha256 and profile["_sha256"] != expected_sha256:
+        raise ConfigurationError(
+            "managed runtime profile changed after the service was started"
+        )
+    return profile_name, profile
+
+
+def _active_served_model(runtime_state: dict[str, Any]) -> tuple[str, str]:
+    profile_name, profile = _active_profile(runtime_state)
     served_name = profile["model"]["served_name"]
     return profile_name, served_name
 
@@ -257,7 +274,9 @@ def start(
         STATE_PATH.unlink(missing_ok=True)
     if not _backend_healthy(backend_url):
         raise ConfigurationError(f"inference backend is not healthy: {backend_url}")
-    active_profile, served_model = _active_served_model(runtime_managed_state())
+    runtime_state = runtime_managed_state()
+    active_profile, active_profile_config = _active_profile(runtime_state)
+    served_model = active_profile_config["model"]["served_name"]
     anthropic_model = f"anthropic/{served_model}"
     openai_model = f"hosted_vllm/{served_model}"
     if not _port_available(host, port):
@@ -309,6 +328,8 @@ def start(
         "probe_url": f"http://127.0.0.1:{port}" if host == "0.0.0.0" else f"http://{host}:{port}",
         "backend_url": backend_url,
         "profile": active_profile,
+        "profile_path": str(active_profile_config["_path"]),
+        "profile_sha256": active_profile_config["_sha256"],
         "anthropic_model": anthropic_model,
         "openai_model": openai_model,
         "config_sha256": _config_sha256(),
@@ -393,8 +414,7 @@ def test(*, timeout: float = 120) -> None:
     dotenv = read_dotenv()
     key = _master_key(dotenv)
     runtime_state = runtime_managed_state()
-    active_profile = _active_profile_name(runtime_state)
-    profile = load_profile(active_profile)
+    active_profile, profile = _active_profile(runtime_state)
     active_aliases = profile["stack"]["litellm_aliases"]
     test_model = profile["stack"]["claude_settings"]["env"]["ANTHROPIC_MODEL"]
     try:

@@ -13,6 +13,9 @@ assert SPEC is not None and SPEC.loader is not None
 MONITOR = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MONITOR)
 
+from r9700.config import ConfigurationError
+from r9700.live_throughput import SPARSE_GAUGE_METRICS
+
 
 def metrics(**overrides: float) -> dict[str, float]:
     values = {key: 0.0 for key in MONITOR.METRICS}
@@ -187,6 +190,34 @@ class LiveDecodeRateTests(unittest.TestCase):
 
 
 class MultiEngineMetricTests(unittest.TestCase):
+    def test_parser_defaults_declared_empty_idle_gauges_to_zero(self) -> None:
+        lines = [
+            f"# HELP {MONITOR.METRICS[key]} idle gauge"
+            for key in SPARSE_GAUGE_METRICS
+        ]
+        for engine in ("0", "1"):
+            for key, name in MONITOR.METRICS.items():
+                if key not in SPARSE_GAUGE_METRICS:
+                    lines.append(f'{name}{{engine="{engine}"}} 0.0')
+
+        parsed = MONITOR._parse_metrics("\n".join(lines))
+
+        for engine in ("0", "1"):
+            for key in SPARSE_GAUGE_METRICS:
+                self.assertEqual(parsed[engine][key], 0.0)
+
+    def test_parser_still_rejects_an_undeclared_required_metric(self) -> None:
+        lines = []
+        for key, name in MONITOR.METRICS.items():
+            if key != "prompt_tokens":
+                lines.append(f'{name}{{engine="0"}} 0.0')
+
+        with self.assertRaisesRegex(
+            ConfigurationError,
+            "missing metrics: prompt_tokens",
+        ):
+            MONITOR._parse_metrics("\n".join(lines))
+
     def test_parser_keeps_worker_engine_counters_separate(self) -> None:
         lines = []
         all_metrics = {**MONITOR.METRICS, **MONITOR.OPTIONAL_METRICS}

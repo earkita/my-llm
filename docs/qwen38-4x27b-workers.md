@@ -111,9 +111,11 @@ głównego stosu nie zastąpiło ani nie osierociło puli dodatkowej.
 Po uruchomieniu puli i kontrolowanym restarcie LiteLLM dostępne są aliasy:
 
 - `qwen3.8-27b-workers-thinking` — ustawienia reasoning z karty AMD;
+- `qwen3.8-27b-workers-low` — thinking z `reasoning_effort=low`, przeznaczony
+  do szybszych zadań implementacyjnych;
 - `qwen3.8-27b-workers-fast` — non-thinking z temperaturą 0.7 i `top_p=0.8`.
 
-Oba wskazują `http://127.0.0.1:8100/v1`. Żądania Claude Code z effort
+Wszystkie wskazują `http://127.0.0.1:8100/v1`. Żądania Claude Code z effort
 `high` lub `max` są normalizowane do obsługiwanego przez Qwen `xhigh`.
 Szablon znajduje się w
 `templates/.claude/qwen38-4x27b/qwen38-4x27b.settings.local.json`.

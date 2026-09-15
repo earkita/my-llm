@@ -9,15 +9,16 @@ driver="$script_dir/benchmark-vllm-profile.py"
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/bench MODEL [SCENARIO] [--direct|--raw] [OPTIONS]
+  scripts/bench TARGET [SCENARIO] [--direct|--raw] [OPTIONS]
   scripts/bench --list
 
-MODEL is an alias exposed by the active LiteLLM profile. The default measures
-the production LiteLLM path. --direct sends the same workload dimensions and
-alias sampling parameters through vLLM's OpenAI Chat API. For an
-Anthropic-backed alias this bypasses the proxy but does not duplicate the
-Anthropic provider protocol. --raw measures greedy /v1/completions with
-ignore_eos for fixed-length engine throughput.
+TARGET may be an alias exposed by the active LiteLLM profile or a deployment
+profile. A bare profile name resolves below profiles/production; directory
+forms such as dev/MODEL and profiles/dev/MODEL are also accepted, with an
+optional .json suffix. Alias targets use LiteLLM by default. Profile targets
+use vLLM's OpenAI Chat API directly. --direct bypasses LiteLLM for an alias
+while preserving its sampling parameters. --raw measures greedy
+/v1/completions with ignore_eos for fixed-length engine throughput.
 
 Scenarios: all (default), interactive, prefill, decode, prefix, pool
 
@@ -26,6 +27,8 @@ Examples:
   scripts/bench qwen3.8-27b-workers-fast prefill
   scripts/bench qwen3.8-27b-workers-fast decode --direct --worker-rank 2
   scripts/bench glm-5.3-flash-high decode --raw
+  scripts/bench glm53-flash decode --raw
+  scripts/bench dev/glm53-flash-new decode --raw
 EOF
 }
 
@@ -47,7 +50,7 @@ if [[ $1 == --list ]]; then
   exec "$python" "$driver" --list-litellm-models
 fi
 
-model=$1
+target=$1
 shift
 scenario=all
 if (($# > 0)) && [[ $1 != -* ]]; then
@@ -55,7 +58,14 @@ if (($# > 0)) && [[ $1 != -* ]]; then
   shift
 fi
 
+target_without_suffix=${target%.json}
+if [[ $target == /* || $target == */* || -f "$repo_root/profiles/production/${target_without_suffix}.json" ]]; then
+  selector=(--profile "$target")
+else
+  selector=(--litellm-model "$target")
+fi
+
 exec "$python" "$driver" \
-  --litellm-model "$model" \
+  "${selector[@]}" \
   --scenario "$scenario" \
   "$@"

@@ -180,9 +180,10 @@
     }
   },
   "stack": {
-    "description": "Qwen3.8-27B DP4 worker pool with thinking and fast LiteLLM routes",
+    "description": "Qwen3.8-27B DP4 worker pool with thinking, low-effort, and fast LiteLLM routes",
     "litellm_aliases": [
       "qwen3.8-27b-workers-thinking",
+      "qwen3.8-27b-workers-low",
       "qwen3.8-27b-workers-fast"
     ],
     "claude_settings": {

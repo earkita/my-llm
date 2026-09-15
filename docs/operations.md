@@ -9,7 +9,7 @@
 ./run install --profile deepseek-v4-flash
 ```
 
-Analogicznie użyj `glm53-flash` albo `qwen38-flash`.
+Analogicznie użyj `glm53-flash`, `glm53-flash-new` albo `qwen38-flash`.
 Dry-run sprawdza hashe constraints i patchy bez pobierania źródeł.
 
 Przed instalacją proxy ustaw niepusty, losowy `LITELLM_MASTER_KEY` w lokalnym
@@ -36,6 +36,11 @@ Plikiem draftera jest
 `/mnt/ai/models/glm/GLM-5.3-Flash-DFlash2-HF-bf582e4/model.safetensors`.
 Download pobiera go automatycznie, a adopt i start wymagają poprawnego rozmiaru
 oraz SHA-256.
+
+`glm53-flash-new` przypina osobny checkpoint
+`/mnt/ai/models/glm/GLM-5.3-Flash-W4A16-MTP`, receptę v0.31 oraz ten sam
+zweryfikowany artefakt DFlash2. Udostępnia 256K przez osobny alias LiteLLM
+`glm-5.3-flash-new-high`.
 
 ## Start i stop
 
@@ -99,6 +104,7 @@ zweryfikowanym checkpointem:
 
 ```bash
 ./run launcher start glm53-flash
+./run launcher start glm53-flash-new
 ./run launcher start glm53-flash-uncensored
 ```
 

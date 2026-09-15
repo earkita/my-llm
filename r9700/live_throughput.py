@@ -39,6 +39,9 @@ OPTIONAL_METRICS = {
     "spec_draft_tokens": "vllm:spec_decode_num_draft_tokens_total",
     "spec_accepted_tokens": "vllm:spec_decode_num_accepted_tokens_total",
 }
+SPARSE_GAUGE_METRICS = frozenset(
+    {"running_requests", "waiting_requests", "kv_cache_fraction"}
+)
 
 
 @dataclass(frozen=True)
@@ -82,8 +85,14 @@ def _cache_capacity(path: Path) -> int:
 
 def _parse_metrics(text: str) -> dict[str, dict[str, float]]:
     names = {value: key for key, value in {**METRICS, **OPTIONAL_METRICS}.items()}
+    declared: set[str] = set()
     engines: dict[str, dict[str, float]] = {}
     for line in text.splitlines():
+        if line.startswith("# HELP "):
+            fields = line.split(None, 3)
+            if len(fields) >= 3 and (key := names.get(fields[2])) is not None:
+                declared.add(key)
+            continue
         if not line.startswith("vllm:") or line.startswith("#"):
             continue
         try:
@@ -106,6 +115,8 @@ def _parse_metrics(text: str) -> dict[str, dict[str, float]]:
     if not engines:
         raise ConfigurationError("vLLM metrics contain no engine samples")
     for engine, values in engines.items():
+        for key in SPARSE_GAUGE_METRICS & declared:
+            values.setdefault(key, 0.0)
         missing = sorted(set(METRICS) - set(values))
         if missing:
             raise ConfigurationError(
