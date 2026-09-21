@@ -13,7 +13,7 @@ DEVELOPMENT_PROFILE_ROOT = ROOT / "profiles" / "dev"
 DEFAULT_PROFILE = "glm53-flash"
 DEFAULT_MODEL_PROFILE = DEFAULT_PROFILE
 DEFAULT_RUNTIME_PROFILE = DEFAULT_PROFILE
-DEFAULT_STACK_PRESET = "glm53-flash"
+DEFAULT_STACK_PRESET = DEFAULT_PROFILE
 
 
 class ConfigurationError(RuntimeError):
@@ -540,6 +540,24 @@ def validate_runtime(profile: dict[str, Any]) -> None:
     cache = profile["cache"]
     if cache.get("cpu_offload_gb", 0) != 0 or "weight_offload" in profile:
         raise ConfigurationError("production profiles cannot use CPU offload")
+    hash_algorithm = cache.get("prefix_caching_hash_algo")
+    if hash_algorithm is not None:
+        supported_hash_algorithms = {
+            "sha256",
+            "sha256_cbor",
+            "xxhash",
+            "xxhash_cbor",
+        }
+        if backend != "vllm" or hash_algorithm not in supported_hash_algorithms:
+            raise ConfigurationError(
+                "cache.prefix_caching_hash_algo must be one of "
+                + ", ".join(sorted(supported_hash_algorithms))
+                + " for vLLM"
+            )
+        if not cache.get("prefix_cache"):
+            raise ConfigurationError(
+                "cache.prefix_caching_hash_algo requires prefix_cache"
+            )
     retention_interval = cache.get("prefix_cache_retention_interval")
     if retention_interval is not None:
         if not isinstance(retention_interval, int) or retention_interval < 1:

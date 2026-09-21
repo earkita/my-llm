@@ -8,7 +8,7 @@ client. Results with a different endpoint or cache state are not compared.
 
 The selected 256K/4096 configuration is promoted without experimental modes as
 the production profile `glm53-flash-new`. Its dedicated LiteLLM and Claude Code
-alias is `glm-5.3-flash-new-high`.
+alias is `glm-5.3-flash-high`.
 
 ## Runtime selection
 

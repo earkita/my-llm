@@ -2,7 +2,7 @@
   "schema_version": 1,
   "name": "glm53-flash-new",
   "status": "development",
-  "description": "Development GLM-5.3-Flash W4A16 INT4 smoke profile for eight R9700 GPUs",
+  "description": "Development GLM-5.3-Flash W4A16 v0.31 target-only comparator for eight R9700 GPUs",
   "model": {
     "schema_version": 1,
     "name": "glm53-flash-w4a16-mtp",
@@ -51,10 +51,10 @@
   },
   "runtime": {
     "schema_version": 1,
-    "name": "glm53-flash-w4a16-rocm10-8xr9700-tp8-target-32k",
+    "name": "glm53-flash-w4a16-rocm10-8xr9700-tp8-target-only-fp8kv-256k-v031-graphs",
     "status": "diagnostic-only",
     "recipe": "vllm_glm53flashrocm10_v0.31",
-    "description": "Initial target-only 32K W4A16 qualification with Triton INT4 MoE on gfx1201",
+    "description": "Matched v0.31 target-only comparator with FP8 KV, automatic prefix caching, 256K context, and capture-size-1 graphs",
     "required_model_family": "glm5next",
     "required_patches": [
       "0001",
@@ -118,22 +118,23 @@
       "disable_custom_all_reduce": true
     },
     "limits": {
-      "max_model_len": 32768,
+      "max_model_len": 262144,
       "max_num_seqs": 1,
       "max_num_batched_tokens": 4096,
       "gpu_memory_utilization": 0.95,
-      "kv_cache_memory_bytes": 1000000000
+      "kv_cache_memory_bytes": 2200000000
     },
     "cache": {
       "dtype": "fp8",
       "block_size": 16,
-      "prefix_cache": false,
+      "prefix_cache": true,
+      "prefix_cache_retention_interval": 1280,
       "cpu_offload_gb": 0
     },
     "enable_prompt_tokens_details": true,
     "scheduler": {
       "async": false,
-      "enforce_eager": true
+      "enforce_eager": false
     },
     "multimodal": {
       "language_model_only": true
@@ -157,6 +158,11 @@
     "attention_backend": "ROCM_AITER_MLA_SPARSE",
     "moe_backend": "triton",
     "linear_backend": "auto",
+    "compilation_config": {
+      "cudagraph_mode": "FULL_AND_PIECEWISE",
+      "cudagraph_capture_sizes": [1],
+      "cudagraph_num_of_warmups": 1
+    },
     "environment": {
       "VLLM_TARGET_DEVICE": "rocm",
       "VLLM_USE_V2_MODEL_RUNNER": "1",
@@ -166,6 +172,7 @@
       "VLLM_ROCM_USE_AITER_FP4_ASM_GEMM": "0",
       "VLLM_DISABLE_PYNCCL": "1",
       "VLLM_KV_CACHE_LAYOUT": "LBHNC",
+      "VLLM_USE_BREAKABLE_CUDAGRAPH": "1",
       "SAFETENSORS_FAST_GPU": "1",
       "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
       "ROCBLAS_USE_HIPBLASLT": "0"
@@ -198,21 +205,22 @@
         "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-5.3-flash-high",
         "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.3-flash-high",
         "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.3-flash-high",
+        "ANTHROPIC_DEFAULT_FABLE_MODEL": "glm-5.3-flash-high",
         "DISABLE_PROMPT_CACHING": "1",
         "CLAUDE_CODE_TODO_REMINDER_MODE": "off",
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
         "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
-        "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "32768",
-        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "32768",
+        "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "262144",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "262144",
         "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "90"
       }
     }
   },
   "verification": {
-    "scope": "gfx1201-glm53-w4a16-development",
+    "scope": "gfx1201-glm53-w4a16-v031-target-only-comparator",
     "verified_context": 0,
     "verified_on": null,
     "best_runtime_mode": null,
-    "notes": "Not qualified. First gate is target-only loading and API correctness at 32K with Triton W4A16 MoE. MTP, DFlash2, Vision, prefix caching, expert parallelism, and longer context remain disabled until the base path passes."
+    "notes": "Diagnostic-only matched comparator for measuring v0.31 target-only against the minimal v0.32 target-graphs runtime."
   }
 }

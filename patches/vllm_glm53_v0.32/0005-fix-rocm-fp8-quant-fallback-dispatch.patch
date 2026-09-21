@@ -1,0 +1,61 @@
+diff --git a/tests/kernels/quantization/test_input_quant_fp8.py b/tests/kernels/quantization/test_input_quant_fp8.py
+new file mode 100644
+index 0000000..1fead2d
+--- /dev/null
++++ b/tests/kernels/quantization/test_input_quant_fp8.py
+@@ -0,0 +1,38 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
++
++import torch
++
++from vllm.model_executor.layers.quantization.input_quant_fp8 import QuantFP8
++from vllm.model_executor.layers.quantization.utils.quant_utils import GroupShape
++
++
++def test_hip_fallback_does_not_dispatch_to_subclass_forward_cuda(
++    monkeypatch, default_vllm_config
++) -> None:
++    calls = []
++
++    def base_forward_cuda(self, x, scale=None, scale_ub=None, use_triton=False):
++        calls.append((x, scale, scale_ub, use_triton))
++        return x, scale
++
++    monkeypatch.setattr(QuantFP8, "forward_cuda", base_forward_cuda)
++
++    class DifferentSignatureQuant(QuantFP8):
++        def forward_cuda(self, lhs, rhs, scale, scale_ub=None):
++            raise AssertionError("HIP fallback dispatched to the subclass override")
++
++    quant = DifferentSignatureQuant(
++        static=True,
++        group_shape=GroupShape.PER_TENSOR,
++        compile_native=False,
++    )
++    quant.use_aiter = False
++    x = torch.ones((2, 4), dtype=torch.bfloat16)
++    scale = torch.ones((), dtype=torch.float32)
++
++    output, output_scale = QuantFP8.forward_hip(quant, x, scale)
++
++    assert output is x
++    assert output_scale is scale
++    assert calls == [(x, scale, None, False)]
+diff --git a/vllm/model_executor/layers/quantization/input_quant_fp8.py b/vllm/model_executor/layers/quantization/input_quant_fp8.py
+index 2d9cf62..eed33a3 100644
+--- a/vllm/model_executor/layers/quantization/input_quant_fp8.py
++++ b/vllm/model_executor/layers/quantization/input_quant_fp8.py
+@@ -156,8 +156,10 @@ class QuantFP8(CustomOp):
+         if use_aiter_per_token_quant:
+             return rocm_aiter_ops.per_token_quant(x, _FP8_DTYPE, scale)
+ 
+-        # Fallback to CUDA implementation
+-        return self.forward_cuda(x, scale, scale_ub)
++        # Call the base implementation explicitly: subclasses may override
++        # forward_cuda with a different signature (for example MLA's
++        # concat-and-quantize op).
++        return QuantFP8.forward_cuda(self, x, scale, scale_ub)
+ 
+     def forward_xpu(
+         self,

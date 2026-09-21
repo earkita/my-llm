@@ -408,6 +408,166 @@
           }
         }
       },
+      "dflash-full-piecewise-256k-cache-xxhash-3p2g": {
+        "status": "diagnostic-only",
+        "runtime_name": "glm53-flash-w4a16-rocm10-8xr9700-tp8-dflash2-k4-fp8kv-apc-256k-full-piecewise-cache-xxhash-3p2g",
+        "reason": "Production-matched prefix-cache A/B using xxHash and a 3.2 GB per-GPU KV reservation to retain more 256K prompt branches.",
+        "runtime_overrides": {
+          "limits": {
+            "max_model_len": 262144,
+            "max_num_seqs": 1,
+            "max_num_batched_tokens": 4096,
+            "gpu_memory_utilization": 0.95,
+            "kv_cache_memory_bytes": 3200000000
+          },
+          "cache": {
+            "dtype": "fp8",
+            "block_size": 16,
+            "prefix_cache": true,
+            "prefix_caching_hash_algo": "xxhash",
+            "prefix_cache_retention_interval": 1280,
+            "cpu_offload_gb": 0
+          },
+          "scheduler": {
+            "async": false,
+            "enforce_eager": false
+          },
+          "speculative_config": {
+            "model_artifact": "dflash2-drafter",
+            "method": "dflash",
+            "num_speculative_tokens": 4,
+            "draft_tensor_parallel_size": 8,
+            "attention_backend": "TRITON_ATTN",
+            "kv_cache_dtype": "fp8",
+            "enforce_eager": false
+          },
+          "compilation_config": {
+            "cudagraph_mode": "FULL_AND_PIECEWISE",
+            "cudagraph_capture_sizes": [1, 2, 3, 4, 5],
+            "cudagraph_num_of_warmups": 1
+          },
+          "environment": {
+            "VLLM_TARGET_DEVICE": "rocm",
+            "VLLM_USE_V2_MODEL_RUNNER": "1",
+            "VLLM_ROCM_USE_AITER": "1",
+            "VLLM_ROCM_USE_AITER_FP8BMM": "0",
+            "VLLM_ROCM_USE_AITER_FP4BMM": "0",
+            "VLLM_ROCM_USE_AITER_FP4_ASM_GEMM": "0",
+            "VLLM_DISABLE_PYNCCL": "1",
+            "VLLM_KV_CACHE_LAYOUT": "LBHNC",
+            "VLLM_USE_BREAKABLE_CUDAGRAPH": "1",
+            "SAFETENSORS_FAST_GPU": "1",
+            "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+            "ROCBLAS_USE_HIPBLASLT": "0"
+          }
+        }
+      },
+      "dflash-full-piecewise-256k-moe-tuned": {
+        "status": "diagnostic-only",
+        "runtime_name": "glm53-flash-w4a16-rocm10-8xr9700-tp8-dflash2-k4-fp8kv-apc-256k-full-piecewise-moe-tuned",
+        "reason": "Production-matched 256K comparator using measured gfx1201 W4A16 MoE Triton tile configurations.",
+        "runtime_overrides": {
+          "limits": {
+            "max_model_len": 262144,
+            "max_num_seqs": 1,
+            "max_num_batched_tokens": 4096,
+            "gpu_memory_utilization": 0.95,
+            "kv_cache_memory_bytes": 2200000000
+          },
+          "scheduler": {
+            "async": false,
+            "enforce_eager": false
+          },
+          "speculative_config": {
+            "model_artifact": "dflash2-drafter",
+            "method": "dflash",
+            "num_speculative_tokens": 4,
+            "draft_tensor_parallel_size": 8,
+            "attention_backend": "TRITON_ATTN",
+            "kv_cache_dtype": "fp8",
+            "enforce_eager": false
+          },
+          "compilation_config": {
+            "cudagraph_mode": "FULL_AND_PIECEWISE",
+            "cudagraph_capture_sizes": [1, 2, 3, 4, 5],
+            "cudagraph_num_of_warmups": 1
+          },
+          "environment": {
+            "VLLM_TARGET_DEVICE": "rocm",
+            "VLLM_USE_V2_MODEL_RUNNER": "1",
+            "VLLM_ROCM_USE_AITER": "1",
+            "VLLM_ROCM_USE_AITER_FP8BMM": "0",
+            "VLLM_ROCM_USE_AITER_FP4BMM": "0",
+            "VLLM_ROCM_USE_AITER_FP4_ASM_GEMM": "0",
+            "VLLM_DISABLE_PYNCCL": "1",
+            "VLLM_KV_CACHE_LAYOUT": "LBHNC",
+            "VLLM_USE_BREAKABLE_CUDAGRAPH": "1",
+            "VLLM_TUNED_CONFIG_FOLDER": "tuning/moe/glm53-flash-new",
+            "SAFETENSORS_FAST_GPU": "1",
+            "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+            "ROCBLAS_USE_HIPBLASLT": "0"
+          }
+        }
+      },
+      "dflash-full-piecewise-256k-profiler": {
+        "status": "diagnostic-only",
+        "runtime_name": "glm53-flash-w4a16-rocm10-8xr9700-tp8-dflash2-k4-fp8kv-apc-256k-full-piecewise-profiler",
+        "reason": "Production-matched 256K runtime with launch-time rocprofv3 tracing for controlled kernel captures.",
+        "runtime_overrides": {
+          "limits": {
+            "max_model_len": 262144,
+            "max_num_seqs": 1,
+            "max_num_batched_tokens": 4096,
+            "gpu_memory_utilization": 0.95,
+            "kv_cache_memory_bytes": 2200000000
+          },
+          "scheduler": {
+            "async": false,
+            "enforce_eager": false
+          },
+          "speculative_config": {
+            "model_artifact": "dflash2-drafter",
+            "method": "dflash",
+            "num_speculative_tokens": 4,
+            "draft_tensor_parallel_size": 8,
+            "attention_backend": "TRITON_ATTN",
+            "kv_cache_dtype": "fp8",
+            "enforce_eager": false
+          },
+          "compilation_config": {
+            "cudagraph_mode": "FULL_AND_PIECEWISE",
+            "cudagraph_capture_sizes": [1, 2, 3, 4, 5],
+            "cudagraph_num_of_warmups": 1
+          },
+          "profiling": {
+            "kernel_trace": true,
+            "memory_copy_trace": true,
+            "rccl_trace": true,
+            "stats": true,
+            "signal_handlers": false,
+            "output_path": "logs/profiles/glm53-kernel-tuning/launch-trace-2",
+            "output_file": "glm53-%pid%",
+            "output_format": "csv",
+            "delay_seconds": 240,
+            "duration_seconds": 120,
+            "repeat": 1
+          },
+          "environment": {
+            "VLLM_TARGET_DEVICE": "rocm",
+            "VLLM_USE_V2_MODEL_RUNNER": "1",
+            "VLLM_ROCM_USE_AITER": "1",
+            "VLLM_ROCM_USE_AITER_FP8BMM": "0",
+            "VLLM_ROCM_USE_AITER_FP4BMM": "0",
+            "VLLM_ROCM_USE_AITER_FP4_ASM_GEMM": "0",
+            "VLLM_DISABLE_PYNCCL": "1",
+            "VLLM_KV_CACHE_LAYOUT": "LBHNC",
+            "VLLM_USE_BREAKABLE_CUDAGRAPH": "1",
+            "SAFETENSORS_FAST_GPU": "1",
+            "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+            "ROCBLAS_USE_HIPBLASLT": "0"
+          }
+        }
+      },
       "dflash-full-piecewise-256k-batch8192": {
         "status": "diagnostic-only",
         "runtime_name": "glm53-flash-w4a16-rocm10-8xr9700-tp8-dflash2-k4-fp8kv-apc-256k-full-piecewise-batch8192",
@@ -613,6 +773,7 @@
         "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-5.3-flash-high",
         "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.3-flash-high",
         "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.3-flash-high",
+        "ANTHROPIC_DEFAULT_FABLE_MODEL": "glm-5.3-flash-high",
         "DISABLE_PROMPT_CACHING": "1",
         "CLAUDE_CODE_TODO_REMINDER_MODE": "off",
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",

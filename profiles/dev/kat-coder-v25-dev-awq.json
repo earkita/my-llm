@@ -1,0 +1,229 @@
+{
+  "schema_version": 1,
+  "name": "kat-coder-v25-dev-awq",
+  "status": "development",
+  "description": "Development KAT-Coder-V2.5-Dev compressed-tensors AWQ INT4 smoke profile for one R9700 GPU",
+  "model": {
+    "schema_version": 1,
+    "name": "kat-coder-v25-dev-awq-int4",
+    "family": "qwen3_5_moe",
+    "format": "safetensors",
+    "repository": "cyankiwi/KAT-Coder-V2.5-Dev-AWQ-INT4",
+    "revision": "3828763ec44cfa594311d68bedf81553500c5b24",
+    "default_directory": "/mnt/ai/models/kat/KAT-Coder-V2.5-Dev-AWQ-INT4",
+    "served_name": "kat-coder-v2.5-dev-awq-int4",
+    "expected_shards": 5,
+    "index_file": "model.safetensors.index.json",
+    "checkpoint_weight_bytes": 24413055712,
+    "required_files": [
+      "README.md",
+      "chat_template.jinja",
+      "config.json",
+      "generation_config.json",
+      "model.safetensors.index.json",
+      "tokenizer.json",
+      "tokenizer_config.json",
+      "merges.txt",
+      "vocab.json"
+    ],
+    "file_sha256": {
+      "chat_template.jinja": "e409e9daee03f51b2612d96f0a253027baec06abd1c2429e184380479662d416",
+      "config.json": "59d7da0ca1b93f90409ecf728a0cc11b2d3976a0627a66a4ff055bad3ac5d7b0",
+      "generation_config.json": "e70c136c1b78ddc1fb0905bac8e733a4dc448d4f852a5dd75143fffc70be550e",
+      "model.safetensors.index.json": "62e4c9c780f9f453c355b07078a726a8423323cdb10890524a393823fc7bef05",
+      "tokenizer_config.json": "5186f0defcd7f232382c7f0aebcd2252d073bb921ab240e407b7ae8745d2b29b"
+    },
+    "allow_patterns": [
+      "*.json",
+      "*.safetensors",
+      "*.jinja",
+      "*.txt",
+      "tokenizer*",
+      "merges.txt",
+      "vocab.json",
+      "README.md"
+    ],
+    "supports_dspark": false,
+    "supports_mtp": false,
+    "supports_dflash": false,
+    "vllm": {
+      "tokenizer_mode": "auto",
+      "tool_call_parser": "qwen3_coder",
+      "reasoning_parser": "qwen3",
+      "quantization": "compressed-tensors",
+      "enable_auto_tool_choice": true,
+      "trust_remote_code": false,
+      "language_model_only": true
+    }
+  },
+  "runtime": {
+    "schema_version": 1,
+    "name": "kat-coder-v25-dev-awq-int4-rocm10-1xr9700-tp1-smoke-32k",
+    "status": "diagnostic-only",
+    "recipe": "vllm_glm53flashrocm10_v0.31",
+    "description": "Initial text-only 32K correctness and throughput qualification for KAT W4A16 on one gfx1201 R9700",
+    "required_model_family": "qwen3_5_moe",
+    "required_patches": [
+      "0003"
+    ],
+    "gpu_order": [
+      0
+    ],
+    "gpu_bdfs": [
+      "0000:e3:00.0"
+    ],
+    "parallel": {
+      "tensor": 1,
+      "pipeline": 1,
+      "data": 1,
+      "enable_expert_parallel": false,
+      "disable_custom_all_reduce": true
+    },
+    "limits": {
+      "max_model_len": 32768,
+      "max_num_seqs": 1,
+      "max_num_batched_tokens": 4096,
+      "gpu_memory_utilization": 0.95
+    },
+    "cache": {
+      "dtype": "auto",
+      "block_size": 16,
+      "prefix_cache": false,
+      "cpu_offload_gb": 0
+    },
+    "enable_prompt_tokens_details": true,
+    "scheduler": {
+      "async": false,
+      "enforce_eager": true
+    },
+    "multimodal": {
+      "language_model_only": true
+    },
+    "loading": {
+      "format": "safetensors",
+      "max_parallel_workers": 1
+    },
+    "transport": {
+      "p2p_disable": 0,
+      "shm_disable": 1,
+      "socket_ifname": "lo",
+      "runtime_connect": 1,
+      "hsa_legacy_ipc": 0
+    },
+    "shutdown": {
+      "request_timeout_seconds": 0,
+      "worker_timeout_seconds": 60,
+      "process_grace_seconds": 120
+    },
+    "moe_backend": "triton",
+    "linear_backend": "auto",
+    "environment": {
+      "VLLM_TARGET_DEVICE": "rocm",
+      "VLLM_USE_V2_MODEL_RUNNER": "1",
+      "VLLM_ROCM_USE_AITER": "0",
+      "VLLM_ROCM_USE_AITER_MOE": "0",
+      "VLLM_DISABLE_PYNCCL": "1",
+      "VLLM_KV_CACHE_LAYOUT": "LBHNC",
+      "SAFETENSORS_FAST_GPU": "1",
+      "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+      "ROCBLAS_USE_HIPBLASLT": "0"
+    },
+    "experimental_modes": {
+      "decode-graphs": {
+        "status": "diagnostic-only",
+        "runtime_name": "kat-coder-v25-dev-awq-int4-rocm10-1xr9700-tp1-32k-decode-graphs",
+        "reason": "Matched TP1 comparator enabling decode-only HIP graphs while preserving model, cache, attention, MoE, batching, and synchronous scheduling settings.",
+        "runtime_overrides": {
+          "scheduler": {
+            "async": false,
+            "enforce_eager": false
+          },
+          "compilation_config": {
+            "cudagraph_mode": "FULL_DECODE_ONLY",
+            "cudagraph_capture_sizes": [
+              1
+            ],
+            "cudagraph_num_of_warmups": 1
+          }
+        }
+      },
+      "decode-graphs-triton-attn": {
+        "status": "diagnostic-only",
+        "runtime_name": "kat-coder-v25-dev-awq-int4-rocm10-1xr9700-tp1-32k-decode-graphs-triton-attn",
+        "reason": "Matched decode-graph comparator forcing the ROCm Triton attention backend for the ten full-attention layers.",
+        "runtime_overrides": {
+          "scheduler": {
+            "async": false,
+            "enforce_eager": false
+          },
+          "attention_backend": "TRITON_ATTN",
+          "compilation_config": {
+            "cudagraph_mode": "FULL_DECODE_ONLY",
+            "cudagraph_capture_sizes": [
+              1
+            ],
+            "cudagraph_num_of_warmups": 1
+          },
+          "environment": {
+            "VLLM_TARGET_DEVICE": "rocm",
+            "VLLM_USE_V2_MODEL_RUNNER": "1",
+            "VLLM_ROCM_USE_AITER": "0",
+            "VLLM_ROCM_USE_AITER_MOE": "0",
+            "VLLM_DISABLE_PYNCCL": "1",
+            "VLLM_KV_CACHE_LAYOUT": "LBHNC",
+            "SAFETENSORS_FAST_GPU": "1",
+            "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+            "ROCBLAS_USE_HIPBLASLT": "0",
+            "FLASH_ATTENTION_TRITON_AMD_ENABLE": "TRUE"
+          }
+        }
+      }
+    },
+    "hardware_topology": {
+      "captured_on": "2026-09-15",
+      "motherboard": "ASUS Pro WS WRX90E-SAGE SE",
+      "note": "Initial single-GPU smoke target uses the first fast-path gfx1201 R9700; production GLM remains unchanged until an explicit switch."
+    }
+  },
+  "stack": {
+    "description": "Development KAT-Coder-V2.5-Dev thinking and non-thinking coding stack",
+    "litellm_aliases": [
+      "kat-coder-v25-thinking",
+      "kat-coder-v25-fast"
+    ],
+    "claude_settings": {
+      "apiKeyHelper": "bash -c 'exec \"${MY_LLM_REPO_ROOT:-$HOME/ai/my-llm}/scripts/claude-litellm-key.sh\"'",
+      "totalTokensReminder": "off",
+      "permissions": {
+        "defaultMode": "acceptEdits",
+        "allow": [
+          "Read",
+          "Bash"
+        ]
+      },
+      "env": {
+        "ANTHROPIC_BASE_URL": "http://127.0.0.1:4000",
+        "ANTHROPIC_MODEL": "kat-coder-v25-thinking",
+        "ANTHROPIC_SMALL_FAST_MODEL": "kat-coder-v25-fast",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "kat-coder-v25-fast",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "kat-coder-v25-thinking",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "kat-coder-v25-thinking",
+        "ANTHROPIC_DEFAULT_FABLE_MODEL": "kat-coder-v25-thinking",
+        "DISABLE_PROMPT_CACHING": "1",
+        "CLAUDE_CODE_TODO_REMINDER_MODE": "off",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+        "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
+        "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "32768",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "32768",
+        "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "90"
+      }
+    }
+  },
+  "verification": {
+    "scope": "gfx1201-kat-coder-v25-awq-development",
+    "verified_context": 512,
+    "verified_on": "2026-09-15",
+    "best_runtime_mode": "decode-graphs-triton-attn",
+    "notes": "API and native tool-call smoke passed. LLM Bench at 512 input/128 output/concurrency 1 measured 43.1 decode tok/s, up 65.8% from the 26.0 tok/s eager baseline. FULL_DECODE_ONLY graphs alone reached 38.9 tok/s. ROCM_AITER_UNIFIED_ATTN was rejected because its generated gfx1201 kernel requested 66048 bytes of LDS while the R9700 limit is 65536. Full 32K context, prefix caching, FP8 KV, concurrency, and LiteLLM aliases remain unqualified."
+  }
+}

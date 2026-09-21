@@ -2,7 +2,7 @@
   "schema_version": 1,
   "name": "glm53-flash-new",
   "status": "production-ready",
-  "description": "Production GLM-5.3-Flash W4A16 on the v0.31 ROCm 10 runtime with DFlash2 K4, FP8 KV, automatic prefix caching, 256K context, and full-and-piecewise HIP graphs",
+  "description": "Production GLM-5.3-Flash W4A16 on the minimal v0.32 ROCm 10 runtime with DFlash2 K4, FP8 KV, automatic prefix caching, Vision, 256K context, and full-and-piecewise HIP graphs",
   "model": {
     "schema_version": 1,
     "name": "glm53-flash-w4a16-mtp",
@@ -72,16 +72,13 @@
   },
   "runtime": {
     "schema_version": 1,
-    "name": "glm53-flash-w4a16-rocm10-8xr9700-tp8-dflash2-k4-fp8kv-apc-256k-full-piecewise",
+    "name": "glm53-flash-w4a16-rocm10-8xr9700-tp8-dflash2-k4-fp8kv-apc-vision-256k-v032",
     "status": "production-ready",
-    "recipe": "vllm_glm53flashrocm10_v0.31",
-    "description": "Qualified W4A16 production runtime with DFlash2 K4, FP8 KV, automatic prefix caching, 256K context, and full-and-piecewise HIP graphs on gfx1201",
+    "recipe": "vllm_glm53_v0.32",
+    "description": "Qualified minimal-patch v0.32 W4A16 production runtime with DFlash2 K4, FP8 KV, automatic prefix caching, Vision, 256K context, and full-and-piecewise HIP graphs on gfx1201",
     "required_model_family": "glm5next",
     "required_patches": [
-      "0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008",
-      "0009", "0010", "0011", "0012", "0013", "0014", "0015", "0016",
-      "0017", "0018", "0019", "0020", "0021", "0022", "0023", "0024",
-      "0025", "0026", "0027", "0028", "0029", "0030", "0031", "0032"
+      "0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008"
     ],
     "gpu_order": [
       0,
@@ -130,7 +127,16 @@
       "enforce_eager": false
     },
     "multimodal": {
-      "language_model_only": true
+      "language_model_only": false,
+      "encoder_attention_backend": "TRITON_ATTN",
+      "limit_per_prompt": {
+        "image": 8,
+        "video": 0
+      },
+      "encoder_tp_mode": "weights",
+      "processor_kwargs": {
+        "max_image_tokens": 4096
+      }
     },
     "loading": {
       "format": "safetensors",
@@ -179,15 +185,15 @@
       "ROCBLAS_USE_HIPBLASLT": "0"
     },
     "hardware_topology": {
-      "captured_on": "2026-09-14",
+      "captured_on": "2026-09-17",
       "motherboard": "ASUS Pro WS WRX90E-SAGE SE",
       "note": "Eight gfx1201 R9700 devices in the measured fast-first order. NVIDIA remains the display adapter and is excluded by explicit ROCm platform selection."
     }
   },
   "stack": {
-    "description": "Production GLM-5.3 Flash W4A16 DFlash2 K4 256K stack",
+    "description": "Production GLM-5.3 Flash W4A16 DFlash2 K4 Vision 256K stack",
     "litellm_aliases": [
-      "glm-5.3-flash-new-high"
+      "glm-5.3-flash-high"
     ],
     "claude_settings": {
       "apiKeyHelper": "bash -c 'exec \"${MY_LLM_REPO_ROOT:-$HOME/ai/my-llm}/scripts/claude-litellm-key.sh\"'",
@@ -201,11 +207,12 @@
       },
       "env": {
         "ANTHROPIC_BASE_URL": "http://127.0.0.1:4000",
-        "ANTHROPIC_MODEL": "glm-5.3-flash-new-high",
-        "ANTHROPIC_SMALL_FAST_MODEL": "glm-5.3-flash-new-high",
-        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-5.3-flash-new-high",
-        "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.3-flash-new-high",
-        "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.3-flash-new-high",
+        "ANTHROPIC_MODEL": "glm-5.3-flash-high",
+        "ANTHROPIC_SMALL_FAST_MODEL": "glm-5.3-flash-high",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-5.3-flash-high",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.3-flash-high",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.3-flash-high",
+        "ANTHROPIC_DEFAULT_FABLE_MODEL": "glm-5.3-flash-high",
         "DISABLE_PROMPT_CACHING": "1",
         "CLAUDE_CODE_TODO_REMINDER_MODE": "off",
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
@@ -217,10 +224,10 @@
     }
   },
   "verification": {
-    "scope": "gfx1201-glm53-w4a16-dflash2-fp8kv-apc-256k-production",
-    "verified_context": 262144,
-    "verified_on": "2026-09-15",
+    "scope": "gfx1201-glm53-w4a16-v032-minimal-dflash2-fp8kv-apc-vision-production",
+    "verified_context": 8192,
+    "verified_on": "2026-09-17",
     "best_runtime_mode": "default",
-    "notes": "Promoted from the matched development qualification. One full 262,016+128 raw boundary request passed at 1223.9 prefill tok/s, 214.1 s TTFT, and 35.7 decode tok/s. A two-request 262,080+32 prefix-cache test reduced TTFT from 214.44 s to 2.729 s (78.6x). FULL_AND_PIECEWISE graphs beat eager and FULL_DECODE_ONLY for short coding decode, the default RCCL path beat PyNccl, and max_num_batched_tokens=4096 beat 8192 for 256K prefill. Repeated boundary stability and coding-quality qualification remain follow-up checks."
+    "notes": "Promoted from the minimal v0.32 dflash2-k4-graphs qualification. The current runtime passed 128+512 at 60.9 decode tok/s with 96.7% acceptance and 8K+256 at 50.4 decode tok/s with 81.6% acceptance. Deterministic PNG Vision inference passed, and a repeated 2717-token prompt reused exactly 1280 cached tokens. The 256K limit and 2.2 GB FP8 KV reservation match the earlier W4A16 production qualification; a fresh minimal-v0.32 full-boundary regression remains follow-up work."
   }
 }

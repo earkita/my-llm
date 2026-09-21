@@ -1,0 +1,106 @@
+diff --git a/tests/kernels/test_mhc_tilelang_jit.py b/tests/kernels/test_mhc_tilelang_jit.py
+index 4f39fae02058edb2737545891177b78bd5f5a241..bab529d258e516adbe18cc74a54e094410c262d5 100644
+--- a/tests/kernels/test_mhc_tilelang_jit.py
++++ b/tests/kernels/test_mhc_tilelang_jit.py
+@@ -6,7 +6,7 @@ import importlib.util
+ import subprocess
+ import sys
+ from pathlib import Path
+-from types import ModuleType
++from types import ModuleType, SimpleNamespace
+ from typing import Any
+ 
+ import pytest
+@@ -24,7 +24,7 @@ class _PassConfigKey:
+ def _install_tilelang_stub(
+     monkeypatch: pytest.MonkeyPatch,
+ ) -> dict[str, int]:
+-    calls = {"jit_decorate": 0, "compiled_call": 0}
++    calls = {"jit_decorate": 0, "compiled_call": 0, "compiled_compile": 0}
+ 
+     tilelang: Any = ModuleType("tilelang")
+ 
+@@ -36,6 +36,16 @@ def _install_tilelang_stub(
+                 calls["compiled_call"] += 1
+                 return func.__name__
+ 
++            def compile_kernel(*args: Any, **kw: Any) -> Any:
++                calls["compiled_compile"] += 1
++                return "compiled-specialization"
++
++            compiled.compile = compile_kernel
++            compiled.func = SimpleNamespace(
++                parse_args=lambda *args, **kw: ((args, tuple(kw.items())), {})
++            )
++            compiled._kernel_cache = {}
++
+             return compiled
+ 
+         return decorate
+@@ -78,6 +88,25 @@ def test_tilelang_jit_decorator_is_lazy_only_on_rocm(
+     assert calls["compiled_call"] == 1
+ 
+ 
++def test_rocm_lazy_tilelang_jit_exposes_compile_and_cache(
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    if not current_platform.is_rocm():
++        pytest.skip("Test requires ROCm")
++
++    calls = _install_tilelang_stub(monkeypatch)
++    module_name = "vllm.model_executor.kernels.mhc.tilelang_kernels"
++    monkeypatch.delitem(sys.modules, module_name, raising=False)
++    module = importlib.import_module(module_name)
++    kernel = module.mhc_post_tilelang
++
++    assert kernel.compile("warmup") == "compiled-specialization"
++    assert calls["jit_decorate"] == 1
++    assert calls["compiled_compile"] == 1
++    assert kernel.func is not None
++    assert kernel._kernel_cache == {}
++
++
+ @pytest.mark.skipif(not current_platform.is_rocm(), reason="Test requires ROCm")
+ def test_deepseek_v4_import_and_jit_monitor_do_not_hijack_hip_symbols() -> None:
+     if importlib.util.find_spec("tilelang") is None:
+diff --git a/vllm/tilelang_utils/__init__.py b/vllm/tilelang_utils/__init__.py
+index 803409b1ec6517698b61c2f8f572425f4826585d..dfa7bcc4504c3d16a02e78b0e9e5a17cba16f7d7 100644
+--- a/vllm/tilelang_utils/__init__.py
++++ b/vllm/tilelang_utils/__init__.py
+@@ -74,10 +74,9 @@ def tilelang_jit(kernel_function: Callable[..., Any]) -> Callable[..., Any]:
+         _ensure_tilelang_imported()
+         return tilelang.jit(pass_configs=_get_pass_configs())(kernel_function)
+ 
+-    compiled_kernel: Callable[..., Any] | None = None
++    compiled_kernel: Any | None = None
+ 
+-    @functools.wraps(kernel_function)
+-    def wrapper(*args: Any, **kwargs: Any) -> Any:
++    def get_compiled_kernel() -> Any:
+         nonlocal compiled_kernel
+         if compiled_kernel is None:
+             _ensure_tilelang_imported()
+@@ -86,6 +85,22 @@ def tilelang_jit(kernel_function: Callable[..., Any]) -> Callable[..., Any]:
+             compiled_kernel = tilelang.jit(pass_configs=_get_pass_configs())(
+                 kernel_function
+             )
+-        return compiled_kernel(*args, **kwargs)
++        return compiled_kernel
++
++    @functools.wraps(kernel_function)
++    def wrapper(*args: Any, **kwargs: Any) -> Any:
++        return get_compiled_kernel()(*args, **kwargs)
++
++    def compile_wrapper(*args: Any, **kwargs: Any) -> Any:
++        jit_impl = get_compiled_kernel()
++        compiled = jit_impl.compile(*args, **kwargs)
++        # The warmup helper reads these attributes after compile() to seed the
++        # same cache used by the normal TileLang call path.
++        for attr in ("func", "_kernel_cache"):
++            if hasattr(jit_impl, attr):
++                setattr(wrapper, attr, getattr(jit_impl, attr))
++        return compiled
++
++    setattr(wrapper, "compile", compile_wrapper)
+ 
+     return wrapper

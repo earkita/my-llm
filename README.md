@@ -28,7 +28,7 @@ Szablony Claude Code są pogrupowane według rodziny modelu w
 np. `glm53-flash/glm53-flash-uncensored.settings.local.json`. Wszystkie
 dotychczasowe profile MXFP4 z grupy `glm53-flash` używają dla ról Claude
 wspólnej nazwy `glm-5.3-flash-high`; profil W4A16 `glm53-flash-new` używa
-osobnego aliasu 256K `glm-5.3-flash-new-high`. Oba warianty Qwen używają
+wspólnego aliasu `glm-5.3-flash-high`. Oba warianty Qwen używają
 `qwen3.8-flash-next-thinking` dla ról głównych oraz
 `qwen3.8-flash-next-fast` dla Haiku i zadań szybkich. Proxy wiąże oba aliasy
 dynamicznie z checkpointem aktywnego profilu i normalizuje nieobsługiwane
@@ -56,6 +56,8 @@ checkoutów.
 ```bash
 ./run launcher
 ./run launcher list
+# domyślnie uruchamia bazowy glm53-flash
+./run launcher start
 ./run launcher start glm53-flash
 ./run launcher start glm53-flash-new
 ./run launcher start qwen38-flash
@@ -89,9 +91,9 @@ checkoutów.
 ./run model verify qwen38-flash
 ./run model verify qwen38-flash-uncensored
 
-# domyślnie: v0.29, MRV2, TP8/no-EP, packed MXFP4 GEMV,
-# DFlash2 K4, FP8 KV, 768K i Vision
-./run launcher start glm53-flash
+# profil domyślny: bazowy v0.29, MRV2, TP8/no-EP,
+# packed MXFP4 GEMV, DFlash2 K4, FP8 KV, 512K i Vision
+./run launcher start
 
 # W4A16, DFlash2 K4, FP8 KV, 256K i pełne/odcinkowe grafy HIP
 ./run launcher start glm53-flash-new
@@ -169,14 +171,13 @@ tożsamość.
 
 Domyślny `glm53-flash` używa recepty v0.29 ROCm 10, MRV2, TP8 bez Expert
 Parallel, packed RDNA4 MXFP4 decode GEMV, DFlash2 K4, FP8 KV,
-kontekstu 786,432 tokenów i TP8-sharded Vision; prefix cache i CPU offload są
-wyłączone. Profile produkcyjne nie zawierają `experimental_modes`; warianty
-robocze pozostają w `profiles/dev/`.
+kontekstu 524288 tokenów i TP8-sharded Vision; prefix cache jest włączony,
+a CPU offload wyłączony. Profile produkcyjne nie zawierają
+`experimental_modes`; warianty robocze pozostają w `profiles/dev/`.
 
-`glm53-flash-new` używa osobnego checkpointu W4A16 i recepty v0.31, zachowuje
+`glm53-flash-new` używa osobnego checkpointu W4A16 i recepty v0.32, zachowuje
 DFlash2 K4 oraz FP8 KV, a zakwalifikowany limit wynosi 262144 tokeny. Jego
-osobny alias `glm-5.3-flash-new-high` zapobiega reklamowaniu limitu 512K
-starszych profili MXFP4.
+wspólny alias `glm-5.3-flash-high` jest wiązany z aktualnie aktywnym profilem.
 
 Podczas pracy Claude Code można bez restartu obserwować kolejkę, zajęcie KV i
 estymowany postęp prefillu, a po zakończeniu żądania dokładny server-side

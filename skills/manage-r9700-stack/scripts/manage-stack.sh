@@ -76,7 +76,11 @@ import sys
 
 for path in sorted(pathlib.Path(sys.argv[1]).glob("*.json")):
     profile = json.loads(path.read_text(encoding="utf-8"))
-    marker = " (default)" if profile["name"] == "glm53-flash" else ""
+    marker = (
+        " (default)"
+        if profile["name"] == "glm53-flash"
+        else ""
+    )
     print(
         f"{profile['name']}{marker}\t{profile['status']}\t"
         f"{profile['description']}"

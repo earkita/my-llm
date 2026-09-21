@@ -47,6 +47,15 @@ for a recipe, including patches for helper sources such as AITER, under
 Do not embed absolute checkout paths in scripts or committed configuration;
 derive paths from the repository root or the script's own directory.
 
+After changing any recipe patch, update both integrity layers in the matching
+manifest: the patch entry's `sha256` and the source's
+`expected_diff_sha256`. Validate the plan with
+`./run install --profile PROFILE --dry-run`, then run
+`./run install --profile PROFILE` before attempting to launch. The real
+install step refreshes `.runtime/recipes/<recipe-name>/install.json`; a dry run
+does not. Starting before that refresh must fail with "installed runtime
+belongs to a different recipe manifest" and should not be retried unchanged.
+
 ## Testing Guidelines
 
 Tests use `unittest`. Run `make check` before submitting. Every profile change

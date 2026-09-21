@@ -40,7 +40,7 @@ oraz SHA-256.
 `glm53-flash-new` przypina osobny checkpoint
 `/mnt/ai/models/glm/GLM-5.3-Flash-W4A16-MTP`, receptę v0.31 oraz ten sam
 zweryfikowany artefakt DFlash2. Udostępnia 256K przez osobny alias LiteLLM
-`glm-5.3-flash-new-high`.
+`glm-5.3-flash-high`.
 
 ## Start i stop
 
@@ -97,12 +97,13 @@ Bezpieczne zatrzymanie:
 ./run launcher stop --runtime-only
 ```
 
-Zwykły start GLM uruchamia produkcyjny profil v0.29 ROCm 10 z MRV2, TP8 bez
-Expert Parallel, packed MXFP4 decode GEMV, DFlash2 K4, FP8 KV, kontekstem
-768K i Vision. Profil UNCENSORED używa tego samego runtime z osobnym,
-zweryfikowanym checkpointem:
+Zwykły start bez nazwy uruchamia bazowy profil produkcyjny `glm53-flash`:
+v0.29 ROCm 10 z MRV2, TP8 bez Expert Parallel, packed MXFP4 decode GEMV,
+DFlash2 K4, FP8 KV, kontekstem 512K i Vision. Profil UNCENSORED używa tego
+samego runtime z osobnym, zweryfikowanym checkpointem:
 
 ```bash
+./run launcher start
 ./run launcher start glm53-flash
 ./run launcher start glm53-flash-new
 ./run launcher start glm53-flash-uncensored

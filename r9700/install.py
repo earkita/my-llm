@@ -406,12 +406,22 @@ def _install_vllm(
     constraints = recipe_constraints_path(recipe_name)
     build_jobs = jobs or int(os.environ.get("NATIVE_BUILD_JOBS", os.cpu_count() or 1))
 
+    venv_python = sys.executable
+    if python_build := manifest["platform"].get("python_build"):
+        run(["uv", "python", "install", python_build])
+        venv_python = subprocess.run(
+            ["uv", "python", "find", python_build, "--no-project"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
     run(
         [
             "uv",
             "venv",
             "--python",
-            sys.executable,
+            venv_python,
             "--allow-existing",
             "--relocatable",
             "--seed",

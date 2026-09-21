@@ -1,5 +1,8 @@
 # Audyt kerneli Qwen na R9700/gfx1201
 
+Nowszy audyt GLM-5.3 Flash z pełnym trace `rocprofv3` znajduje się w
+`docs/glm53-flash-new-kernel-audit.md`.
+
 ## Zakres i werdykt
 
 Audyt wykonano 14 września 2026 r. dla aktywnego profilu `qwen-multi`:

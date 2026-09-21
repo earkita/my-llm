@@ -1,0 +1,4 @@
+# Overrides and additions for the upstream-main GLM-5.3 v0.32 recipe.
+huggingface_hub==1.31.0
+mooncake-transfer-engine-rocm==0.3.13.post1
+msgpack==1.2.2

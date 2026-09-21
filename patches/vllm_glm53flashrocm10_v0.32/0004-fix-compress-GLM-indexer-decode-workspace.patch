@@ -1,0 +1,31 @@
+diff --git a/vllm/models/glm5next/nvidia/attention.py b/vllm/models/glm5next/nvidia/attention.py
+index 68011e7..36ab4c2 100644
+--- a/vllm/models/glm5next/nvidia/attention.py
++++ b/vllm/models/glm5next/nvidia/attention.py
+@@ -1,6 +1,8 @@
+ # SPDX-License-Identifier: Apache-2.0
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+ 
++import os
++
+ import torch
+ import torch.nn.functional as F
+ from torch import nn
+@@ -301,7 +303,16 @@ class Indexer(nn.Module):
+             cache_config=cache_config,
+             index_kpool=self.index_kpool,
+         )
+-        self.max_model_len = vllm_config.model_config.max_model_len
++        if os.getenv("MY_LLM_GLM53_FULL_INDEXER_WORKSPACE") == "1":
++            self.max_model_len = vllm_config.model_config.max_model_len
++        else:
++            # The indexer cache stores one compressed state per index_kpool
++            # model tokens. Keep its decode logits/workspace in that same
++            # coordinate system; using the token-level length makes the RDNA4
++            # paged-MQA grid and output buffer index_kpool times wider.
++            self.max_model_len = cdiv(
++                vllm_config.model_config.max_model_len, self.index_kpool
++            )
+         self.prefix = prefix
+         from vllm.v1.attention.backends.mla.indexer import get_max_prefill_buffer_size
+ 

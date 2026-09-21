@@ -10,7 +10,7 @@
       "source_runtime": "profiles/runtime/production/deepseek-v4-flash-vllm-v0280-6xr9700-tp1-pp6-dspark-k5-1m.json",
       "source_runtime_sha256": "46268b8c9fa49cd46469d0fb2d3ec8e38e535f6139c4f00fc94b18b3cb227c83",
       "target_profile": "profiles/production/deepseek-v4-flash.json",
-    "target_profile_sha256": "b262f565f683ca87f54baa956838cf4c64440efb9f95525392c08f769670e305",
+    "target_profile_sha256": "e1196e8ec38eaa7f9e22368b94b9a104120566cc8cd8b4bf64720bc505e931e8",
       "intentional_changes": [
         "default_directory points at the verified local /mnt/ai checkpoint",
         "embedded stack preset",
@@ -22,8 +22,8 @@
     "glm53-flash": {
       "source_model": "https://huggingface.co/amd/GLM-5.3-Flash-Quark-MXFP4",
       "source_model_sha256": "b5688f25491202978c19c4d036eef579f61bbe07",
-      "source_runtime": "https://github.com/vllm-project/vllm/commit/7fbd44cbe0a90b9c8fd3a94a0f0401ac4b1bc719",
-      "source_runtime_sha256": "7fbd44cbe0a90b9c8fd3a94a0f0401ac4b1bc719",
+      "source_runtime": "https://github.com/vllm-project/vllm/commit/3bb782621492711485dc86791b5978128783814a",
+      "source_runtime_sha256": "3bb782621492711485dc86791b5978128783814a",
       "upstream_runtime_commits": {
         "glm53_pr53906_merge": "98ed0856f31fa3aaf5e27464e2b4ef5a8ee6b2f5",
         "mrv2_draft_attention_backend_pr54826_merge": "25240513856e9aca9b07e9381f2a4513b6954bd8",
@@ -43,14 +43,14 @@
         "glm_required_first_tools_pr55558_head": "bcca85b9083512bccdb039a1770834ee6e246646"
       },
       "target_profile": "profiles/production/glm53-flash.json",
-      "target_profile_sha256": "dc6caad63ed1d42b813979f629a54d616d36823f3f0a1fbd89c4a19a1c788262",
+      "target_profile_sha256": "11d9558c4b81cc2403a84f309df9ff88f86a51b65d87b5d33894f70e3a117e59",
       "intentional_changes": [
         "replaced the llama.cpp GGUF deployment with the AMD Quark MXFP4 checkpoint",
         "migrated the isolated native recipe to ROCm SDK 10.0.0, PyTorch 2.13.0+rocm10.0.0, AITER v0.1.21 and vLLM main 7fbd44cbe",
         "kept 26 ordered vLLM patches required by the selected ROCm 10 sources, including the RDNA4 Triton sparse-MLA readers, non-persistent chunked-prefill fallback, shuffled physical kpool decode, DFlash prefix-cache tail preservation, an opt-in packed MXFP4 decode GEMV, duplicate GLM router-GEMM removal, and required-first GLM tool schemas",
         "replaced the former ROCm 7.14 glm53-flash profile with the qualified ROCm 10 deployment",
         "promoted the v0.29 packed-GEMV DFlash2 K4 FP8-KV Vision mode as the canonical production runtime",
-        "updated the final three AMD GPU BDFs for the current post-reseat KFD topology",
+        "updated all AMD GPU BDFs for the current dual-root PCIe topology captured on 2026-09-18",
         "removed the superseded ROCm 7.14 GLM recipe and profile",
         "configured Claude Code auto-compaction at 90 percent of the 512K context window",
         "consolidated LiteLLM and every Claude Code model role on the single glm-5.3-flash-high alias, capped at 524288 tokens",
@@ -68,14 +68,16 @@
       "source_runtime": "https://github.com/vllm-project/vllm/commit/7fbd44cbe0a90b9c8fd3a94a0f0401ac4b1bc719",
       "source_runtime_sha256": "7fbd44cbe0a90b9c8fd3a94a0f0401ac4b1bc719",
       "target_profile": "profiles/production/glm53-flash-new.json",
-      "target_profile_sha256": "13db6143b5d242c2499a9108f964cd08ea4f3c0e85747b93499461fdf63673f3",
+      "target_profile_sha256": "96d679966c3a30b27a1527d2c6298a3c6f5d726cadb9dbac4d2b2c5298bd69c2",
       "intentional_changes": [
-        "promoted the qualified W4A16 development deployment as a flat production profile without experimental modes",
+        "promoted the qualified minimal-patch v0.32 W4A16 deployment as a flat production profile without experimental modes",
+        "renamed the promoted recipe, manifest and patch namespace to vllm_glm53_v0.32",
         "selected DFlash2 K4, FP8 target and draft KV, synchronous scheduling, and FULL_AND_PIECEWISE breakable HIP graphs",
+        "enabled Vision with TRITON_ATTN, encoder weight sharding, an eight-image limit and a 4096 image-token budget",
         "set the qualified 262144-token context with a measured 317682-token KV capacity from a 2200000000-byte fixed reservation",
         "retained max_num_batched_tokens 4096 after matched 32K and full-boundary 256K comparisons against 8192",
         "kept the default RCCL communication path after PyNccl reduced short decode throughput and vLLM rejected custom all-reduce on gfx1201",
-        "created the dedicated glm-5.3-flash-new-high LiteLLM and Claude Code alias so the 256K qualification is not confused with the existing shared 512K GLM alias",
+        "consolidated LiteLLM and Claude Code on the shared glm-5.3-flash-high alias; the active profile still supplies its own qualified context limit",
         "removed the ignored VLLM_ROCM_USE_AITER_FP4_ASM_GEMM environment variable from the promoted profile"
       ]
     },
@@ -85,7 +87,7 @@
       "source_runtime": "https://github.com/vllm-project/vllm/commit/7fbd44cbe0a90b9c8fd3a94a0f0401ac4b1bc719",
       "source_runtime_sha256": "7fbd44cbe0a90b9c8fd3a94a0f0401ac4b1bc719",
       "target_profile": "profiles/production/glm53-flash-uncensored.json",
-      "target_profile_sha256": "3ade009d2f60fc5fbad2f8e8ab2d752958ec264f2aa6cc3777b628a2af4dd559",
+      "target_profile_sha256": "2f4d355d243da0626c2c9f93bf0ea626d78836417b946ae2a6acf4155f94e6f6",
       "intentional_changes": [
         "converted the local UNCENSORED FP8 checkpoint to AMD Quark MXFP4 with recorded conversion provenance",
         "updated the conversion to source revision d21b195 with corrected weights, clear_thinking enabled, and repetition_penalty 1.1",
@@ -104,7 +106,7 @@
       "source_runtime": "profiles/runtime/production/qwen38-flash-next-fp8-8x-cache-safe-mtp2.json",
       "source_runtime_sha256": "22b4431b0c4ecfd74cb08b89ab815292bf4ce78ab2d0b71aab0ca446484f9f04",
       "target_profile": "profiles/production/qwen38-flash.json",
-      "target_profile_sha256": "449d91edaaa94bab32cebe71d89aa238ff802c98aa9760bd55c14d0a5cf69d6b",
+      "target_profile_sha256": "387ae161af218e90e51feabc71b8585fc47e10b57066c8666bf512a439b840b5",
       "intentional_changes": [
         "replaced the historical upstream FP8 deployment with the locally present tcclaviger MXFP4/FP8 checkpoint",
         "assigned the main model to the first four fast-path R9700/gfx1201 GPUs with TP4 and EP4, leaving four GPUs for the 1+1+1+1 side allocation",
@@ -121,7 +123,7 @@
       "source_runtime": "profiles/runtime/production/qwen38-flash-next-fp8-8x-cache-safe-mtp2.json",
       "source_runtime_sha256": "22b4431b0c4ecfd74cb08b89ab815292bf4ce78ab2d0b71aab0ca446484f9f04",
       "target_profile": "profiles/production/qwen38-flash-uncensored.json",
-      "target_profile_sha256": "b2f2abbbc30210b0e47da0ccbb186f64a0c3937b117265a7376ac5b28ab04384",
+      "target_profile_sha256": "b04de26bb8999508c0b7962a754e10521f0108c56715c9c7119f095c39b63cca",
       "intentional_changes": [
         "converted the UNCENSORED FP8 checkpoint locally to the reference MXFP4/FP8 tensor schema without copying reference weights or scales",
         "assigned the main model to the first four fast-path R9700/gfx1201 GPUs with TP4 and EP4, leaving four GPUs for the 1+1+1+1 side allocation",
@@ -139,7 +141,7 @@
       "source_runtime": "https://github.com/vllm-project/vllm/pull/48606",
       "source_runtime_sha256": "52d2d48d01025f21a7010901bae31a49c86acac3",
       "target_profile": "profiles/production/qwen38-4x27b.json",
-      "target_profile_sha256": "03e6f0429f479d588cf7ba7835661d4198183d6ab3fa68f38116190c533b2b43",
+      "target_profile_sha256": "f16650eba8a373b9e8421d33783a4e7f50b5a5b1d41caf97e2d2b0f654d4f1a1",
       "intentional_changes": [
         "adapted the upstream Quark W4A16 linear scheme to the pinned Qwen runtime and selected the gfx1201 RDNAHybridW4A16 kernel",
         "assigned the four GPUs outside the primary Qwen allocation as four independent TP1 data-parallel replicas",
@@ -159,7 +161,7 @@
       "source_runtime": "manifest/vllm_qwen38flash_pr53896.json",
       "source_runtime_sha256": "54e4576ecf3ef5591acf8b9f69c410154bfc4bbe72cbd2b398b58fb6dc226f4c",
       "target_profile": "profiles/production/qwen-multi.json",
-      "target_profile_sha256": "e13c781568ac8d1305b0f088a5f14106178b9e6230160f6087716d81885b5c9c",
+      "target_profile_sha256": "1895e9d5361c66b2e8acce34e112e5d6752be0225f956befcf44567a0b455603",
       "intentional_changes": [
         "composed the pinned Qwen Flash UNCENSORED TP4/EP4 primary and Qwen3.8-27B DP4/TP1 worker pool without profile inheritance",
         "pinned the worker component to the W4A16 DFlash2 K4 profile with FP8 E4M3 target and draft KV while preserving earlier BF16 and MTP results as historical evidence",

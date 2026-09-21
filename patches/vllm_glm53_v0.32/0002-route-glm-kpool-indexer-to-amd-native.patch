@@ -1,0 +1,24 @@
+diff --git a/vllm/models/glm5next/amd/sparse_indexer.py b/vllm/models/glm5next/amd/sparse_indexer.py
+index f64f214f5..c76568d5c 100644
+--- a/vllm/models/glm5next/amd/sparse_indexer.py
++++ b/vllm/models/glm5next/amd/sparse_indexer.py
+@@ -681,7 +681,10 @@ class SparseAttnIndexerKpool(CustomOp):
+         assert isinstance(q_quant, torch.Tensor), (
+             "AMD sparse_attn_indexer expects a single FP8 q_quant tensor"
+         )
+-        if not rocm_aiter_ops.is_enabled():
++        if not (
++            rocm_aiter_ops.is_enabled()
++            or rocm_aiter_ops.is_rdna_aiter_enabled()
++        ):
+             raise RuntimeError(
+                 "Sparse attention indexer ROCm path is only supported on AITER. "
+                 "Please enable aiter with VLLM_ROCM_USE_AITER=1"
+@@ -728,3 +731,7 @@ class SparseAttnIndexerKpool(CustomOp):
+             self.tail_cache.kv_cache if self.tail_cache is not None else None,
+             self.tail_cache.prefix if self.tail_cache is not None else None,
+         )
++
++    # This module is already the ROCm-specific implementation. CustomOp
++    # dispatches enabled operations through forward_hip on AMD devices.
++    forward_hip = forward_native

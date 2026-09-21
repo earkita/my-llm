@@ -1,0 +1,2313 @@
+diff --git a/docs/features/tool_calling.md b/docs/features/tool_calling.md
+index 9628bc431a1e905a8d5a452d6ae8545c529bea62..beca7676ec3c0ca96f856692a72a249465a2c9d0 100644
+--- a/docs/features/tool_calling.md
++++ b/docs/features/tool_calling.md
+@@ -402,8 +402,13 @@ Supported models:
+ 
+ * `zai-org/GLM-4.7`
+ * `zai-org/GLM-4.7-Flash`
++* `zai-org/GLM-5.x` (including `GLM-5.3-Flash`)
+ 
+-Flags: `--tool-call-parser glm47`
++Flags: `--tool-call-parser glm47 --reasoning-parser glm45`
++
++Tool schemas are rendered into the prompt with required properties first, and strict-mode
++structural tags use that same order, so the grammar guarantees every required argument while
++the model keeps the key order it was shown.
+ 
+ ### FunctionGemma Models (`functiongemma`)
+ 
+diff --git a/tests/kernels/test_kpool_decode_update_batched.py b/tests/kernels/test_kpool_decode_update_batched.py
+index afc0c1f836b7ccb0661ce94ee108c524f8086e9b..a4afd2e515ddaeee55e4ea812bce37e62f90fc13 100644
+--- a/tests/kernels/test_kpool_decode_update_batched.py
++++ b/tests/kernels/test_kpool_decode_update_batched.py
+@@ -32,12 +32,14 @@ from vllm.platforms import current_platform
+ 
+ if current_platform.is_rocm():
+     from vllm.models.glm5next.amd.ops.kpool_compress import (
++        expand_pools_and_append_tail,
+         kpool_compress_and_write_cache,
+         kpool_decode_update_and_maybe_write_cache_batched,
+         kpool_seed_tail_cache,
+     )
+ else:
+     from vllm.models.glm5next.nvidia.ops.kpool_compress import (
++        expand_pools_and_append_tail,
+         kpool_compress_and_write_cache,
+         kpool_decode_update_and_maybe_write_cache_batched,
+         kpool_seed_tail_cache,
+@@ -52,6 +54,20 @@ FP8_DTYPE = current_platform.fp8_dtype()
+ FP8_MAX = torch.finfo(FP8_DTYPE).max
+ 
+ 
++def test_expand_pools_rejects_ids_outside_completed_pool_count():
++    pool_ids = torch.tensor([[0, 1, -1, -2, 2, 9]], dtype=torch.int64, device="cuda")
++    seq_lens = torch.tensor([10], dtype=torch.int32, device="cuda")
++
++    out = expand_pools_and_append_tail(pool_ids, seq_lens, pool_size=4)
++
++    expected = torch.tensor(
++        [[*range(8), *([-1] * 16), 8, 9, -1]],
++        dtype=torch.int32,
++        device="cuda",
++    )
++    torch.testing.assert_close(out, expected)
++
++
+ def _make_caches():
+     kv = torch.zeros(
+         NUM_BLOCKS, PAGE_SIZE, HEAD_DIM + 4, dtype=torch.uint8, device="cuda"
+@@ -293,8 +309,11 @@ def _run_kernel(kv, tail, tail_slot, key, score, ape, slot_map, pos):
+ 
+ 
+ @pytest.mark.parametrize("pool_size", [4, 16])
+-def test_decode_writer_matches_prefill_writer(pool_size):
+-    """Compare production decode and prefill writers for pool sizes 4 and 16."""
++@pytest.mark.parametrize("ring_pools", [1, 2])
++def test_decode_writer_matches_prefill_writer(pool_size, ring_pools):
++    """Compare production decode and prefill writers for pool sizes 4 and 16,
++    with a tail ring of one pool and of two pools (speculative slots)."""
++    ring = ring_pools * pool_size
+     n_pools, page, nblk = 8, 64, 4
+     n_tok = n_pools * pool_size
+     dev = "cuda"
+@@ -317,14 +336,14 @@ def test_decode_writer_matches_prefill_writer(pool_size):
+ 
+     # One request owning tail block 0, fed one token per decode step.
+     kv_decode = torch.zeros_like(kv_prefill)
+-    tail = torch.zeros(nblk, 2, pool_size, HEAD_DIM, dtype=torch.bfloat16, device=dev)
++    tail = torch.zeros(nblk, 2, ring, HEAD_DIM, dtype=torch.bfloat16, device=dev)
+     for t in range(n_tok):
+         completes = t % pool_size == pool_size - 1
+         kpool_decode_update_and_maybe_write_cache_batched(
+             kv_decode,
+             tail,
+             # token-granular: every token has a valid tail slot
+-            torch.tensor([[t % pool_size]], dtype=torch.int32, device=dev),
++            torch.tensor([[t % ring]], dtype=torch.int32, device=dev),
+             k[t].view(1, 1, HEAD_DIM),
+             score[t].view(1, 1, HEAD_DIM),
+             ape,
+@@ -351,6 +370,73 @@ def test_decode_writer_matches_prefill_writer(pool_size):
+     )
+ 
+ 
++@pytest.mark.parametrize(
++    ("ring_pools", "expected_match"), [(1, False), (2, False), (3, True)]
++)
++def test_k7_rejected_draft_redo_needs_three_pool_ring(
++    ring_pools, expected_match
++):
++    """K=7 needs three kpool-sized ring segments across a rejected boundary."""
++    pool, num_spec, page, nblk = 4, 7, 64, 2
++    ring = ring_pools * pool
++    block = 1
++    dev = "cuda"
++    torch.manual_seed(17)
++
++    true_k = torch.randn(8, HEAD_DIM, dtype=torch.bfloat16, device=dev)
++    true_score = torch.randn_like(true_k)
++    draft_k = torch.randn(num_spec, HEAD_DIM, dtype=torch.bfloat16, device=dev)
++    draft_score = torch.randn_like(draft_k)
++    ape = torch.randn(pool, HEAD_DIM, dtype=torch.float32, device=dev)
++
++    kv_ref = torch.zeros(nblk, page, HEAD_DIM + 4, dtype=torch.uint8, device=dev)
++    kpool_compress_and_write_cache(
++        kv_ref,
++        true_k[4:8].view(1, pool, HEAD_DIM),
++        true_score[4:8].view(1, pool, HEAD_DIM),
++        ape,
++        torch.tensor([1], dtype=torch.int64, device=dev),
++        pool_size=pool,
++        head_dim=HEAD_DIM,
++        round_scale=ROUND_SCALE,
++    )
++
++    kv = torch.zeros_like(kv_ref)
++    tail = torch.zeros(nblk, 2, ring, HEAD_DIM, dtype=torch.bfloat16, device=dev)
++
++    def step(positions, keys, scores, completion_locs):
++        pos = torch.tensor([positions], dtype=torch.int32, device=dev)
++        tail_slots = block * ring + pos % ring
++        kpool_decode_update_and_maybe_write_cache_batched(
++            kv,
++            tail,
++            tail_slots,
++            keys.view(1, -1, HEAD_DIM),
++            scores.view(1, -1, HEAD_DIM),
++            ape,
++            torch.tensor([completion_locs], dtype=torch.int32, device=dev),
++            pos,
++            pool,
++            HEAD_DIM,
++            round_scale=ROUND_SCALE,
++        )
++
++    step([4], true_k[4], true_score[4], [-1])
++    step([5], true_k[5], true_score[5], [-1])
++
++    # Position 7 is a wrong draft that completes the pool. Draft rows through
++    # 13 are stashed before rejection is known; position 11 deliberately has
++    # no completion location so cache slot 1 is only written for pool [4..7].
++    step(
++        list(range(6, 14)),
++        torch.cat([true_k[6:7], draft_k]),
++        torch.cat([true_score[6:7], draft_score]),
++        [-1, 1, -1, -1, -1, -1, -1, -1],
++    )
++    step([7], true_k[7], true_score[7], [1])
++    assert torch.equal(kv, kv_ref) is expected_match
++
++
+ def test_leading_invalid_tail_slot():
+     """A request whose FIRST token carries an invalid (-1) tail slot while a
+     later token is a real pool completion.
+diff --git a/tests/test_triton_utils.py b/tests/test_triton_utils.py
+index 0ae4c0d6d69de0e8e578c8b8885f0bd7a2c9ccad..f8ebcdd8cd04dcb0be3cdb5c1fd137162895cdca 100644
+--- a/tests/test_triton_utils.py
++++ b/tests/test_triton_utils.py
+@@ -10,7 +10,9 @@ from vllm.triton_utils import importing as triton_importing
+ from vllm.triton_utils.importing import TritonLanguagePlaceholder, TritonPlaceholder
+ 
+ 
+-def _has_triton_for_backends(**drivers: bool) -> bool:
++def _has_triton_for_backends(
++    target_device: str | None = None, **drivers: bool
++) -> bool:
+     """Re-evaluate ``HAS_TRITON`` against a synthetic ``triton.backends`` map.
+ 
+     ``drivers`` maps backend name to whether its driver reports itself active.
+@@ -30,10 +32,14 @@ def _has_triton_for_backends(**drivers: bool) -> bool:
+     triton_mod.__dict__["backends"] = backends_mod
+ 
+     patched_modules = {"triton": triton_mod, "triton.backends": backends_mod}
++    environment = {}
++    if target_device is not None:
++        environment["VLLM_TARGET_DEVICE"] = target_device
++
+     try:
+         with (
+             mock.patch.dict(sys.modules, patched_modules),
+-            mock.patch.dict("os.environ", {}, clear=True),
++            mock.patch.dict("os.environ", environment, clear=True),
+         ):
+             return importlib.reload(triton_importing).HAS_TRITON
+     finally:
+@@ -124,6 +130,15 @@ def test_multiple_active_gpu_backends_disable_triton():
+     assert _has_triton_for_backends(amd=True, nvidia=True) is False
+ 
+ 
++def test_explicit_rocm_target_ignores_active_nvidia_driver():
++    assert (
++        _has_triton_for_backends(
++            target_device="rocm", amd=True, nvidia=True
++        )
++        is True
++    )
++
++
+ def test_cpu_backend_alone_disables_triton():
+     assert _has_triton_for_backends(cpu=True) is False
+ 
+diff --git a/tests/tool_parsers/test_glm47_moe_tool_parser.py b/tests/tool_parsers/test_glm47_moe_tool_parser.py
+index dc4b726a5383181bdd52250a43d5081da72f73f2..dee329f9cc90aee403e2913aa4ef0eab7e51eeb6 100644
+--- a/tests/tool_parsers/test_glm47_moe_tool_parser.py
++++ b/tests/tool_parsers/test_glm47_moe_tool_parser.py
+@@ -4,13 +4,17 @@
+ """Tests for the GLM-4.7 tool call parser."""
+ 
+ import json
+-from unittest.mock import Mock
++from unittest.mock import MagicMock, Mock
+ 
+ import pytest
++import xgrammar as xgr
+ from openai.types.responses import ResponseFunctionToolCall
++from xgrammar.testing import _is_grammar_accept_string
+ 
+ from vllm.entrypoints.generate.base.protocol import FunctionCall
+ from vllm.entrypoints.openai.chat_completion.protocol import (
++    ChatCompletionNamedFunction,
++    ChatCompletionNamedToolChoiceParam,
+     ChatCompletionRequest,
+     ChatCompletionToolsParam,
+     FunctionDefinition,
+@@ -266,3 +270,115 @@ class TestGlm47Streaming:
+         ]
+         args = json.loads("".join(arguments))
+         assert args["city"] == "Beijing"
++
++
++def _preferences_tool(strict: bool | None) -> ChatCompletionToolsParam:
++    return ChatCompletionToolsParam(
++        function=FunctionDefinition(
++            name="collect_preferences",
++            strict=strict,
++            parameters={
++                "type": "object",
++                "properties": {
++                    "note": {"type": "string"},
++                    "items": {
++                        "type": "array",
++                        "items": {
++                            "type": "object",
++                            "properties": {
++                                "prompt": {"type": "string"},
++                                "choices": {
++                                    "type": "array",
++                                    "items": {"type": "string"},
++                                },
++                                "tag": {"type": "string"},
++                            },
++                            "required": ["prompt", "tag"],
++                        },
++                    },
++                },
++                "required": ["items"],
++            },
++        ),
++    )
++
++
++def _json_schema_formats(node) -> list[dict]:
++    if isinstance(node, dict):
++        found = [node] if node.get("type") == "json_schema" else []
++        return found + [f for v in node.values() for f in _json_schema_formats(v)]
++    if isinstance(node, list):
++        return [f for v in node for f in _json_schema_formats(v)]
++    return []
++
++
++def _call(items: str, note: str | None = None) -> str:
++    args = f"<arg_key>items</arg_key><arg_value>{items}</arg_value>"
++    if note is not None:
++        args += f"<arg_key>note</arg_key><arg_value>{note}</arg_value>"
++    return f"<tool_call>collect_preferences{args}</tool_call>"
++
++
++class TestGlm47StructuralTag:
++    """Strict mode must enforce the same required-first key order the prompt
++    shows the model: the grammar then guarantees required arguments instead of
++    fighting the order the model was primed with."""
++
++    @staticmethod
++    def _tag(tool_choice, strict):
++        tools = [_preferences_tool(strict)]
++        parser = Glm47MoeModelToolParser(MagicMock(), tools=tools)
++        request = ChatCompletionRequest(messages=[], model="m", tools=tools)
++        request.tool_choice = tool_choice
++        tag = parser.get_structural_tag(request)
++        # The request keeps the client's schema order.
++        assert list(tools[0].function.parameters["properties"]) == ["note", "items"]
++        return tag
++
++    def test_auto_without_strict_is_unconstrained(self):
++        assert self._tag("auto", strict=None) is None
++
++    @pytest.mark.parametrize(
++        "tool_choice",
++        [
++            "auto",
++            "required",
++            ChatCompletionNamedToolChoiceParam(
++                function=ChatCompletionNamedFunction(name="collect_preferences")
++            ),
++        ],
++    )
++    def test_embedded_schema_uses_required_first_order(self, tool_choice):
++        formats = _json_schema_formats(self._tag(tool_choice, strict=True).model_dump())
++        assert len(formats) == 1
++        schema = formats[0]["json_schema"]
++        assert list(schema["properties"]) == ["items", "note"]
++        assert list(schema["properties"]["items"]["items"]["properties"]) == [
++            "prompt",
++            "tag",
++            "choices",
++        ]
++
++    @pytest.mark.parametrize(
++        "output",
++        [
++            _call('[{"prompt": "q", "tag": "t", "choices": ["a"]}]'),
++            _call('[{"prompt": "q", "tag": "t"}]', note="n"),
++            _call("[]"),
++        ],
++    )
++    def test_grammar_accepts_required_first_output(self, output):
++        grammar = xgr.Grammar.from_structural_tag(self._tag("required", strict=True))
++        assert _is_grammar_accept_string(grammar, output, require_termination=False)
++
++    @pytest.mark.parametrize(
++        "output",
++        [
++            _call('[{"prompt": "q", "choices": ["a"]}]'),
++            "<tool_call>collect_preferences<arg_key>note</arg_key><arg_value>n"
++            "</arg_value></tool_call>",
++        ],
++    )
++    def test_grammar_rejects_missing_required_key(self, output):
++        grammar = xgr.Grammar.from_structural_tag(self._tag("required", strict=True))
++        assert not _is_grammar_accept_string(grammar, output, require_termination=False)
+diff --git a/tests/tool_parsers/test_utils.py b/tests/tool_parsers/test_utils.py
+index f8890c2d350e356a4ed53309bf0e1afbaed4cbab..004411d21a81e0003392edfc074ccbb7c645f8b1 100644
+--- a/tests/tool_parsers/test_utils.py
++++ b/tests/tool_parsers/test_utils.py
+@@ -3,6 +3,7 @@
+ 
+ import ast
+ import json
++from typing import Any
+ 
+ import pytest
+ 
+@@ -18,6 +19,7 @@ from vllm.tool_parsers.utils import (
+     make_valid_python,
+     normalize_leading_zero_ints,
+     rename_reserved_kwargs,
++    reorder_properties_required_first,
+     restore_reserved_kwarg_names,
+ )
+ 
+@@ -764,3 +766,64 @@ class TestRenameReservedKwargs:
+             "path": "x",
+             "from": 1,
+         }
++
++
++class TestReorderPropertiesRequiredFirst:
++    def test_required_first_in_declaration_order(self):
++        schema = {
++            "type": "object",
++            "properties": {
++                "tag": {"type": "string"},
++                "choices": {"type": "array"},
++                "prompt": {"type": "string"},
++            },
++            "required": ["prompt", "tag"],
++        }
++        reorder_properties_required_first(schema)
++        assert list(schema["properties"]) == ["prompt", "tag", "choices"]
++
++    def test_recurses_into_array_items(self):
++        schema: dict[str, Any] = {
++            "type": "object",
++            "properties": {
++                "items": {
++                    "type": "array",
++                    "items": {
++                        "type": "object",
++                        "properties": {
++                            "detail": {"type": "string"},
++                            "title": {"type": "string"},
++                        },
++                        "required": ["title", "detail"],
++                    },
++                }
++            },
++            "required": ["items"],
++        }
++        reorder_properties_required_first(schema)
++        nested = schema["properties"]["items"]["items"]
++        assert list(nested["properties"]) == ["title", "detail"]
++
++    def test_no_required_keeps_order(self):
++        schema = {
++            "type": "object",
++            "properties": {"b": {"type": "string"}, "a": {"type": "string"}},
++        }
++        reorder_properties_required_first(schema)
++        assert list(schema["properties"]) == ["b", "a"]
++
++    def test_required_entry_missing_from_properties_is_skipped(self):
++        schema = {
++            "type": "object",
++            "properties": {"b": {"type": "string"}, "a": {"type": "string"}},
++            "required": ["missing", "a"],
++        }
++        reorder_properties_required_first(schema)
++        assert list(schema["properties"]) == ["a", "b"]
++
++    def test_non_dict_schemas_pass_through(self):
++        assert reorder_properties_required_first(None) is None
++        assert reorder_properties_required_first(True) is True
++        assert reorder_properties_required_first([{"type": "string"}]) == [
++            {"type": "string"}
++        ]
+diff --git a/tests/v1/attention/test_kpool_tail_slot_mapping.py b/tests/v1/attention/test_kpool_tail_slot_mapping.py
+index 0966f9b20a6bef3d1b9a8576a906e8a5bc6e16f0..e4db595e0182ead7720f4e0e2c167c975c356b18 100644
+--- a/tests/v1/attention/test_kpool_tail_slot_mapping.py
++++ b/tests/v1/attention/test_kpool_tail_slot_mapping.py
+@@ -277,26 +277,27 @@ class TailRingMirror:
+     completing at pos reads ring slots (pool_start + s) % kpool and uses the
+     current token's own K/score for the last member."""
+ 
+-    def __init__(self, num_blocks, kpool=KPOOL):
++    def __init__(self, num_blocks, kpool=KPOOL, ring=None):
+         self.kpool = kpool
+-        self.k = torch.full((num_blocks, kpool, 3), float("nan"))
+-        self.s = torch.full((num_blocks, kpool, 3), float("nan"))
++        self.ring = ring or kpool
++        self.k = torch.full((num_blocks, self.ring, 3), float("nan"))
++        self.s = torch.full((num_blocks, self.ring, 3), float("nan"))
+ 
+     def stash(self, tail_slot, pos, k, s):
+-        blk, off = tail_slot // self.kpool, pos % self.kpool
++        blk, off = tail_slot // self.ring, pos % self.ring
+         self.k[blk, off] = k
+         self.s[blk, off] = s
+ 
+     seed = stash  # the seed kernel writes with the same addressing
+ 
+     def complete(self, tail_slot, pos, k, s):
+-        blk = tail_slot // self.kpool
++        blk = tail_slot // self.ring
+         start = pos - (self.kpool - 1)
+         kk = torch.stack(
+-            [self.k[blk, (start + i) % self.kpool] for i in range(self.kpool)]
++            [self.k[blk, (start + i) % self.ring] for i in range(self.kpool)]
+         )
+         ss = torch.stack(
+-            [self.s[blk, (start + i) % self.kpool] for i in range(self.kpool)]
++            [self.s[blk, (start + i) % self.ring] for i in range(self.kpool)]
+         )
+         kk[-1], ss[-1] = k, s  # is_current for the completing token
+         w = torch.softmax(ss, dim=0)
+@@ -367,3 +368,37 @@ def test_interleaved_decode_pollution_legacy_vs_circular():
+ 
+     # The circular mapping keeps the rings isolated under interleaving.
+     torch.testing.assert_close(circular, ground_truth)
++
++
++@pytest.mark.parametrize("ring_pools", [1, 2])
++def test_rejected_completing_draft_needs_ring_slots(ring_pools):
++    """A speculative step stashes 1 + num_spec rows before acceptance. If the
++    pool-completing token is a rejected draft, the drafts behind it must not
++    have overwritten the pool's committed keys, or the redo compresses wrong
++    keys. One pool of ring fails this; two pools (the QSA rule) hold."""
++    ring_size = ring_pools * KPOOL
++    truth = TailRingMirror(num_blocks=2, ring=ring_size)
++    ring = TailRingMirror(num_blocks=2, ring=ring_size)
++    block = 1
++
++    def slot(pos):
++        return block * ring_size + pos % ring_size
++
++    for pos in range(4, 7):  # committed keys of the open pool [4, 5, 6, 7]
++        truth.stash(slot(pos), pos, *token_kv(0, pos))
++        ring.stash(slot(pos), pos, *token_kv(0, pos))
++    expected = truth.complete(slot(7), 7, *token_kv(0, 7))
++
++    # Spec step [7d, 8d, 9d, 10d]: 7d completes the pool with a wrong key and
++    # is later rejected; 8d, 9d, 10d are stashed behind it.
++    for pos in range(7, 11):
++        k, s = token_kv(9, pos)  # draft values
++        if pos % KPOOL == KPOOL - 1:
++            ring.complete(slot(pos), pos, k, s)
++        ring.stash(slot(pos), pos, k, s)
++    # Redo of position 7 with the accepted key.
++    redo = ring.complete(slot(7), 7, *token_kv(0, 7))
++    if ring_pools == 1:
++        assert not torch.allclose(redo, expected)
++    else:
++        torch.testing.assert_close(redo, expected)
+diff --git a/tests/v1/attention/test_rocm_glm5next_sparse.py b/tests/v1/attention/test_rocm_glm5next_sparse.py
+index ccc9e5c6178ecf00e0c7e8acbb5416d192d98321..5215514e63754f2d0735e484196de67f655aa1ac 100644
+--- a/tests/v1/attention/test_rocm_glm5next_sparse.py
++++ b/tests/v1/attention/test_rocm_glm5next_sparse.py
+@@ -17,6 +17,7 @@ from vllm.v1.attention.ops.rocm_aiter_mla_sparse import (
+     _sparse_kv_row_offset,
+     _validate_dsv4_sparse_dims,
+     _validate_sparse_dims,
++    rocm_sparse_attn_prefill,
+ )
+ 
+ 
+@@ -99,5 +100,6 @@ def test_rocm_sparse_triton_route(
+             num_prefills=num_prefills,
+             num_decodes=num_decodes,
+             num_decode_tokens=num_decode_tokens,
+             max_query_len=max_query_len,
++            rdna4_triton_supported=False,
+         )
+@@ -105,6 +107,20 @@ def test_rocm_sparse_triton_route(
+     )
+ 
+ 
++def test_rdna4_routes_full_bf16_but_not_full_fp8_to_triton():
++    common = {
++        "head_size": 576,
++        "kv_lora_rank": 512,
++        "num_prefills": 1,
++        "num_decodes": 0,
++        "num_decode_tokens": 0,
++        "max_query_len": 32,
++        "rdna4_triton_supported": True,
++    }
++    assert _use_rocm_sparse_triton(kv_cache_dtype="auto", **common)
++    assert not _use_rocm_sparse_triton(kv_cache_dtype="fp8", **common)
++
++
+ @pytest.mark.parametrize("num_heads", [8, 12])
+ def test_rocm_sparse_triton_route_preserves_padded_sinks(monkeypatch, num_heads):
+     captured = {}
+@@ -180,3 +196,58 @@ def test_sparse_prefill_kv_row_offset_does_not_overflow_int32():
+     _store_sparse_kv_row_offset_kernel[(1,)](slot, output, stride=512)
+ 
+     assert output.item() == 6554 * 640 * 512
++
++
++@pytest.mark.skipif(not current_platform.is_rocm(), reason="ROCm required")
++def test_full_glm_sparse_prefill_matches_torch_reference():
++    torch.manual_seed(7)
++    device = torch.device("cuda")
++    num_queries, num_heads = 2, 16
++    qk_dim, value_dim, num_kv, topk = 576, 512, 257, 128
++    q = torch.randn(
++        num_queries, num_heads, qk_dim, device=device, dtype=torch.bfloat16
++    )
++    kv = torch.randn(num_kv, 1, qk_dim, device=device, dtype=torch.bfloat16)
++    rows = [
++        (torch.arange(topk, device=device, dtype=torch.int32) * (row + 1) + 3)
++        % num_kv
++        for row in range(num_queries)
++    ]
++    indices = torch.cat(rows)
++    indptr = torch.arange(
++        0,
++        (num_queries + 1) * topk,
++        topk,
++        device=device,
++        dtype=torch.int32,
++    )
++    output = torch.empty(
++        num_queries, num_heads, value_dim, device=device, dtype=torch.bfloat16
++    )
++    scale = qk_dim**-0.5
++    rocm_sparse_attn_prefill(
++        q=q,
++        kv=kv,
++        indices=None,
++        topk_length=None,
++        scale=scale,
++        head_dim=qk_dim,
++        nope_head_dim=value_dim,
++        rope_head_dim=qk_dim - value_dim,
++        attn_sink=None,
++        output=output,
++        ragged_indices=indices,
++        ragged_indptr=indptr,
++    )
++
++    reference = []
++    for row in range(num_queries):
++        selected = kv[rows[row].long(), 0]
++        scores = torch.einsum("hd,kd->hk", q[row].float(), selected.float())
++        probs = torch.softmax(scores * scale, dim=-1)
++        reference.append(
++            torch.einsum("hk,kv->hv", probs, selected[:, :value_dim].float())
++        )
++    torch.testing.assert_close(
++        output.float(), torch.stack(reference), rtol=0.03, atol=0.03
++    )
+diff --git a/tests/v1/core/test_prefix_caching.py b/tests/v1/core/test_prefix_caching.py
+index d91260e30ae0ced4a3fceb991b714c09e7864d1f..66958b48954406c9c1920808f54be60b7ff82cd8 100644
+--- a/tests/v1/core/test_prefix_caching.py
++++ b/tests/v1/core/test_prefix_caching.py
+@@ -5598,6 +5598,31 @@ def test_swa_reachable_block_mask_final_partial_segment():
+     assert reachable_blocks(250, use_eagle=True) == {243, 248, 249}
+ 
+ 
++def test_swa_eagle_short_prefix_retention_stays_dense():
++    """Keep the whole prefix until an EAGLE lookup window is complete."""
++    from vllm.v1.core.single_type_kv_cache_manager import SlidingWindowManager
++
++    spec = SlidingWindowSpec(
++        block_size=4,
++        num_kv_heads=1,
++        head_size=1,
++        dtype=torch.float32,
++        sliding_window=8,
++    )
++    assert (
++        SlidingWindowManager.reachable_block_mask(
++            start_block=0,
++            end_block=3,
++            alignment_tokens=4,
++            kv_cache_spec=spec,
++            use_eagle=True,
++            retention_interval=0,
++            reachable_boundaries=(8,),
++        )
++        is None
++    )
++
++
+ def test_swa_reachable_block_mask_pins_shared_prefix():
+     """SWA analog of the Mamba pin: the shared-prefix junction must keep the
+     ``need``-block sliding-window tail ending on that boundary (not a single
+diff --git a/tests/v1/worker/test_gpu_worker.py b/tests/v1/worker/test_gpu_worker.py
+index 88cbee6802405c282843fdd72862fd7d872f860a..0e06357e402f9807c9b386788f014d87bfd99552 100644
+--- a/tests/v1/worker/test_gpu_worker.py
++++ b/tests/v1/worker/test_gpu_worker.py
+@@ -3,7 +3,7 @@
+ 
+ from contextlib import nullcontext
+ from types import SimpleNamespace
+-from unittest.mock import patch
++from unittest.mock import MagicMock, patch
+ 
+ import pytest
+ 
+@@ -155,6 +155,83 @@ def test_profiling_fallback_declines_off_rocm(rocm):
+     assert maybe_rocm_profiling_fallback(result) is None
+ 
+ 
++def test_initialize_from_config_creates_rocm_blas_handle_before_kv_cache(
++    monkeypatch: pytest.MonkeyPatch,
++):
++    events: list[str] = []
++    tensor = MagicMock()
++    tensor.T = tensor
++    tensor.transpose.return_value = tensor
++    worker = SimpleNamespace(
++        cache_config=SimpleNamespace(num_gpu_blocks=None),
++        model_config=SimpleNamespace(enable_return_routed_experts=False),
++        model_runner=SimpleNamespace(
++            initialize_kv_cache=lambda *args, **kwargs: events.append("kv_cache")
++        ),
++        vllm_config=SimpleNamespace(
++            kv_transfer_config=SimpleNamespace(kv_connector="OffloadingConnector")
++        ),
++        _maybe_get_memory_pool_context=lambda tag: nullcontext(),
++    )
++    config = SimpleNamespace(
++        num_blocks=1,
++        kv_cache_layout=None,
++        needs_kv_cache_zeroing=False,
++    )
++    monkeypatch.setattr(
++        gpu_worker, "current_platform", SimpleNamespace(is_rocm=lambda: True)
++    )
++    monkeypatch.setattr(
++        gpu_worker.torch.cuda,
++        "current_blas_handle",
++        lambda: events.append("blas_handle"),
++    )
++    monkeypatch.setattr(gpu_worker.torch, "empty", lambda *args, **kwargs: tensor)
++    monkeypatch.setattr(
++        gpu_worker.torch,
++        "bmm",
++        lambda *args, **kwargs: events.append("bmm"),
++    )
++    monkeypatch.setattr(
++        gpu_worker.torch.nn.functional,
++        "linear",
++        lambda *args, **kwargs: events.append("linear"),
++    )
++    monkeypatch.setattr(
++        gpu_worker.torch,
++        "mm",
++        lambda *args, **kwargs: events.append("router"),
++    )
++    monkeypatch.setattr(
++        gpu_worker.torch.cuda,
++        "synchronize",
++        lambda: events.append("synchronize"),
++    )
++    monkeypatch.setattr(
++        gpu_worker.torch.cuda,
++        "empty_cache",
++        lambda: events.append("empty_cache"),
++    )
++    monkeypatch.setattr(
++        gpu_worker,
++        "ensure_kv_transfer_initialized",
++        lambda *args: events.append("kv_transfer"),
++    )
++
++    gpu_worker.Worker.initialize_from_config(worker, config)
++
++    assert events == [
++        "blas_handle",
++        "bmm",
++        "linear",
++        "router",
++        "synchronize",
++        "empty_cache",
++        "kv_transfer",
++        "kv_cache",
++    ]
++
++
+ class _OrderedHandle:
+     """Send handle that logs when it is waited."""
+ 
+diff --git a/vllm/model_executor/layers/sparse_attn_indexer_kpool.py b/vllm/model_executor/layers/sparse_attn_indexer_kpool.py
+index 2a314042deef162c3b1fbf44bd232e714826dec4..3d672d6e0be1732f0b8aaf1690f737564a8dd5ad 100644
+--- a/vllm/model_executor/layers/sparse_attn_indexer_kpool.py
++++ b/vllm/model_executor/layers/sparse_attn_indexer_kpool.py
+@@ -535,8 +535,13 @@ def sparse_attn_indexer_kpool(
+             # expand each pool back to its kpool constituent tokens.
+             select_k = topk_tokens // index_kpool if index_kpool > 1 else topk_tokens
+             if index_kpool > 1:
+-                pool_topk = torch.empty(
+-                    (num_rows, select_k), dtype=torch.int32, device=logits.device
++                # Top-k kernels may leave slots unwritten when a row has fewer
++                # than select_k pools.
++                pool_topk = torch.full(
++                    (num_rows, select_k),
++                    -1,
++                    dtype=torch.int32,
++                    device=logits.device,
+                 )
+                 topk_dst = pool_topk
+             else:
+@@ -581,7 +586,8 @@ def sparse_attn_indexer_kpool(
+                         pool_ids, q_seq, index_kpool
+                     )
+                 else:
+-                    valid = pool_ids >= 0
++                    pool_lens = chunk.cu_seqlen_ke - chunk.cu_seqlen_ks
++                    valid = (pool_ids >= 0) & (pool_ids < pool_lens[:, None])
+                     expanded = kpool_ops.expand_pools_to_tokens(
+                         pool_ids, valid, topk_tokens, index_kpool
+                     )
+@@ -798,8 +804,11 @@ def sparse_attn_indexer_kpool(
+         # then expand each pool back to its kpool tokens.
+         select_k = topk_tokens // index_kpool if index_kpool > 1 else topk_tokens
+         if index_kpool > 1:
+-            pool_topk = torch.empty(
+-                (num_rows, select_k), dtype=torch.int32, device=logits.device
++            pool_topk = torch.full(
++                (num_rows, select_k),
++                -1,
++                dtype=torch.int32,
++                device=logits.device,
+             )
+             topk_dst = pool_topk
+         else:
+@@ -1029,7 +1038,10 @@ class SparseAttnIndexerKpool(CustomOp):
+         assert isinstance(q_quant, torch.Tensor), (
+             "AMD sparse_attn_indexer expects a single FP8 q_quant tensor"
+         )
+-        if rocm_aiter_ops.is_enabled():
++        if (
++            rocm_aiter_ops.is_enabled()
++            or rocm_aiter_ops.is_rdna_aiter_enabled()
++        ):
+             if index_kpool <= 1:
+                 return torch.ops.vllm.rocm_aiter_sparse_attn_indexer(
+                     hidden_states,
+diff --git a/vllm/model_executor/models/qwen3_dflash.py b/vllm/model_executor/models/qwen3_dflash.py
+index ce3884a10eb844f07f3c15aa9fa4d041dc470162..0ec76c7e751bd87747f9e72b900fa18b9d50c7f7 100644
+--- a/vllm/model_executor/models/qwen3_dflash.py
++++ b/vllm/model_executor/models/qwen3_dflash.py
+@@ -21,7 +21,6 @@ from vllm.model_executor.layers.attention import Attention
+ from vllm.model_executor.layers.layernorm import RMSNorm
+ from vllm.model_executor.layers.linear import (
+     QKVParallelLinear,
+-    ReplicatedLinear,
+     RowParallelLinear,
+ )
+ from vllm.model_executor.layers.logits_processor import LogitsProcessor
+@@ -433,12 +432,18 @@ class DFlashQwen3Model(nn.Module):
+             ]
+         )
+         if self.use_aux_hidden_state:
+-            self.fc = ReplicatedLinear(
++            # The target provides the complete concatenated auxiliary state on
++            # every rank. Shard this large projection across TP ranks and sum
++            # the partial products instead of replicating its 160 MiB BF16
++            # weight on every GPU (20 MiB/rank at TP=8 for GLM-5.3 DFlash2).
++            self.fc = RowParallelLinear(
+                 input_size=_get_dflash_fc_input_size(
+                     vllm_config,
+                 ),
+                 output_size=self.config.hidden_size,
+                 bias=False,
++                input_is_parallel=False,
++                reduce_results=True,
+                 params_dtype=vllm_config.model_config.dtype,
+                 quant_config=self.quant_config,
+                 prefix=maybe_prefix(prefix, "fc"),
+diff --git a/vllm/models/glm5next/amd/ops/kpool_compress.py b/vllm/models/glm5next/amd/ops/kpool_compress.py
+index 09e7a40aa5e0b6204a8488262f1e088e63caf45e..5726ef32c44e2839819b9258d41c13bb341860c3 100644
+--- a/vllm/models/glm5next/amd/ops/kpool_compress.py
++++ b/vllm/models/glm5next/amd/ops/kpool_compress.py
+@@ -320,38 +320,37 @@ def _kpool_tail_seed_kernel(
+     KPOOL_HEAD: tl.constexpr,
+     HEAD_DIM: tl.constexpr,
+     KPOOL: tl.constexpr,
++    RING: tl.constexpr,
+     BLOCK_D: tl.constexpr,
+ ):
+-    """Copy token ``i``'s raw K + gate into its request's tail block.
++    """Copy token ``i``'s raw K + gate into its request's tail ring.
+ 
+     Token ``i`` is among its request's last KPOOL tokens iff the token KPOOL
+     ahead belongs to a different tail block (or is past the batch / padding,
+-    slot < 0). ``tslot = block * KPOOL + pos % KPOOL``; the destination is
+-    ``tail[block, {0:K, 1:score}, pos % KPOOL, :]``.
++    slot < 0). ``tslot = block * RING + pos % RING``; the destination is
++    ``tail[block, {0:K, 1:score}, pos % RING, :]``.
+     """
+     i = tl.program_id(0)
+     t = tl.load(tslot_ptr + i).to(tl.int64)
+     if t < 0:
+         return
+-    blk = t // KPOOL  # t >= 0 here, so trunc == floor
++    blk = t // RING  # t >= 0 here, so trunc == floor
+     ahead = tl.load(tslot_ptr + i + KPOOL, mask=i + KPOOL < n_tokens, other=-1).to(
+         tl.int64
+     )
+     # Match the torch semantics exactly: a negative ahead slot floors to a
+     # block id that differs from every real block -> token is in the tail.
+     # Only divide non-negative slots (Triton int div truncates, torch floors).
+-    if ahead >= 0 and ahead // KPOOL == blk:
++    if ahead >= 0 and ahead // RING == blk:
+         return
+     offs = tl.arange(0, BLOCK_D)
+     m = offs < HEAD_DIM
+     block_base = blk * TAIL_BLOCK_ELEMS
+-    base = block_base + (t % KPOOL) * HEAD_DIM
++    base = block_base + (t % RING) * HEAD_DIM
+     k = tl.load(key_ptr + i * HEAD_DIM + offs, mask=m)
+     s = tl.load(score_ptr + i * HEAD_DIM + offs, mask=m)
+     tl.store(tail_ptr + base + offs, k, mask=m)
+-    tl.store(
+-        tail_ptr + block_base + KPOOL_HEAD + (t % KPOOL) * HEAD_DIM + offs, s, mask=m
+-    )
++    tl.store(tail_ptr + base + KPOOL_HEAD + offs, s, mask=m)
+ 
+ 
+ def kpool_seed_tail_cache(
+@@ -378,6 +377,7 @@ def kpool_seed_tail_cache(
+         KPOOL_HEAD=tail_kv_cache.stride(1),
+         HEAD_DIM=head_dim,
+         KPOOL=kpool,
++        RING=tail_kv_cache.shape[2],
+         BLOCK_D=triton.next_power_of_2(head_dim),
+     )
+ 
+@@ -405,6 +405,7 @@ def _kpool_decode_update_batched_kernel(
+     PAGE_SIZE: tl.constexpr,
+     BUF_NUMEL_PER_PAGE: tl.constexpr,
+     POOL_SIZE: tl.constexpr,
++    RING: tl.constexpr,
+     TAIL_BLOCK_ELEMS: tl.constexpr,
+     KPOOL_HEAD: tl.constexpr,
+     HEAD_DIM: tl.constexpr,
+@@ -438,7 +439,7 @@ def _kpool_decode_update_batched_kernel(
+         pos_valid = (cache_loc >= 0) & (pos >= 0)
+ 
+         slot = safe_pos % POOL_SIZE
+-        phys_slot = safe_pos % POOL_SIZE
++        phys_slot = safe_pos % RING  # RING >= POOL_SIZE; see Glm5NextTailCache
+ 
+         # Derive the tail block from THIS token's tail_slot (the request's block
+         # is constant across a pool, but a padded / invalid entry carries a
+@@ -446,7 +447,7 @@ def _kpool_decode_update_batched_kernel(
+         # token's base address). Clamp so an invalid entry can never form an
+         # out-of-bounds base; the accesses below are gated on pos_valid anyway.
+         tail_slot = tl.load(tail_slot_mapping_ptr + idx)
+-        block = tl.maximum(tail_slot, 0).to(tl.int64) // POOL_SIZE
++        block = tl.maximum(tail_slot, 0).to(tl.int64) // RING
+         block_base = block * TAIL_BLOCK_ELEMS
+ 
+         # The tail-ring stash must run for EVERY real token, so it is gated on
+@@ -474,7 +475,7 @@ def _kpool_decode_update_batched_kernel(
+             max_score = tl.full((BLOCK_D,), -float("inf"), tl.float32)
+             for pool_slot in tl.static_range(0, POOL_SIZE):
+                 is_current = pool_slot == slot
+-                phys = (pool_logical_start + pool_slot) % POOL_SIZE
++                phys = (pool_logical_start + pool_slot) % RING
+                 score_buf = tl.load(
+                     tail_kv_ptr + block_base + KPOOL_HEAD + phys * HEAD_DIM + offs,
+                     mask=dim_mask,
+@@ -492,7 +493,7 @@ def _kpool_decode_update_batched_kernel(
+             denom = tl.full((BLOCK_D,), 0.0, tl.float32)
+             for pool_slot in tl.static_range(0, POOL_SIZE):
+                 is_current = pool_slot == slot
+-                phys = (pool_logical_start + pool_slot) % POOL_SIZE
++                phys = (pool_logical_start + pool_slot) % RING
+                 score_buf = tl.load(
+                     tail_kv_ptr + block_base + KPOOL_HEAD + phys * HEAD_DIM + offs,
+                     mask=dim_mask,
+@@ -598,7 +599,8 @@ def kpool_decode_update_and_maybe_write_cache_batched(
+         return
+     assert tail_kv_cache.ndim == 4
+     assert tail_kv_cache.shape[1] == 2
+-    assert tail_kv_cache.shape[2] == pool_size
++    ring = tail_kv_cache.shape[2]
++    assert ring >= pool_size and ring % pool_size == 0, (ring, pool_size)
+     assert tail_kv_cache.shape[3] == head_dim
+     assert tail_kv_cache.dtype == torch.bfloat16
+     assert key.ndim == 3 and key.shape[2] == head_dim
+@@ -647,6 +649,7 @@ def kpool_decode_update_and_maybe_write_cache_batched(
+         PAGE_SIZE=page_size,
+         BUF_NUMEL_PER_PAGE=buf.stride(0),
+         POOL_SIZE=pool_size,
++        RING=ring,
+         TAIL_BLOCK_ELEMS=tail_kv_cache.stride(0),
+         KPOOL_HEAD=tail_kv_cache.stride(1),
+         HEAD_DIM=head_dim,
+@@ -802,7 +805,7 @@ def _expand_pools_and_append_tail_kernel(
+     o = cols % POOL_SIZE
+     pid = tl.load(pool_ids_ptr + row * pid_s0 + g, mask=mask & is_history, other=-1)
+     hist_val = (pid * POOL_SIZE + o).to(tl.int32)
+-    hist_out = tl.where(pid >= 0, hist_val, -1)
++    hist_out = tl.where((pid >= 0) & (pid < pool_len), hist_val, -1)
+ 
+     # Tail region [topk, out_cols): the request's trailing incomplete pool.
+     tail_off = cols - topk
+diff --git a/vllm/models/glm5next/nvidia/attention.py b/vllm/models/glm5next/nvidia/attention.py
+index 0be749348494f6679fc3e856112b9c0d6272b89d..060c664920086e491d32743f1b52770a4ad83f87 100644
+--- a/vllm/models/glm5next/nvidia/attention.py
++++ b/vllm/models/glm5next/nvidia/attention.py
+@@ -34,6 +34,7 @@ from vllm.models.glm5next.nvidia.ops.kpool_compress import fwht128_quant_fp8
+ from vllm.platforms import current_platform
+ from vllm.transformers_utils.configs.glm5_next import Glm5NextConfig
+ from vllm.utils.deep_gemm import PAGED_MQA_PAGE_SIZES
++from vllm.utils.math_utils import cdiv
+ from vllm.v1.kv_cache_interface import KpoolTailSpec, MLAAttentionSpec
+ 
+ logger = init_logger(__name__)
+@@ -190,13 +191,17 @@ class Glm5NextTailCache(DeepseekV32IndexerCache):
+     def get_kv_cache_spec(self, vllm_config: VllmConfig):
+         # The two head slots form [K, gate score] in the generic
+         # [block, head, state, content] cache view.
++        # The open pool's committed keys plus a speculative step's rows, in
++        # whole pools (QSA rule): a rejected draft must not overwrite them.
++        span = self._index_kpool + vllm_config.num_speculative_tokens
++        capacity = self._index_kpool * cdiv(span, self._index_kpool)
+         return KpoolTailSpec(
+-            block_size=self._index_kpool,
++            block_size=capacity,
+             num_kv_heads=2,
+             head_size=self.head_dim,
+             head_size_v=0,
+             dtype=torch.bfloat16,
+-            sliding_window=self._index_kpool,
++            sliding_window=capacity,
+         )
+ 
+     def get_attn_backend(self):
+@@ -300,7 +305,12 @@ class Indexer(nn.Module):
+         self.prefix = prefix
+         from vllm.v1.attention.backends.mla.indexer import get_max_prefill_buffer_size
+ 
+-        self.max_total_seq_len = get_max_prefill_buffer_size(vllm_config)
++        # Right-size the indexer prefill workspace: it is sized in tokens but
++        # this indexer KV is pool-granular (compress_ratio == index_kpool),
++        # same as deepseek_v4/attention.py already does. Thread #53906.
++        self.max_total_seq_len = (
++            get_max_prefill_buffer_size(vllm_config) // self.index_kpool
++        )
+         self.indexer_op = SparseAttnIndexerKpool(
+             self.k_cache,
+             self.quant_block_size,
+diff --git a/vllm/models/glm5next/nvidia/model.py b/vllm/models/glm5next/nvidia/model.py
+index 21918bdf6bed8dfcb614758e3d6974905779c2ad..849b58faa5edc6c53bf0a8f96b2229aed78093c3 100644
+--- a/vllm/models/glm5next/nvidia/model.py
++++ b/vllm/models/glm5next/nvidia/model.py
+@@ -60,9 +60,11 @@ from vllm.model_executor.models.glm4_1v import (
+     Glm4vForConditionalGeneration,
+ )
+ from vllm.model_executor.models.interfaces import (
++    EagleModelMixin,
+     HasInnerState,
+     IsHybrid,
+     MixtureOfExperts,
++    SupportsEagle3,
+     SupportsPP,
+ )
+ from vllm.model_executor.models.utils import (
+@@ -619,7 +621,7 @@ class Glm5NextDecoderLayer(nn.Module):
+         )
+ 
+ 
+-class Glm5NextModel(nn.Module):
++class Glm5NextModel(nn.Module, EagleModelMixin):
+     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
+         super().__init__()
+ 
+@@ -704,7 +706,7 @@ class Glm5NextModel(nn.Module):
+         intermediate_tensors: IntermediateTensors | None,
+         inputs_embeds: torch.Tensor | None = None,
+         **kwargs,
+-    ) -> torch.Tensor:
++    ) -> torch.Tensor | IntermediateTensors | tuple[torch.Tensor, list[torch.Tensor]]:
+         if get_pp_group().is_first_rank:
+             if inputs_embeds is not None:
+                 hidden_states = inputs_embeds
+@@ -723,13 +725,25 @@ class Glm5NextModel(nn.Module):
+             comb = None
+ 
+         full_num_tokens = positions.shape[0]
++        aux_hidden_states = self._maybe_add_hidden_state([], 0, hidden_states, None)
+         if self.is_sequence_parallel:
+             hidden_states = sp_shard(hidden_states)
+ 
+-        for layer in self._active_layers:
++        for layer_idx, layer in enumerate(self._active_layers, self.start_layer):
+             hidden_states, residual, post, comb = layer(
+                 positions, hidden_states, residual, post, comb
+             )
++            if layer_idx + 1 in self.aux_hidden_state_layers:
++                aux = hidden_states
++                if post is not None:
++                    # Materialize the deferred mHC output for the drafter only;
++                    # leave the target's fused post/pre state untouched.
++                    aux = hc_contract(
++                        layer.hc_post(hidden_states, residual, post, comb), layer.n
++                    )
++                if self.is_sequence_parallel:
++                    aux = sp_all_gather(aux)[:full_num_tokens]
++                aux_hidden_states.append(aux)
+ 
+         if not get_pp_group().is_last_rank:
+             # PP is gated off for GLM-5.3-Flash (no make_empty_intermediate_tensors),
+@@ -745,6 +759,8 @@ class Glm5NextModel(nn.Module):
+             hidden_states = sp_all_gather(hidden_states)[:full_num_tokens]
+ 
+         hidden_states = self.norm(hidden_states)
++        if aux_hidden_states:
++            return hidden_states, aux_hidden_states
+         return hidden_states
+ 
+     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
+@@ -931,7 +947,7 @@ class Glm5NextModel(nn.Module):
+ 
+ 
+ class Glm5NextForCausalLM(
+-    nn.Module, HasInnerState, SupportsPP, MixtureOfExperts, IsHybrid
++    nn.Module, HasInnerState, SupportsPP, MixtureOfExperts, IsHybrid, SupportsEagle3
+ ):
+     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
+         super().__init__()
+@@ -1027,7 +1043,11 @@ class Glm5NextForCausalLM(
+     dummy_inputs=Glm4vDummyInputsBuilder,
+ )
+ class Glm5NextForConditionalGeneration(
+-    Glm4vForConditionalGeneration, HasInnerState, IsHybrid, MixtureOfExperts
++    Glm4vForConditionalGeneration,
++    HasInnerState,
++    IsHybrid,
++    MixtureOfExperts,
++    SupportsEagle3,
+ ):
+     # The text model (KDA + dense-MLA + MoE) is a hybrid mamba model. The
+     # multimodal wrapper must declare the same interfaces so vLLM treats it as
+diff --git a/vllm/models/glm5next/nvidia/ops/kpool_compress.py b/vllm/models/glm5next/nvidia/ops/kpool_compress.py
+index 70b41021aab0560a1a770872f2d4742e7b153ccd..21fd19f50179edaf76d4f038f008c8feee68d392 100644
+--- a/vllm/models/glm5next/nvidia/ops/kpool_compress.py
++++ b/vllm/models/glm5next/nvidia/ops/kpool_compress.py
+@@ -377,35 +377,38 @@ def _kpool_tail_seed_kernel(
+     n_tokens,
+     HEAD_DIM: tl.constexpr,
+     KPOOL: tl.constexpr,
++    RING: tl.constexpr,
++    TAIL_BLOCK_ELEMS: tl.constexpr,
++    TAIL_HEAD_ELEMS: tl.constexpr,
+     BLOCK_D: tl.constexpr,
+ ):
+-    """Copy token ``i``'s raw K + gate into its request's tail block.
++    """Copy token ``i``'s raw K + gate into its request's tail ring.
+ 
+     Token ``i`` is among its request's last KPOOL tokens iff the token KPOOL
+     ahead belongs to a different tail block (or is past the batch / padding,
+-    slot < 0). ``tslot = block * KPOOL + pos % KPOOL``; the destination is
+-    ``tail[block, {0:K, 1:score}, pos % KPOOL, :]``.
++    slot < 0). ``tslot = block * RING + pos % RING``; the destination is
++    ``tail[block, {0:K, 1:score}, pos % RING, :]``.
+     """
+     i = tl.program_id(0)
+     t = tl.load(tslot_ptr + i).to(tl.int64)
+     if t < 0:
+         return
+-    blk = t // KPOOL  # t >= 0 here, so trunc == floor
++    blk = t // RING  # t >= 0 here, so trunc == floor
+     ahead = tl.load(tslot_ptr + i + KPOOL, mask=i + KPOOL < n_tokens, other=-1).to(
+         tl.int64
+     )
+     # Match the torch semantics exactly: a negative ahead slot floors to a
+     # block id that differs from every real block -> token is in the tail.
+     # Only divide non-negative slots (Triton int div truncates, torch floors).
+-    if ahead >= 0 and ahead // KPOOL == blk:
++    if ahead >= 0 and ahead // RING == blk:
+         return
+     offs = tl.arange(0, BLOCK_D)
+     m = offs < HEAD_DIM
+-    base = (blk * 2 * KPOOL + t % KPOOL) * HEAD_DIM
++    base = blk * TAIL_BLOCK_ELEMS + (t % RING) * HEAD_DIM
+     k = tl.load(key_ptr + i * HEAD_DIM + offs, mask=m)
+     s = tl.load(score_ptr + i * HEAD_DIM + offs, mask=m)
+     tl.store(tail_ptr + base + offs, k, mask=m)
+-    tl.store(tail_ptr + base + KPOOL * HEAD_DIM + offs, s, mask=m)
++    tl.store(tail_ptr + base + TAIL_HEAD_ELEMS + offs, s, mask=m)
+ 
+ 
+ def kpool_seed_tail_cache(
+@@ -419,6 +422,8 @@ def kpool_seed_tail_cache(
+     """Seed the paged tail cache from a prefill batch (see the kernel)."""
+     assert tail_kv_cache.dtype == torch.bfloat16
+     assert key.dtype == torch.bfloat16
++    assert tail_kv_cache.ndim == 4 and tail_kv_cache.shape[1] == 2
++    assert tail_kv_cache.stride(3) == 1 and tail_kv_cache.stride(2) == head_dim
+     n = tslot.shape[0]
+     if n == 0:
+         return
+@@ -430,6 +435,9 @@ def kpool_seed_tail_cache(
+         n,
+         HEAD_DIM=head_dim,
+         KPOOL=kpool,
++        RING=tail_kv_cache.shape[2],
++        TAIL_BLOCK_ELEMS=tail_kv_cache.stride(0),
++        TAIL_HEAD_ELEMS=tail_kv_cache.stride(1),
+         BLOCK_D=triton.next_power_of_2(head_dim),
+     )
+ 
+@@ -457,6 +465,7 @@ def _kpool_decode_update_batched_kernel(
+     PAGE_SIZE: tl.constexpr,
+     BUF_NUMEL_PER_PAGE: tl.constexpr,
+     POOL_SIZE: tl.constexpr,
++    RING: tl.constexpr,
+     TAIL_BLOCK_ELEMS: tl.constexpr,
+     KPOOL_HEAD: tl.constexpr,
+     HEAD_DIM: tl.constexpr,
+@@ -488,7 +497,7 @@ def _kpool_decode_update_batched_kernel(
+         pos_valid = (cache_loc >= 0) & (pos >= 0)
+ 
+         slot = safe_pos % POOL_SIZE
+-        phys_slot = safe_pos % POOL_SIZE
++        phys_slot = safe_pos % RING  # RING >= POOL_SIZE; see Glm5NextTailCache
+ 
+         # Derive the tail block from THIS token's tail_slot (the request's block
+         # is constant across a pool, but a padded / invalid entry carries a
+@@ -496,7 +505,7 @@ def _kpool_decode_update_batched_kernel(
+         # token's base address). Clamp so an invalid entry can never form an
+         # out-of-bounds base; the accesses below are gated on pos_valid anyway.
+         tail_slot = tl.load(tail_slot_mapping_ptr + idx)
+-        block = tl.maximum(tail_slot, 0).to(tl.int64) // POOL_SIZE
++        block = tl.maximum(tail_slot, 0).to(tl.int64) // RING
+         block_base = block * TAIL_BLOCK_ELEMS
+ 
+         # The tail-ring stash must run for EVERY real token, so it is gated on
+@@ -524,7 +533,7 @@ def _kpool_decode_update_batched_kernel(
+             max_score = tl.full((BLOCK_D,), -float("inf"), tl.float32)
+             for pool_slot in tl.static_range(0, POOL_SIZE):
+                 is_current = pool_slot == slot
+-                phys = (pool_logical_start + pool_slot) % POOL_SIZE
++                phys = (pool_logical_start + pool_slot) % RING
+                 score_buf = tl.load(
+                     tail_kv_ptr + block_base + KPOOL_HEAD + phys * HEAD_DIM + offs,
+                     mask=dim_mask,
+@@ -542,7 +551,7 @@ def _kpool_decode_update_batched_kernel(
+             denom = tl.full((BLOCK_D,), 0.0, tl.float32)
+             for pool_slot in tl.static_range(0, POOL_SIZE):
+                 is_current = pool_slot == slot
+-                phys = (pool_logical_start + pool_slot) % POOL_SIZE
++                phys = (pool_logical_start + pool_slot) % RING
+                 score_buf = tl.load(
+                     tail_kv_ptr + block_base + KPOOL_HEAD + phys * HEAD_DIM + offs,
+                     mask=dim_mask,
+@@ -648,7 +657,8 @@ def kpool_decode_update_and_maybe_write_cache_batched(
+         return
+     assert tail_kv_cache.ndim == 4
+     assert tail_kv_cache.shape[1] == 2
+-    assert tail_kv_cache.shape[2] == pool_size
++    ring = tail_kv_cache.shape[2]
++    assert ring >= pool_size and ring % pool_size == 0, (ring, pool_size)
+     assert tail_kv_cache.shape[3] == head_dim
+     assert tail_kv_cache.dtype == torch.bfloat16
+     assert key.ndim == 3 and key.shape[2] == head_dim
+@@ -694,6 +704,7 @@ def kpool_decode_update_and_maybe_write_cache_batched(
+         PAGE_SIZE=page_size,
+         BUF_NUMEL_PER_PAGE=buf.stride(0),
+         POOL_SIZE=pool_size,
++        RING=ring,
+         TAIL_BLOCK_ELEMS=tail_kv_cache.stride(0),
+         KPOOL_HEAD=tail_kv_cache.stride(1),
+         HEAD_DIM=head_dim,
+@@ -847,7 +858,7 @@ def _expand_pools_and_append_tail_kernel(
+     o = cols % POOL_SIZE
+     pid = tl.load(pool_ids_ptr + row * pid_s0 + g, mask=mask & is_history, other=-1)
+     hist_val = (pid * POOL_SIZE + o).to(tl.int32)
+-    hist_out = tl.where(pid >= 0, hist_val, -1)
++    hist_out = tl.where((pid >= 0) & (pid < pool_len), hist_val, -1)
+ 
+     # Tail region [topk, out_cols): the request's trailing incomplete pool.
+     tail_off = cols - topk
+diff --git a/vllm/platforms/__init__.py b/vllm/platforms/__init__.py
+index b34b0b9a7dd9c29de8351be3496eab0d983c69e6..bef8826a92f184b333f8b727eac94250ef9cda93 100644
+--- a/vllm/platforms/__init__.py
++++ b/vllm/platforms/__init__.py
+@@ -231,6 +231,19 @@ builtin_platform_plugins = {
+ 
+ 
+ def resolve_current_platform_cls_qualname() -> str:
++    # A caller-selected accelerator target is authoritative on mixed-vendor
++    # hosts. Otherwise NVML and AMDSMI can both find devices and activate the
++    # CUDA and ROCm plugins at the same time.
++    explicit_target = os.getenv("VLLM_TARGET_DEVICE")
++    if explicit_target in builtin_platform_plugins:
++        platform_cls_qualname = builtin_platform_plugins[explicit_target]()
++        if platform_cls_qualname is None:
++            raise RuntimeError(
++                f"Explicit platform target {explicit_target!r} is unavailable"
++            )
++        logger.debug("Explicitly selected platform %s.", explicit_target)
++        return platform_cls_qualname
++
+     # An explicit CPU target is authoritative. Native CPU-only CI jobs reuse
+     # an accelerator wheel and can run on accelerator hosts, so probing every
+     # plugin would otherwise activate both CPU and the host accelerator.
+diff --git a/vllm/platforms/rocm.py b/vllm/platforms/rocm.py
+index b3b7fe8b089c4c19930e82343c19465685f27c42..6911b0a55443cb85978c29771174771d8fab82f5 100644
+--- a/vllm/platforms/rocm.py
++++ b/vllm/platforms/rocm.py
+@@ -537,6 +537,24 @@ class RocmPlatform(Platform):
+         with contextlib.suppress(ImportError):
+             import vllm._rocm_C  # noqa: F401
+ 
++    @classmethod
++    def _get_indexer_block_alignment(cls, vllm_config: "VllmConfig") -> int | None:
++        """Keep GLM kpool storage on native 64-entry paged-MQA pages.
++
++        The hybrid Mamba/attention aligner can otherwise choose an attention
++        block whose kpool-compressed storage is only divisible by 32. ROCm's
++        paged-MQA path is unsafe with that virtual split during speculative
++        decode, so round the attention block to ``index_kpool * 64``.
++        """
++        index_kpool = getattr(
++            vllm_config.model_config.hf_text_config, "index_kpool", None
++        )
++        if not index_kpool or index_kpool <= 1:
++            return None
++        from vllm.utils.deep_gemm import PAGED_MQA_PAGE_SIZES
++
++        return int(index_kpool) * max(PAGED_MQA_PAGE_SIZES)
++
+     @classmethod
+     def check_runner_kv_caches_multi_layer(cls) -> None:
+         pass
+diff --git a/vllm/renderers/online_renderer.py b/vllm/renderers/online_renderer.py
+index 2ab5725b73fc782f41b24a50c2b2cf6e25d77c81..015c43b5f757a79fa5597be26dd7df531c15c339 100644
+--- a/vllm/renderers/online_renderer.py
++++ b/vllm/renderers/online_renderer.py
+@@ -231,6 +231,17 @@ class OnlineRenderer:
+             tool_dicts = None
+         else:
+             tool_dicts = [tool.model_dump() for tool in request.tools]
++            if tool_parser is not None and getattr(
++                tool_parser, "reorder_tool_schema_required_first", False
++            ):
++                from vllm.tool_parsers.utils import (
++                    reorder_properties_required_first,
++                )
++
++                for tool_dict in tool_dicts:
++                    params = tool_dict.get("function", {}).get("parameters")
++                    if params is not None:
++                        reorder_properties_required_first(params)
+ 
+         if not self.use_harmony:
+             # Common case.
+diff --git a/vllm/tool_parsers/abstract_tool_parser.py b/vllm/tool_parsers/abstract_tool_parser.py
+index 3ee35365e4a89ebd03de6db880cc4ee7ea4f4378..199c69181c41deb7a6713a837a17e922b47eb821 100644
+--- a/vllm/tool_parsers/abstract_tool_parser.py
++++ b/vllm/tool_parsers/abstract_tool_parser.py
+@@ -30,7 +30,11 @@ from vllm.sampling_params import (
+     StructuredOutputsParams,
+ )
+ from vllm.tokenizers import TokenizerLike
+-from vllm.tool_parsers.utils import Tool, get_json_schema_from_tools
++from vllm.tool_parsers.utils import (
++    Tool,
++    get_json_schema_from_tools,
++    reorder_tools_required_first,
++)
+ from vllm.utils.collection_utils import is_list_of
+ from vllm.utils.import_utils import import_plugin
+ 
+@@ -59,6 +63,10 @@ class ToolParser:
+     # xgrammar builtin structural tag model key. Subclasses set this when
+     # their parsed tool-call syntax matches a builtin xgrammar format.
+     structural_tag_model: str | None = None
++    # Render each tool's object schemas with required properties first, both
++    # in the prompt (OnlineRenderer) and in the structural tag, so the order
++    # the model is shown is the order the grammar enforces.
++    reorder_tool_schema_required_first: bool = False
+     engine_based_streaming: bool = False
+ 
+     def __init_subclass__(cls, **kwargs: Any) -> None:
+@@ -176,9 +184,12 @@ class ToolParser:
+             return None
+         from vllm.tool_parsers.structural_tag_registry import get_model_structural_tag
+ 
++        tools = request.tools
++        if self.reorder_tool_schema_required_first and tools:
++            tools = reorder_tools_required_first(tools)
+         return get_model_structural_tag(
+             model=self.structural_tag_model,
+-            tools=request.tools,
++            tools=tools,
+             tool_choice=request.tool_choice,
+             reasoning=reasoning,
+         )
+diff --git a/vllm/tool_parsers/glm47_moe_tool_parser.py b/vllm/tool_parsers/glm47_moe_tool_parser.py
+index 70275a6ac03d85594cbf08503883c39e5b8acf09..0294c8059a61521b9870fd5794dd8124a21b440e 100644
+--- a/vllm/tool_parsers/glm47_moe_tool_parser.py
++++ b/vllm/tool_parsers/glm47_moe_tool_parser.py
+@@ -9,3 +9,8 @@ from vllm.parser.engine.registered_adapters import Glm47MoeParserToolAdapter
+ class Glm47MoeModelToolParser(Glm47MoeParserToolAdapter):  # type: ignore[valid-type, misc]
+     supports_required_and_named = False
+     structural_tag_model = "glm_4_7"
++    # GLM renders tool schemas verbatim into the prompt and follows the
++    # property order when emitting arguments; putting required fields first
++    # keeps the model from omitting them once it starts on optional fields.
++    # The strict-mode grammar (xgrammar glm_4_7) enforces the same order.
++    reorder_tool_schema_required_first = True
+diff --git a/vllm/tool_parsers/utils.py b/vllm/tool_parsers/utils.py
+index d39c83969f418625283873a70bf2f97e66b5b3d6..ebbee4eb61375c4d017026c043085a59f928c1ff 100644
+--- a/vllm/tool_parsers/utils.py
++++ b/vllm/tool_parsers/utils.py
+@@ -1050,6 +1050,63 @@ def extract_types_from_schema(schema: Any) -> list[str]:
+     return list(types) if types else ["string"]
+ 
+ 
++def reorder_properties_required_first(schema: Any) -> Any:
++    """Reorder an object schema's ``properties`` so that fields declared in
++    ``required`` come first (in ``required`` declaration order), followed by
++    optional fields in their original order. Recurses into nested schemas.
++
++    Property order is not semantically meaningful for JSON Schema
++    validation, but chat templates render schemas verbatim into the prompt
++    and models tend to emit arguments in the rendered order; putting
++    required fields first makes the model commit to them before it starts
++    on bulky optional fields (which it may otherwise never return from).
++
++    May mutate and return *schema*; only call it on per-request copies.
++    """
++    if isinstance(schema, list):
++        return [reorder_properties_required_first(s) for s in schema]
++    if not isinstance(schema, dict):
++        return schema
++
++    for key in ("properties", "$defs", "definitions"):
++        if isinstance(sub := schema.get(key), dict):
++            schema[key] = {
++                k: reorder_properties_required_first(v) for k, v in sub.items()
++            }
++    for key in ("items", "additionalProperties", "contains"):
++        if isinstance(sub := schema.get(key), (dict, list)):
++            schema[key] = reorder_properties_required_first(sub)
++    for key in ("anyOf", "oneOf", "allOf", "prefixItems"):
++        if isinstance(sub := schema.get(key), list):
++            schema[key] = [reorder_properties_required_first(s) for s in sub]
++
++    props = schema.get("properties")
++    required = schema.get("required")
++    if isinstance(props, dict) and isinstance(required, list) and required:
++        ordered = {k: props[k] for k in required if k in props}
++        ordered.update((k, v) for k, v in props.items() if k not in ordered)
++        schema["properties"] = ordered
++    return schema
++
++
++def reorder_tools_required_first(tools: list[Tool]) -> list[Tool]:
++    """Return copies of *tools* whose parameter schemas are reordered with
++    :func:`reorder_properties_required_first`. Non-function tools pass
++    through unchanged."""
++    reordered: list[Tool] = []
++    for tool in tools:
++        if isinstance(tool, ChatCompletionToolsParam):
++            tool = tool.model_copy(deep=True)
++            tool.function.parameters = reorder_properties_required_first(
++                tool.function.parameters
++            )
++        elif isinstance(tool, FunctionTool):
++            tool = tool.model_copy(deep=True)
++            tool.parameters = reorder_properties_required_first(tool.parameters)
++        reordered.append(tool)
++    return reordered
++
++
+ _TYPE_ALIASES: dict[str, str] = {
+     "str": "string",
+     "text": "string",
+diff --git a/vllm/triton_utils/importing.py b/vllm/triton_utils/importing.py
+index 966ab55f326b7cc4f22e6717d00a877291f0ca37..30e9fbaeb6e0220c629e78d6d63d64f66e3c2891 100644
+--- a/vllm/triton_utils/importing.py
++++ b/vllm/triton_utils/importing.py
+@@ -28,10 +28,23 @@ if HAS_TRITON:
+         # drivers. Triton's own driver selection skips it for the same reason
+         # (see triton.runtime.driver._create_driver): CPU is only ever used
+         # when explicitly selected.
++        explicit_target_backend = os.environ.get("TRITON_DEFAULT_BACKEND")
++        if explicit_target_backend is None:
++            explicit_target_backend = {
++                "rocm": "amd",
++                "cuda": "nvidia",
++                "xpu": "intel",
++            }.get(os.environ.get("VLLM_TARGET_DEVICE", "").lower())
++            if explicit_target_backend is not None:
++                # Triton's lazy driver selection must use the same backend.
++                os.environ["TRITON_DEFAULT_BACKEND"] = explicit_target_backend
+         active_drivers = [
+             x.driver
+             for name, x in backends.items()
+-            if name != "cpu" and x.driver and x.driver.is_active()
++            if name != "cpu"
++            and (explicit_target_backend is None or name == explicit_target_backend)
++            and x.driver
++            and x.driver.is_active()
+         ]
+ 
+         # Check Triton CPU
+diff --git a/vllm/v1/attention/backends/mla/indexer.py b/vllm/v1/attention/backends/mla/indexer.py
+index 53206afd9337f4d5d934fa120a08d0083b507cdd..d7ed424df3d679f7a3ce47e0ec55447cfc753a5f 100644
+--- a/vllm/v1/attention/backends/mla/indexer.py
++++ b/vllm/v1/attention/backends/mla/indexer.py
+@@ -720,6 +720,7 @@ class KpoolTailMetadataBuilder(AttentionMetadataBuilder):
+ 
+ def get_max_prefill_buffer_size(vllm_config: VllmConfig):
+     max_model_len = vllm_config.model_config.max_model_len
++    max_num_seqs = vllm_config.scheduler_config.max_num_seqs
+     # NOTE(Chen): 40 is a magic number for controlling the prefill buffer size.
+     # Each entry is 128 fp8 bytes and 4 scale bytes for a total of 132 bytes.
+     # The flashmla_sparse backend uses a workspace size of 5 * max_model_len.
+@@ -728,7 +729,11 @@ def get_max_prefill_buffer_size(vllm_config: VllmConfig):
+     # within the flashmla_sparse workspace.
+     # For DeepSeek-V3.2, the max_model_len is 163840.
+     #   40 * 163840 * 132 = 865075200 bytes = 825 MB
+-    return max_model_len * 40
++    # The sum of sequence lengths in one scheduled prefill batch can never
++    # exceed max_model_len * max_num_seqs. Capping the heuristic at that exact
++    # scheduler bound avoids reserving a multi-GiB gather workspace for
++    # single-request long-context serving (GLM-5.3 at 512K/1M).
++    return max_model_len * min(40, max_num_seqs)
+ 
+ 
+ def _supports_varlen_paged_mqa_logits() -> bool:
+diff --git a/vllm/v1/attention/backends/mla/rocm_aiter_mla_sparse.py b/vllm/v1/attention/backends/mla/rocm_aiter_mla_sparse.py
+index 86b77db79a81f9aba7bb1bc2ce00738234aef861..8e37bb1dbb4148eab3088aac071988ae609594e6 100644
+--- a/vllm/v1/attention/backends/mla/rocm_aiter_mla_sparse.py
++++ b/vllm/v1/attention/backends/mla/rocm_aiter_mla_sparse.py
+@@ -42,6 +42,11 @@ from vllm.v1.attention.ops.rocm_aiter_mla_sparse import (
+ from vllm.v1.kv_cache_interface import AttentionSpec, KVCacheLayout
+ from vllm.v1.worker.workspace import current_workspace_manager
+ 
++if current_platform.is_rocm():
++    from vllm.platforms.rocm import _ON_RDNA4
++else:
++    _ON_RDNA4 = False
++
+ if TYPE_CHECKING:
+     from vllm.model_executor.models.deepseek_v2 import Indexer
+ logger = init_logger(__name__)
+@@ -56,16 +61,27 @@ def _use_rocm_sparse_triton(
+     num_decodes: int,
+     num_decode_tokens: int,
+     max_query_len: int,
++    rdna4_triton_supported: bool = _ON_RDNA4,
+ ) -> bool:
+-    """Select the rope-free BF16 path not supported by AITER sparse MLA.
++    """Select the sparse Triton path supported by the current cache geometry.
+ 
+     The ragged Triton kernel indexes metadata per query token, so multi-token
+     speculative verification rows have the same capability requirements as
+-    plain decode rows.
++    plain decode rows. On RDNA4 it also provides the correctness fallback for
++    full BF16 MLA (512 NoPE + 64 RoPE); standard FP8 remains limited to the
++    rope-free shape and uses explicit per-tensor dequantization.
+     """
++    fp8_cache = kv_cache_dtype.startswith("fp8")
++    standard_fp8_cache = kv_cache_dtype in ("fp8", "fp8_e4m3")
++    supported_cache = not fp8_cache or (
++        standard_fp8_cache and rdna4_triton_supported
++    )
++    supported_dims = head_size == kv_lora_rank or (
++        not fp8_cache and rdna4_triton_supported
++    )
+     return (
+-        not kv_cache_dtype.startswith("fp8")
+-        and head_size == kv_lora_rank
++        supported_cache
++        and supported_dims
+         and (num_prefills > 0 or num_decodes > 0)
+     )
+ 
+@@ -800,6 +816,11 @@ class ROCMAiterMLASparseImpl(
+         self.kv_cache_dtype = kv_cache_dtype
+         self.kv_lora_rank: int = mla_args["kv_lora_rank"]
+         self.softmax_scale = scale
++        if self.kv_cache_dtype.startswith("fp8") and _ON_RDNA4:
++            logger.info_once(
++                "RDNA4 standard FP8 sparse MLA uses the rope-free Triton "
++                "reader with explicit per-tensor k_scale dequantization"
++            )
+         self.init_topk_indices_buffer(indexer, topk_indices_buffer)
+ 
+         vllm_config = get_current_vllm_config()
+@@ -815,6 +836,7 @@ class ROCMAiterMLASparseImpl(
+         q: torch.Tensor,  # [sq, heads, d_qk]
+         kv_c_and_k_pe_cache: torch.Tensor,  # [blocks, heads, d_qk]
+         attn_metadata: ROCMAiterMLASparseMetadata,
++        use_triton_sparse: bool | None = None,
+     ) -> tuple[torch.Tensor, torch.Tensor | None]:
+         num_tokens = q.shape[0]
+         base_mla_num_heads = AiterMLAHelper.get_actual_mla_num_heads(self.num_heads)
+@@ -821,5 +843,15 @@ class ROCMAiterMLASparseImpl(
+         mla_num_heads = base_mla_num_heads
+         need_lse = self.sinks is not None
++        if use_triton_sparse is None:
++            use_triton_sparse = _use_rocm_sparse_triton(
++                kv_cache_dtype=self.kv_cache_dtype,
++                head_size=q.shape[-1],
++                kv_lora_rank=self.kv_lora_rank,
++                num_prefills=attn_metadata.num_prefills,
++                num_decodes=attn_metadata.num_decodes,
++                num_decode_tokens=attn_metadata.num_decode_tokens,
++                max_query_len=attn_metadata.max_query_len,
++            )
+         from vllm.platforms.rocm import on_gfx942
+ 
+         # Keep sink attention available for dtypes/head shapes without an
+@@ -839,15 +871,7 @@ class ROCMAiterMLASparseImpl(
+             )
+         )
+ 
+-        if triton_sink_fallback or _use_rocm_sparse_triton(
+-            kv_cache_dtype=self.kv_cache_dtype,
+-            head_size=q.shape[-1],
+-            kv_lora_rank=self.kv_lora_rank,
+-            num_prefills=attn_metadata.num_prefills,
+-            num_decodes=attn_metadata.num_decodes,
+-            num_decode_tokens=attn_metadata.num_decode_tokens,
+-            max_query_len=attn_metadata.max_query_len,
+-        ):
++        if triton_sink_fallback or use_triton_sparse:
+             output = torch.empty(
+                 [num_tokens, q.shape[1], self.kv_lora_rank],
+                 dtype=attn_metadata.attn_out_dtype,
+@@ -873,6 +887,11 @@ class ROCMAiterMLASparseImpl(
+                 output=output,
+                 ragged_indices=attn_metadata.paged_kv_indices,
+                 ragged_indptr=attn_metadata.paged_kv_indptr,
++                kv_scale=(
++                    layer._k_scale
++                    if self.kv_cache_dtype.startswith("fp8")
++                    else None
++                ),
+             )
+             output = AiterMLAHelper.get_mla_unpadded_o(self.num_heads, output)
+             return output, None
+@@ -1024,9 +1043,21 @@ class ROCMAiterMLASparseImpl(
+         # MQA 576/512 approach for both prefill and decode
+ 
+         fp8_attention = self.kv_cache_dtype.startswith("fp8")
++        query_head_size = (
++            q[0].shape[-1] + q[1].shape[-1] if isinstance(q, tuple) else q.shape[-1]
++        )
++        use_triton_sparse = _use_rocm_sparse_triton(
++            kv_cache_dtype=self.kv_cache_dtype,
++            head_size=query_head_size,
++            kv_lora_rank=self.kv_lora_rank,
++            num_prefills=attn_metadata.num_prefills,
++            num_decodes=attn_metadata.num_decodes,
++            num_decode_tokens=attn_metadata.num_decode_tokens,
++            max_query_len=attn_metadata.max_query_len,
++        )
+         if isinstance(q, tuple):
+             ql_nope, q_pe = q
+-            if fp8_attention:
++            if fp8_attention and not use_triton_sparse:
+                 q = layer._decode_concat_quant_fp8_op(  # type: ignore[attr-defined]
+                     ql_nope, q_pe, layer._q_scale
+                 )
+@@ -1060,11 +1091,20 @@ class ROCMAiterMLASparseImpl(
+         # write the latent and rope to kv cache
+         if fp8_attention:
+             kv_c_and_k_pe_cache = kv_c_and_k_pe_cache.view(current_platform.fp8_dtype())
+-            if q.dtype != current_platform.fp8_dtype():
++            if not use_triton_sparse and q.dtype != current_platform.fp8_dtype():
+                 original_q_shape = q.shape
+                 q, _ = ops.scaled_fp8_quant(q.view(q.shape[0], -1), layer._q_scale)
+                 q = q.view(original_q_shape)
++            if use_triton_sparse and q.dtype != torch.bfloat16:
++                raise ValueError(
++                    "RDNA4 Triton FP8 sparse MLA requires a BF16 query, "
++                    f"got {q.dtype}"
++                )
+         mla_padded_q = AiterMLAHelper.get_mla_padded_q(self.num_heads, q)
+         return self._forward_mla(
+-            layer, mla_padded_q, kv_c_and_k_pe_cache, attn_metadata
++            layer,
++            mla_padded_q,
++            kv_c_and_k_pe_cache,
++            attn_metadata,
++            use_triton_sparse,
+         )
+diff --git a/vllm/v1/attention/ops/rocm_aiter_mla_sparse.py b/vllm/v1/attention/ops/rocm_aiter_mla_sparse.py
+index 0e342cb0e0643afa26963fc60b8fc8c5cf30d2ce..ad4797263555f34a86b2b35810a5d6eaf3005add 100644
+--- a/vllm/v1/attention/ops/rocm_aiter_mla_sparse.py
++++ b/vllm/v1/attention/ops/rocm_aiter_mla_sparse.py
+@@ -22,10 +22,11 @@ from vllm.v1.attention.ops.common import pack_seq_triton, unpack_seq_triton
+ from vllm.v1.worker.workspace import current_workspace_manager
+ 
+ if current_platform.is_rocm():
+-    from vllm.platforms.rocm import _ON_GFX942, _ON_GFX950
++    from vllm.platforms.rocm import _ON_GFX942, _ON_GFX950, _ON_RDNA4
+ else:
+     _ON_GFX942 = False
+     _ON_GFX950 = False
++    _ON_RDNA4 = False
+ 
+ logger = init_logger(__name__)
+ 
+@@ -625,6 +626,167 @@ def paged_mqa_logits_module():
+     return None
+ 
+ 
++@triton.jit
++def _rdna4_fp8_paged_mqa_logits_kernel(
++    q_ptr,
++    kv_cache_ptr,
++    kv_scale_ptr,
++    weights_ptr,
++    output_ptr,
++    context_lens_ptr,
++    block_tables_ptr,
++    q_batch_stride,
++    q_next_stride,
++    q_head_stride,
++    kv_cache_block_stride,
++    kv_scale_block_stride,
++    weights_row_stride,
++    output_row_stride,
++    block_table_stride,
++    max_model_len,
++    block_table_width: tl.constexpr,
++    num_blocks: tl.constexpr,
++    next_n: tl.constexpr,
++    num_heads: tl.constexpr,
++    head_dim: tl.constexpr,
++    block_size: tl.constexpr,
++    context_lens_2d: tl.constexpr,
++    block_tile_size: tl.constexpr,
++    head_tile_size: tl.constexpr,
++):
++    row_idx = tl.program_id(0)
++    logical_block_idx = tl.program_id(1)
++    batch_idx = row_idx // next_n
++    next_idx = row_idx % next_n
++
++    if context_lens_2d:
++        context_len = tl.load(context_lens_ptr + batch_idx * next_n + next_idx)
++    else:
++        final_context_len = tl.load(context_lens_ptr + batch_idx)
++        context_len = final_context_len - next_n + next_idx + 1
++
++    valid_logical_block = logical_block_idx < block_table_width
++    physical_block_idx = tl.load(
++        block_tables_ptr
++        + batch_idx * block_table_stride
++        + logical_block_idx,
++        mask=valid_logical_block,
++        other=-1,
++    )
++    valid_physical_block = (
++        valid_logical_block
++        & (physical_block_idx >= 0)
++        & (physical_block_idx < num_blocks)
++    )
++    safe_block_idx = tl.where(valid_physical_block, physical_block_idx, 0).to(
++        tl.int64
++    )
++
++    head_offsets = tl.arange(0, num_heads)
++    dim_offsets = tl.arange(0, head_dim)
++    q = tl.load(
++        q_ptr
++        + batch_idx * q_batch_stride
++        + next_idx * q_next_stride
++        + head_offsets[:, None] * q_head_stride
++        + dim_offsets[None, :]
++    )
++
++    state_in_block = tl.arange(0, block_size)
++    shuffled_k_offsets = (
++        safe_block_idx * kv_cache_block_stride
++        + (state_in_block[:, None] // block_tile_size)
++        * head_dim
++        * block_tile_size
++        + (state_in_block[:, None] % block_tile_size) * head_tile_size
++        + (dim_offsets[None, :] // head_tile_size)
++        * head_tile_size
++        * block_tile_size
++        + (dim_offsets[None, :] % head_tile_size)
++    )
++    k = tl.load(
++        kv_cache_ptr + shuffled_k_offsets,
++        mask=valid_physical_block,
++        other=0.0,
++    )
++    scores = tl.dot(q, tl.trans(k), out_dtype=tl.float32)
++    scores = tl.maximum(scores, 0.0)
++    weights = tl.load(weights_ptr + row_idx * weights_row_stride + head_offsets)
++    scores = tl.sum(scores * weights[:, None], axis=0)
++    scales = tl.load(
++        kv_scale_ptr
++        + safe_block_idx * kv_scale_block_stride
++        + state_in_block,
++        mask=valid_physical_block,
++        other=0.0,
++    )
++    scores *= scales
++
++    state_offsets = logical_block_idx * block_size + state_in_block
++    valid_state = (
++        valid_physical_block
++        & (state_offsets < context_len)
++        & (state_offsets < max_model_len)
++    )
++    tl.store(
++        output_ptr + row_idx * output_row_stride + state_offsets,
++        scores,
++        mask=valid_state,
++    )
++
++
++def rdna4_fp8_paged_mqa_logits(
++    q_fp8: torch.Tensor,
++    kv_cache_fp8: torch.Tensor,
++    weights: torch.Tensor,
++    context_lens: torch.Tensor,
++    block_tables: torch.Tensor,
++    max_model_len: int,
++) -> torch.Tensor:
++    batch_size, next_n, num_heads, head_dim = q_fp8.shape
++    num_blocks, block_size = kv_cache_fp8.shape[:2]
++    packed_cache = kv_cache_fp8.view(num_blocks, -1)
++    value_elements = block_size * head_dim
++    kv_cache_values = packed_cache[:, :value_elements].view(
++        current_platform.fp8_dtype()
++    )
++    kv_cache_scales = packed_cache[:, value_elements:].view(torch.float32)
++    (output,) = current_workspace_manager().get_simultaneous(
++        ((batch_size * next_n, max_model_len), torch.float32),
++    )
++    output.fill_(float("-inf"))
++    grid = (batch_size * next_n, triton.cdiv(max_model_len, block_size))
++    _rdna4_fp8_paged_mqa_logits_kernel[grid](
++        q_fp8,
++        kv_cache_values,
++        kv_cache_scales,
++        weights,
++        output,
++        context_lens,
++        block_tables,
++        q_fp8.stride(0),
++        q_fp8.stride(1),
++        q_fp8.stride(2),
++        kv_cache_values.stride(0),
++        kv_cache_scales.stride(0),
++        weights.stride(0),
++        output.stride(0),
++        block_tables.stride(0),
++        max_model_len,
++        block_table_width=block_tables.shape[1],
++        num_blocks=num_blocks,
++        next_n=next_n,
++        num_heads=num_heads,
++        head_dim=head_dim,
++        block_size=block_size,
++        context_lens_2d=context_lens.dim() > 1,
++        block_tile_size=16,
++        head_tile_size=16,
++        num_warps=4,
++    )
++    return output
++
++
+ def rocm_fp8_paged_mqa_logits(
+     q_fp8: torch.Tensor,
+     kv_cache_fp8: torch.Tensor,
+@@ -665,6 +827,16 @@ def rocm_fp8_paged_mqa_logits(
+     if rocm_aiter_ops.is_enabled() or rocm_aiter_ops.is_rdna_aiter_enabled():
+         aiter_paged_mqa_logits_module = paged_mqa_logits_module()
+ 
++    if _ON_RDNA4 and block_size > 1:
++        return rdna4_fp8_paged_mqa_logits(
++            q_fp8,
++            kv_cache_fp8,
++            weights,
++            context_lens,
++            block_tables,
++            max_model_len,
++        )
++
+     if aiter_paged_mqa_logits_module is not None:
+         if _ON_GFX942 or _ON_GFX950:
+             deepgemm_fp8_paged_mqa_logits = (
+@@ -1630,6 +1802,7 @@ def _sparse_kv_row_offset(slot, stride):
+ def _sparse_attn_prefill_ragged_kernel(
+     q_ptr,
+     kv_ptr,
++    kv_scale_ptr,
+     kv_indices_ptr,
+     kv_indptr_ptr,
+     attn_sink_ptr,
+@@ -1644,11 +1817,15 @@ def _sparse_attn_prefill_ragged_kernel(
+     out_stride_d,
+     num_heads,
+     head_dim,
++    value_dim,
+     num_kv,
+     scale,
++    FP8_KV: tl.constexpr,
+     HAS_ATTN_SINK: tl.constexpr,
++    SAME_QK_V: tl.constexpr,
+     BLOCK_H: tl.constexpr,
+     BLOCK_D: tl.constexpr,
++    BLOCK_V: tl.constexpr,
+     BLOCK_K: tl.constexpr,
+ ):
+     query_idx = tl.program_id(0)
+@@ -1656,8 +1833,10 @@ def _sparse_attn_prefill_ragged_kernel(
+ 
+     head_offsets = pid_h * BLOCK_H + tl.arange(0, BLOCK_H)
+     dim_offsets = tl.arange(0, BLOCK_D)
++    value_offsets = tl.arange(0, BLOCK_V)
+     head_mask = head_offsets < num_heads
+     dim_mask = dim_offsets < head_dim
++    value_mask = value_offsets < value_dim
+ 
+     q = tl.load(
+         q_ptr
+@@ -1671,7 +1850,7 @@ def _sparse_attn_prefill_ragged_kernel(
+     neg_large = -3.4028234663852886e38
+     m_i = tl.full((BLOCK_H,), neg_large, dtype=tl.float32)
+     l_i = tl.zeros((BLOCK_H,), dtype=tl.float32)
+-    acc = tl.zeros((BLOCK_H, BLOCK_D), dtype=tl.float32)
++    acc = tl.zeros((BLOCK_H, BLOCK_V), dtype=tl.float32)
+ 
+     kv_start = tl.load(kv_indptr_ptr + query_idx)
+     kv_end = tl.load(kv_indptr_ptr + query_idx + 1)
+@@ -1694,6 +1873,24 @@ def _sparse_attn_prefill_ragged_kernel(
+             mask=valid[:, None] & dim_mask[None, :],
+             other=0.0,
+         )
++        if FP8_KV:
++            kv = (
++                kv.to(tl.float32) * tl.load(kv_scale_ptr).to(tl.float32)
++            ).to(tl.bfloat16)
++        if SAME_QK_V:
++            value = kv
++        else:
++            value = tl.load(
++                kv_ptr
++                + _sparse_kv_row_offset(safe_slot[:, None], kv_stride_n)
++                + value_offsets[None, :] * kv_stride_d,
++                mask=valid[:, None] & value_mask[None, :],
++                other=0.0,
++            )
++            if FP8_KV:
++                value = (
++                    value.to(tl.float32) * tl.load(kv_scale_ptr).to(tl.float32)
++                ).to(tl.bfloat16)
+ 
+         next_k_pos = k_start + BLOCK_K + k_offsets
+         slot = tl.load(
+@@ -1710,7 +1907,7 @@ def _sparse_attn_prefill_ragged_kernel(
+         p = tl.where(head_mask[:, None] & valid[None, :], p, 0.0)
+         l_new = l_i * alpha + tl.sum(p, axis=1)
+ 
+-        acc = acc * alpha[:, None] + tl.dot(p.to(kv.dtype), kv)
++        acc = acc * alpha[:, None] + tl.dot(p.to(value.dtype), value)
+         m_i = m_new
+         l_i = l_new
+ 
+@@ -1735,9 +1932,9 @@ def _sparse_attn_prefill_ragged_kernel(
+         out_ptr
+         + query_idx * out_stride_t
+         + head_offsets[:, None] * out_stride_h
+-        + dim_offsets[None, :] * out_stride_d,
++        + value_offsets[None, :] * out_stride_d,
+         out,
+-        mask=head_mask[:, None] & dim_mask[None, :],
++        mask=head_mask[:, None] & value_mask[None, :],
+     )
+ 
+ 
+@@ -2829,6 +3026,7 @@ def _rocm_sparse_attn_prefill_ragged_triton(
+     attn_sink: torch.Tensor | None,
+     nope_head_dim: int,
+     rope_head_dim: int,
++    kv_scale: torch.Tensor | None = None,
+ ) -> torch.Tensor:
+     assert q.ndim == 3, f"expected q=[sq,h,d], got {q.shape}"
+     assert kv.ndim == 2, f"expected kv=[skv,d], got {kv.shape}"
+@@ -2855,14 +3053,41 @@ def _rocm_sparse_attn_prefill_ragged_triton(
+         "_rocm_sparse_attn_prefill_ragged_triton",
+     )
+ 
+-    block_h = 16
++    fp8_kv_dtypes = (torch.float8_e4m3fn, torch.float8_e4m3fnuz)
++    fp8_kv = kv.dtype in fp8_kv_dtypes
++    if fp8_kv:
++        assert kv.dtype == current_platform.fp8_dtype(), (
++            f"FP8 KV dtype {kv.dtype} does not match platform dtype "
++            f"{current_platform.fp8_dtype()}"
++        )
++        assert q.dtype == torch.bfloat16, (
++            f"FP8 sparse MLA requires a BF16 query, got {q.dtype}"
++        )
++        assert kv_scale is not None, "FP8 sparse MLA requires kv_scale"
++        assert kv_scale.dtype == torch.float32 and kv_scale.numel() == 1, (
++            "FP8 sparse MLA requires one float32 kv_scale value"
++        )
++        assert kv_scale.device == kv.device, (
++            f"kv_scale must be on {kv.device}, got {kv_scale.device}"
++        )
++        kv_scale_arg = kv_scale
++    else:
++        kv_scale_arg = q
++
++    block_h = 8 if head_dim > nope_head_dim else 16
+     block_d = triton.next_power_of_2(head_dim)
++    block_v = triton.next_power_of_2(nope_head_dim)
+     block_k = 16 if head_dim >= 256 else 32
+     num_warps = 4
+-    out = torch.empty_like(q)
++    out = torch.empty(
++        (num_queries, num_heads, nope_head_dim),
++        dtype=torch.bfloat16,
++        device=q.device,
++    )
+     _sparse_attn_prefill_ragged_kernel[(num_queries, triton.cdiv(num_heads, block_h))](
+         q,
+         kv,
++        kv_scale_arg,
+         indices,
+         indptr,
+         attn_sink,
+@@ -2877,11 +3102,15 @@ def _rocm_sparse_attn_prefill_ragged_triton(
+         out.stride(2),
+         num_heads,
+         head_dim,
++        nope_head_dim,
+         kv.shape[0],
+         float(scale),
++        FP8_KV=fp8_kv,
+         HAS_ATTN_SINK=has_attn_sink,
++        SAME_QK_V=head_dim == nope_head_dim,
+         BLOCK_H=block_h,
+         BLOCK_D=block_d,
++        BLOCK_V=block_v,
+         BLOCK_K=block_k,
+         num_warps=num_warps,
+     )
+@@ -2897,6 +3126,7 @@ def _rocm_sparse_attn_prefill_triton(
+     nope_head_dim: int,
+     rope_head_dim: int,
+     topk_length: torch.Tensor | None = None,
++    kv_scale: torch.Tensor | None = None,
+ ) -> torch.Tensor:
+     ragged_indices, ragged_indptr = build_ragged_indices_from_dense(
+         indices,
+@@ -2914,6 +3144,7 @@ def _rocm_sparse_attn_prefill_triton(
+         attn_sink=attn_sink,
+         nope_head_dim=nope_head_dim,
+         rope_head_dim=rope_head_dim,
++        kv_scale=kv_scale,
+     )
+ 
+ 
+@@ -3470,6 +3701,7 @@ def rocm_sparse_attn_prefill(
+     output: torch.Tensor,
+     ragged_indices: torch.Tensor | None = None,
+     ragged_indptr: torch.Tensor | None = None,
++    kv_scale: torch.Tensor | None = None,
+ ) -> None:
+     assert kv.ndim == 3 and kv.shape[1] == 1, (
+         f"ROCm Triton sparse prefill expects kv=[skv,1,d], got {kv.shape}"
+@@ -3517,6 +3749,7 @@ def rocm_sparse_attn_prefill(
+             attn_sink=None if attn_sink is None else attn_sink[: q.shape[1]],
+             nope_head_dim=nope_head_dim,
+             rope_head_dim=rope_head_dim,
++            kv_scale=kv_scale,
+         )
+     else:
+         assert indices is not None
+@@ -3530,6 +3763,7 @@ def rocm_sparse_attn_prefill(
+             nope_head_dim=nope_head_dim,
+             rope_head_dim=rope_head_dim,
+             topk_length=topk_length,
++            kv_scale=kv_scale,
+         )
+     output.copy_(output_chunk[..., : output.shape[-1]].to(output.dtype))
+ 
+diff --git a/vllm/v1/core/kv_cache_utils.py b/vllm/v1/core/kv_cache_utils.py
+index 1c6e102c161c697bcdb9baa8b5ff63d647c39012..775571a0a74b643da86f7af56b28a028d921ab42 100644
+--- a/vllm/v1/core/kv_cache_utils.py
++++ b/vllm/v1/core/kv_cache_utils.py
+@@ -1207,10 +1207,16 @@ def _get_kv_cache_groups_glm5_next(
+         for name, spec in kv_cache_spec.items()
+         if isinstance(spec, KpoolTailSpec)
+     }
++    sliding_specs = {
++        name: spec
++        for name, spec in kv_cache_spec.items()
++        if type(spec) is SlidingWindowSpec
++    }
+     attn_specs = {
+         name: spec
+         for name, spec in kv_cache_spec.items()
+         if not isinstance(spec, (MambaSpec, KpoolTailSpec))
++        and name not in sliding_specs
+     }
+     if not mamba_specs or not all(
+         type(spec) is MLAAttentionSpec for spec in attn_specs.values()
+@@ -1230,6 +1236,8 @@ def _get_kv_cache_groups_glm5_next(
+     mla_pages = {mla_specs[name].page_size_bytes for name in mla_names}
+     assert len(mla_pages) == 1
+     mla_page = mla_pages.pop()
++    if any(spec.page_size_bytes > mla_page for spec in sliding_specs.values()):
++        return None
+     uniform_spec = UniformTypeKVCacheSpecs.from_specs(attn_specs)
+     assert uniform_spec is not None
+ 
+@@ -1267,10 +1275,31 @@ def _get_kv_cache_groups_glm5_next(
+     for index, name in enumerate(mamba_specs):
+         mamba_grouped_names[index % num_groups].append(name)
+ 
++    # External sliding-window drafts can use the same physical slot shape as
++    # the target's Mamba groups, with independent logical block tables.
++    sliding_buckets: dict[SlidingWindowSpec, list[str]] = defaultdict(list)
++    for name, spec in sliding_specs.items():
++        # A tiny draft block padded to an MLA page wastes most of the pool.
++        # Match the target's logical span before padding the physical page.
++        spec = replace(spec, block_size=mla_specs[mla_names[0]].block_size)
++        if spec.page_size_bytes > mla_page:
++            return None
++        sliding_buckets[replace(spec, page_size_padded=mla_page)].append(name)
++    sliding_groups: list[KVCacheGroupSpec] = []
++    spec_config = vllm_config.speculative_config
++    drop_draft_block = spec_config is not None and spec_config.use_eagle_block_drop()
++    for spec, names in sliding_buckets.items():
++        count = cdiv(len(names), len(mla_names))
++        sliding_groups.extend(
++            KVCacheGroupSpec(names[i::count], spec, is_eagle_group=drop_draft_block)
++            for i in range(count)
++        )
++
+     return (
+         [KVCacheGroupSpec(list(attn_specs), uniform_spec)]
+         + ([tail_group] if tail_group is not None else [])
+         + create_kv_cache_group_specs(padded_specs, mamba_grouped_names)
++        + sliding_groups
+     )
+ 
+ 
+@@ -1295,8 +1324,11 @@ def _glm5_next_tensor_layout(
+         for group in kv_cache_groups
+         if isinstance(group.kv_cache_spec, UniformTypeKVCacheSpecs)
+     ]
+-    mamba_groups = [
+-        group for group in kv_cache_groups if isinstance(group.kv_cache_spec, MambaSpec)
++    slot_groups = [
++        group
++        for group in kv_cache_groups
++        if isinstance(group.kv_cache_spec, MambaSpec)
++        or type(group.kv_cache_spec) is SlidingWindowSpec
+     ]
+     attn_group: KVCacheGroupSpec | None = None
+     tail_group: KVCacheGroupSpec | None = None
+@@ -1306,9 +1338,11 @@ def _glm5_next_tensor_layout(
+             attn_group = group
+         elif all(isinstance(spec, KpoolTailSpec) for spec in inner.values()):
+             tail_group = group
+-    if attn_group is None or not mamba_groups:
++    if attn_group is None or not any(
++        isinstance(group.kv_cache_spec, MambaSpec) for group in slot_groups
++    ):
+         return None
+-    if len(uniform_groups) + len(mamba_groups) != len(kv_cache_groups):
++    if len(uniform_groups) + len(slot_groups) != len(kv_cache_groups):
+         return None
+ 
+     attn_uniform = cast(UniformTypeKVCacheSpecs, attn_group.kv_cache_spec)
+@@ -1330,7 +1364,11 @@ def _glm5_next_tensor_layout(
+         return None
+     mla_page = mla_pages.pop()
+     idx_page = idx_pages.pop()
+-    if any(group.kv_cache_spec.page_size_bytes != mla_page for group in mamba_groups):
++    if any(
++        group.kv_cache_spec.page_size_bytes != mla_page
++        or len(group.layer_names) > len(mla_names)
++        for group in slot_groups
++    ):
+         return None
+ 
+     tail_names: list[str] = []
+@@ -1352,7 +1390,7 @@ def _glm5_next_tensor_layout(
+ 
+     return (
+         attn_group,
+-        mamba_groups,
++        slot_groups,
+         mla_names,
+         idx_names,
+         mla_page,
+@@ -1691,7 +1729,7 @@ def get_kv_cache_config_from_groups(
+     if (glm5_layout := _glm5_next_tensor_layout(kv_cache_groups)) is not None:
+         (
+             attn_group,
+-            mamba_groups,
++            slot_groups,
+             mla_names,
+             idx_names,
+             mla_page,
+@@ -1724,7 +1762,7 @@ def get_kv_cache_config_from_groups(
+         for index, mla_name in enumerate(mla_names):
+             offset = index * mla_page * num_blocks
+             add_tensor(mla_name, attn_specs[mla_name], offset)
+-            for group in mamba_groups:
++            for group in slot_groups:
+                 if index < len(group.layer_names):
+                     add_tensor(group.layer_names[index], group.kv_cache_spec, offset)
+ 
+@@ -2434,7 +2472,7 @@ def _max_memory_usage_bytes_from_groups(
+     if (glm5_layout := _glm5_next_tensor_layout(kv_cache_groups)) is not None:
+         (
+             attn_group,
+-            mamba_groups,
++            slot_groups,
+             mla_names,
+             idx_names,
+             mla_page,
+@@ -2449,7 +2487,7 @@ def _max_memory_usage_bytes_from_groups(
+                 group.kv_cache_spec.max_memory_usage_bytes(vllm_config),
+                 group.kv_cache_spec.page_size_bytes,
+             )
+-            for group in mamba_groups
++            for group in slot_groups
+         )
+         if tail_names:
+             total_blocks += 1
+diff --git a/vllm/v1/core/single_type_kv_cache_manager.py b/vllm/v1/core/single_type_kv_cache_manager.py
+index fc5dc410485dd1320cb2cdcdfa1dedd67cf6251b..a43bff547ccf2499555a904725bc6ad3826b426d 100644
+--- a/vllm/v1/core/single_type_kv_cache_manager.py
++++ b/vllm/v1/core/single_type_kv_cache_manager.py
+@@ -1094,6 +1094,15 @@ class SlidingWindowManager(SingleTypeKVCacheManager):
+             block_size=block_size,
+             use_eagle=use_eagle,
+         )
++        # Before the request has more blocks than a complete lookup window,
++        # _sliding_window_lookup falls back to the contiguous prefix. Every
++        # leading block is therefore reachable. This is especially important
++        # for EAGLE prompts with a partial trailing block: the EAGLE peek moves
++        # the replay-boundary tail one block to the right, but the unavailable
++        # peek is capped by the key list on lookup, which then needs the whole
++        # prefix instead.
++        if end_block <= need:
++            return None
+         # The matched run's right edge sits on the aligned boundary block when
+         # EAGLE peeks one block past it (shift=1), otherwise on the last block
+         # before the boundary (shift=0).
+diff --git a/vllm/v1/worker/block_table.py b/vllm/v1/worker/block_table.py
+index 33b52652a1540cd328e9ba7d1de358c758c8f3b5..450f500463d5b760ca5f0ddc0302fcd218f35cc0 100644
+--- a/vllm/v1/worker/block_table.py
++++ b/vllm/v1/worker/block_table.py
+@@ -466,14 +466,15 @@ class ComputeSlotMappingKernel(
+                 virtual_block_indices * BLOCKS_PER_KV_BLOCK
+                 + local_block_offsets // block_size
+             )
++            in_range = block_indices < block_table_stride
+             block_numbers = tl.load(
+                 block_table_ptr + row_offset + block_indices,
+-                mask=mask & is_local,
++                mask=mask & is_local & in_range,
+                 other=0,
+             ).to(tl.int64)
+             slot_offsets = local_block_offsets % block_size
+             slot_ids = block_numbers * block_size + slot_offsets
+-            slot_ids = tl.where(is_local, slot_ids, PAD_ID)
++            slot_ids = tl.where(is_local & in_range, slot_ids, PAD_ID)
+             tl.store(slot_mapping_ptr + offsets, slot_ids, mask=mask)
+ 
+     def dispatch(  # type: ignore[override]
+diff --git a/vllm/v1/worker/gpu/block_table.py b/vllm/v1/worker/gpu/block_table.py
+index c01895e635452e1e6468590fa2cf51f9c0074d63..6e2b422a0f64fe1f9818606d1a852a7a3ae4ed43 100644
+--- a/vllm/v1/worker/gpu/block_table.py
++++ b/vllm/v1/worker/gpu/block_table.py
+@@ -339,15 +339,15 @@ def _compute_slot_mappings_kernel(
+         block_indices = tl.where(
+             mapping_enabled, local_positions // kernel_block_size, 0
+         )
++        in_range = block_indices < block_table_stride
+         block_offsets = local_positions % kernel_block_size
+         block_numbers = tl.load(
+             block_table_ptr + req_state_idx * block_table_stride + block_indices,
+-            mask=is_local,
++            mask=is_local & in_range,
+             other=0,
+         )
+         slot_ids = block_numbers * kernel_block_size + block_offsets
+-        if CP_SIZE != 1:
+-            slot_ids = tl.where(is_local, slot_ids, PAD_ID)
++        slot_ids = tl.where(is_local & in_range, slot_ids, PAD_ID)
+ 
+         slot_ids = tl.where(mapping_enabled, slot_ids, PAD_ID)
+         tl.store(slot_mapping_ptr + offset, slot_ids, mask=offset < end_idx)
+diff --git a/vllm/v1/worker/gpu_worker.py b/vllm/v1/worker/gpu_worker.py
+index 2a3531b61b38992ae0dd7de408015716ab4e6be7..0567415f190aa63ae3b99985ceabf121097fd94c 100644
+--- a/vllm/v1/worker/gpu_worker.py
++++ b/vllm/v1/worker/gpu_worker.py
+@@ -735,6 +735,44 @@ class Worker(WorkerBase):
+     def initialize_from_config(self, kv_cache_config: KVCacheConfig) -> None:
+         """Allocate GPU KV cache with the specified kv_cache_config."""
+ 
++        # ROCm loads hipBLASLt code objects lazily for each GEMM family. The
++        # fixed-address KV allocation used by OffloadingConnector can consume
++        # the final device-memory region before model warmup reaches these BF16
++        # operations. Exercise the shapes used by GLM decode while memory is
++        # available, then release the temporary tensors before allocating KV.
++        kv_transfer_config = self.vllm_config.kv_transfer_config
++        if (
++            current_platform.is_rocm()
++            and kv_transfer_config is not None
++            and kv_transfer_config.kv_connector == "OffloadingConnector"
++        ):
++            _ = torch.cuda.current_blas_handle()
++            dtype = torch.bfloat16
++            bmm_input = torch.empty((16, 6, 512), device="cuda", dtype=dtype)
++            bmm_weight = torch.empty((16, 512, 256), device="cuda", dtype=dtype)
++            bmm_output = torch.empty((6, 16, 256), device="cuda", dtype=dtype)
++            torch.bmm(bmm_input, bmm_weight, out=bmm_output.transpose(0, 1))
++            linear_input = torch.empty((6, 2048), device="cuda", dtype=dtype)
++            linear_weight = torch.empty((4096, 2048), device="cuda", dtype=dtype)
++            torch.nn.functional.linear(linear_input, linear_weight)
++            router_input = torch.empty((6, 4096), device="cuda", dtype=dtype)
++            router_weight = torch.empty((288, 4096), device="cuda", dtype=dtype)
++            torch.mm(router_input, router_weight.T, out_dtype=torch.float32)
++            torch.cuda.synchronize()
++            del (
++                bmm_input,
++                bmm_weight,
++                bmm_output,
++                linear_input,
++                linear_weight,
++                router_input,
++                router_weight,
++            )
++            torch.cuda.empty_cache()
++            logger.info_once(
++                "Preloaded ROCm BF16 BLAS kernels before KV cache allocation."
++            )
++
+         # Update local config with adjusted num blocks after profiling,
+         # so that it's available to the warmup stage.
+         self.cache_config.num_gpu_blocks = kv_cache_config.num_blocks

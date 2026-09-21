@@ -146,11 +146,11 @@
   "components": {
     "primary": {
       "compatible_profile": "qwen38-flash-uncensored",
-      "profile_sha256": "53ef876b1e4aa6965a896db2cc3fe94c50781efb4c9db64ba8737df3cab41f4d"
+      "profile_sha256": "0722bb7fa5d9b9ec48bc5f613a42bfb8d573f0a99cacf3bc47910a95f809f51b"
     },
     "worker_pool": {
       "profile": "qwen38-4x27b",
-      "profile_sha256": "36565c4aba53d178ed7c489ee1f3d6aa2520920926a671420a3cfa74bbbc3086",
+      "profile_sha256": "f5f003ca5543e08991eba245eb98c1cf3e8bb5f93f6fdf9810b4bbf572eefd20",
       "url": "http://127.0.0.1:8100"
     }
   },
@@ -176,6 +176,7 @@
         "ANTHROPIC_DEFAULT_HAIKU_MODEL": "qwen3.8-flash-next-fast",
         "ANTHROPIC_DEFAULT_SONNET_MODEL": "qwen3.8-flash-next-thinking",
         "ANTHROPIC_DEFAULT_OPUS_MODEL": "qwen3.8-flash-next-thinking",
+        "ANTHROPIC_DEFAULT_FABLE_MODEL": "qwen3.8-flash-next-thinking",
         "DISABLE_PROMPT_CACHING": "0",
         "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
         "CLAUDE_CODE_TODO_REMINDER_MODE": "off",

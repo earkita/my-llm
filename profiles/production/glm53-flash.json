@@ -111,13 +111,13 @@
     ],
     "gpu_bdfs": [
       "0000:e3:00.0",
+      "0000:e6:00.0",
+      "0000:e9:00.0",
+      "0000:ec:00.0",
       "0000:c3:00.0",
       "0000:c6:00.0",
-      "0000:03:00.0",
-      "0000:23:00.0",
-      "0000:e6:00.0",
-      "0000:07:00.0",
-      "0000:0a:00.0"
+      "0000:c9:00.0",
+      "0000:cc:00.0"
     ],
     "parallel": {
       "tensor": 8,
@@ -227,6 +227,7 @@
         "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-5.3-flash-high",
         "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.3-flash-high",
         "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.3-flash-high",
+        "ANTHROPIC_DEFAULT_FABLE_MODEL": "glm-5.3-flash-high",
         "DISABLE_PROMPT_CACHING": "1",
         "CLAUDE_CODE_TODO_REMINDER_MODE": "off",
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",

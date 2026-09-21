@@ -14,7 +14,10 @@ from r9700.backends import build_command
 from r9700.backends.vllm import environment as vllm_environment
 from r9700.config import (
     ConfigurationError,
+    DEFAULT_PROFILE,
+    DEFAULT_STACK_PRESET,
     ROOT,
+    activate_runtime_mode,
     load_profile,
     load_runtime,
 )
@@ -59,6 +62,15 @@ GLM_PROFILE = "glm53-flash"
 GLM_V029_EXPERIMENTS = str(
     ROOT / "profiles" / "dev" / "glm53-flash-v029-experiments.json"
 )
+KAT_CODER_AWQ = str(
+    ROOT / "profiles" / "dev" / "kat-coder-v25-dev-awq.json"
+)
+GLM53_UPSTREAM = str(
+    ROOT / "profiles" / "dev" / "glm53-flash-new-upstream.json"
+)
+GLM53_UPSTREAM_MINIMAL = str(
+    ROOT / "profiles" / "dev" / "glm53-flash-upstream-minimal.json"
+)
 
 
 class ProductionProfileTests(unittest.TestCase):
@@ -69,6 +81,250 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(
             Path(profile["_path"]),
             ROOT / "profiles/dev/glm53-flash-rocm10-gluon.json",
+        )
+
+    def test_glm53_upstream_profile_is_isolated_and_diagnostic(self) -> None:
+        profile = load_profile(GLM53_UPSTREAM)
+        runtime = profile["runtime"]
+
+        self.assertEqual(profile["name"], "glm53-flash-new-upstream")
+        self.assertEqual(profile["status"], "development")
+        self.assertEqual(runtime["status"], "diagnostic-only")
+        self.assertEqual(runtime["recipe"], "vllm_glm53flashrocm10_v0.32")
+        self.assertEqual(
+            runtime["required_patches"], ["0001", "0002", "0003", "0004"]
+        )
+        self.assertEqual(runtime["limits"]["max_model_len"], 262144)
+        self.assertEqual(runtime["cache"]["dtype"], "fp8")
+        self.assertTrue(runtime["cache"]["prefix_cache"])
+        self.assertEqual(runtime["attention_backend"], "ROCM_AITER_MLA_SPARSE")
+        self.assertEqual(runtime["moe_backend"], "triton")
+        self.assertEqual(runtime["speculative_config"]["method"], "dflash")
+        self.assertEqual(runtime["speculative_config"]["num_speculative_tokens"], 4)
+
+        full_workspace = activate_runtime_mode(
+            profile["model"], runtime, "c4-full-indexer-workspace"
+        )
+        self.assertEqual(full_workspace["limits"]["max_num_seqs"], 4)
+        self.assertTrue(full_workspace["scheduler"]["async"])
+        self.assertEqual(
+            full_workspace["environment"][
+                "MY_LLM_GLM53_FULL_INDEXER_WORKSPACE"
+            ],
+            "1",
+        )
+        compressed_workspace = activate_runtime_mode(
+            profile["model"], runtime, "c4-compressed-indexer-workspace"
+        )
+        self.assertEqual(compressed_workspace["limits"]["max_num_seqs"], 4)
+        self.assertTrue(compressed_workspace["scheduler"]["async"])
+        self.assertNotIn(
+            "MY_LLM_GLM53_FULL_INDEXER_WORKSPACE",
+            compressed_workspace["environment"],
+        )
+
+        manifest = json.loads(
+            (ROOT / "manifest" / "vllm_glm53flashrocm10_v0.32.json").read_text()
+        )
+        self.assertEqual(manifest["platform"]["python_build"], "cpython-3.12.13")
+        self.assertEqual(
+            manifest["environment"]["huggingface_hub_version"], "1.31.0"
+        )
+        self.assertEqual(
+            manifest["sources"]["vllm"]["commit"],
+            "031f5810c1957b6ec2a7666f65a3fe68c1f7e534",
+        )
+
+        production = load_profile("glm53-flash-new")
+        self.assertEqual(production["runtime"]["recipe"], "vllm_glm53_v0.32")
+        self.assertNotEqual(runtime["name"], production["runtime"]["name"])
+
+    def test_glm53_upstream_minimal_profile_has_only_required_rocm_deltas(
+        self,
+    ) -> None:
+        profile = load_profile(GLM53_UPSTREAM_MINIMAL)
+        runtime = profile["runtime"]
+
+        self.assertEqual(profile["status"], "development")
+        self.assertEqual(runtime["status"], "diagnostic-only")
+        self.assertEqual(runtime["recipe"], "vllm_glm53_v0.32")
+        self.assertEqual(
+            runtime["required_patches"],
+            [
+                "0001",
+                "0002",
+                "0003",
+                "0004",
+                "0005",
+                "0006",
+                "0007",
+                "0008",
+            ],
+        )
+        self.assertEqual(runtime["limits"]["max_num_seqs"], 1)
+        self.assertEqual(runtime["cache"]["dtype"], "fp8")
+        self.assertEqual(runtime["cache"]["prefix_cache_retention_interval"], 1280)
+        self.assertTrue(runtime["scheduler"]["enforce_eager"])
+        self.assertNotIn("speculative_config", runtime)
+
+        target_graphs = load_runtime(GLM53_UPSTREAM_MINIMAL, "target-graphs")
+        self.assertFalse(target_graphs["scheduler"]["enforce_eager"])
+        self.assertFalse(target_graphs["scheduler"]["async"])
+        self.assertNotIn("speculative_config", target_graphs)
+        self.assertEqual(
+            target_graphs["compilation_config"]["cudagraph_mode"],
+            "FULL_AND_PIECEWISE",
+        )
+        self.assertEqual(
+            target_graphs["compilation_config"]["cudagraph_capture_sizes"], [1]
+        )
+        self.assertEqual(
+            target_graphs["environment"]["VLLM_USE_BREAKABLE_CUDAGRAPH"], "1"
+        )
+        self.assertEqual(target_graphs["environment"]["VLLM_TARGET_DEVICE"], "rocm")
+
+        dflash = load_runtime(GLM53_UPSTREAM_MINIMAL, "dflash2-k4-graphs")
+        speculative = dflash["speculative_config"]
+        self.assertEqual(speculative["model_artifact"], "dflash2-drafter")
+        self.assertEqual(speculative["method"], "dflash")
+        self.assertEqual(speculative["num_speculative_tokens"], 4)
+        self.assertEqual(speculative["draft_tensor_parallel_size"], 8)
+        self.assertEqual(speculative["attention_backend"], "TRITON_ATTN")
+        self.assertEqual(speculative["kv_cache_dtype"], "fp8")
+        self.assertTrue(dflash["cache"]["prefix_cache"])
+        self.assertEqual(dflash["cache"]["prefix_cache_retention_interval"], 1280)
+        self.assertFalse(dflash["multimodal"]["language_model_only"])
+        self.assertEqual(
+            dflash["multimodal"]["encoder_attention_backend"], "TRITON_ATTN"
+        )
+        self.assertEqual(dflash["multimodal"]["encoder_tp_mode"], "weights")
+        self.assertEqual(
+            dflash["multimodal"]["limit_per_prompt"], {"image": 8, "video": 0}
+        )
+        self.assertEqual(
+            dflash["multimodal"]["processor_kwargs"]["max_image_tokens"], 4096
+        )
+        self.assertEqual(
+            dflash["compilation_config"]["cudagraph_capture_sizes"],
+            [1, 2, 3, 4, 5],
+        )
+        self.assertNotIn("VLLM_TUNED_CONFIG_FOLDER", dflash["environment"])
+        self.assertEqual(
+            profile["verification"]["best_runtime_mode"], "target-graphs"
+        )
+        drafter = profile["model"]["auxiliary_artifacts"][0]
+        self.assertEqual(drafter["revision"], "bf582e4eacc1810f76656d1811693ff6c6737d2a")
+        self.assertEqual(
+            drafter["sha256"],
+            "b038e1d9d1e7833fa3880c2c0135ba9b673013f03da1b29fb831931584759dac",
+        )
+
+        moe_tuned = load_runtime(
+            GLM53_UPSTREAM_MINIMAL, "target-graphs-moe-tuned"
+        )
+        self.assertEqual(
+            moe_tuned["compilation_config"], target_graphs["compilation_config"]
+        )
+        self.assertNotIn("speculative_config", moe_tuned)
+        self.assertEqual(
+            moe_tuned["environment"]["VLLM_TUNED_CONFIG_FOLDER"],
+            "tuning/moe/glm53-flash-new",
+        )
+        self.assertEqual(moe_tuned["environment"]["VLLM_TARGET_DEVICE"], "rocm")
+
+        manifest = json.loads(
+            (ROOT / "manifest" / "vllm_glm53_v0.32.json").read_text()
+        )
+        self.assertEqual(
+            manifest["sources"]["vllm"]["commit"],
+            "3bb782621492711485dc86791b5978128783814a",
+        )
+        self.assertEqual(
+            [patch["path"] for patch in manifest["sources"]["vllm"]["patches"]],
+            [
+                "patches/vllm_glm53_v0.32/"
+                "0001-respect-explicit-runtime-platform.patch",
+                "patches/vllm_glm53_v0.32/"
+                "0002-route-glm-kpool-indexer-to-amd-native.patch",
+                "patches/vllm_glm53_v0.32/"
+                "0003-add-rocm-sparse-mla-topk-ready-hook.patch",
+                "patches/vllm_glm53_v0.32/"
+                "0004-fix-rocm-lazy-tilelang-warmup-compile.patch",
+                "patches/vllm_glm53_v0.32/"
+                "0005-fix-rocm-fp8-quant-fallback-dispatch.patch",
+                "patches/vllm_glm53_v0.32/"
+                "0006-add-rdna4-fused-fp8-glm-sparse-mla.patch",
+                "patches/vllm_glm53_v0.32/"
+                "0007-align-rocm-glm-kpool-pages.patch",
+                "patches/vllm_glm53_v0.32/"
+                "0008-enable-glm53-dflash2.patch",
+            ],
+        )
+        rdna4_sparse_mla = (
+            ROOT
+            / "patches/vllm_glm53_v0.32/"
+            "0006-add-rdna4-fused-fp8-glm-sparse-mla.patch"
+        ).read_text()
+        self.assertIn("USE_FP8_QK=True", rdna4_sparse_mla)
+        self.assertIn("num_warps=8", rdna4_sparse_mla)
+        dflash_patch = (
+            ROOT
+            / "patches/vllm_glm53_v0.32/"
+            "0008-enable-glm53-dflash2.patch"
+        ).read_text()
+        self.assertIn("class Glm5NextModel(nn.Module, EagleModelMixin)", dflash_patch)
+        self.assertIn("self.fc = RowParallelLinear(", dflash_patch)
+        self.assertIn("RING=ring", dflash_patch)
+        self.assertIn("kv_ptr.type.element_ty", rdna4_sparse_mla)
+        rdna4_kpool_alignment = (
+            ROOT
+            / "patches/vllm_glm53_v0.32/"
+            "0007-align-rocm-glm-kpool-pages.patch"
+        ).read_text()
+        self.assertIn("_get_indexer_block_alignment", rdna4_kpool_alignment)
+        self.assertIn("max(PAGED_MQA_PAGE_SIZES)", rdna4_kpool_alignment)
+
+    def test_kat_coder_awq_development_profile_starts_conservatively(self) -> None:
+        profile = load_profile(KAT_CODER_AWQ)
+        model = profile["model"]
+        runtime = profile["runtime"]
+
+        self.assertEqual(model["family"], "qwen3_5_moe")
+        self.assertEqual(model["expected_shards"], 5)
+        self.assertEqual(model["checkpoint_weight_bytes"], 24413055712)
+        self.assertEqual(model["vllm"]["quantization"], "compressed-tensors")
+        self.assertTrue(model["vllm"]["language_model_only"])
+        self.assertEqual(runtime["status"], "diagnostic-only")
+        self.assertEqual(runtime["parallel"]["tensor"], 1)
+        self.assertFalse(runtime["parallel"]["enable_expert_parallel"])
+        self.assertEqual(runtime["limits"]["max_model_len"], 32768)
+        self.assertEqual(runtime["cache"]["dtype"], "auto")
+        self.assertFalse(runtime["cache"]["prefix_cache"])
+        self.assertTrue(runtime["scheduler"]["enforce_eager"])
+        self.assertEqual(runtime["moe_backend"], "triton")
+        self.assertEqual(runtime["environment"]["VLLM_KV_CACHE_LAYOUT"], "LBHNC")
+
+        graph_mode = load_runtime(KAT_CODER_AWQ, "decode-graphs")
+        self.assertFalse(graph_mode["scheduler"]["enforce_eager"])
+        self.assertFalse(graph_mode["scheduler"]["async"])
+        self.assertEqual(
+            graph_mode["compilation_config"]["cudagraph_mode"],
+            "FULL_DECODE_ONLY",
+        )
+        self.assertEqual(
+            graph_mode["compilation_config"]["cudagraph_capture_sizes"], [1]
+        )
+
+        triton_attention = load_runtime(
+            KAT_CODER_AWQ, "decode-graphs-triton-attn"
+        )
+        self.assertEqual(triton_attention["attention_backend"], "TRITON_ATTN")
+        self.assertEqual(
+            triton_attention["environment"]["FLASH_ATTENTION_TRITON_AMD_ENABLE"],
+            "TRUE",
+        )
+        self.assertEqual(
+            triton_attention["environment"]["VLLM_TARGET_DEVICE"], "rocm"
         )
 
     @patch("r9700.install._install_vllm")
@@ -183,6 +439,8 @@ class ProductionProfileTests(unittest.TestCase):
             "vllm_glm53flashrocm10_v0.29",
             "vllm_glm53flashrocm10_v0.30",
             "vllm_glm53flashrocm10_v0.31",
+            "vllm_glm53flashrocm10_v0.32",
+            "vllm_glm53_v0.32",
             "vllm_qwen38flash_pr53896",
         }
         self.assertEqual(set(recipe_names()), expected)
@@ -383,6 +641,7 @@ class ProductionProfileTests(unittest.TestCase):
             "ANTHROPIC_DEFAULT_HAIKU_MODEL",
             "ANTHROPIC_DEFAULT_SONNET_MODEL",
             "ANTHROPIC_DEFAULT_OPUS_MODEL",
+            "ANTHROPIC_DEFAULT_FABLE_MODEL",
         )
         for (model_directory, filename), (
             profile,
@@ -444,6 +703,10 @@ class ProductionProfileTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     environment["ANTHROPIC_DEFAULT_OPUS_MODEL"],
+                    "qwen3.8-flash-next-thinking",
+                )
+                self.assertEqual(
+                    environment["ANTHROPIC_DEFAULT_FABLE_MODEL"],
                     "qwen3.8-flash-next-thinking",
                 )
                 self.assertEqual(
@@ -1046,7 +1309,11 @@ class ProductionProfileTests(unittest.TestCase):
         runtime = profile["runtime"]
 
         self.assertEqual(model["vllm"]["quantization"], "compressed-tensors")
-        self.assertEqual(runtime["recipe"], "vllm_glm53flashrocm10_v0.31")
+        self.assertEqual(runtime["recipe"], "vllm_glm53_v0.32")
+        self.assertEqual(
+            runtime["required_patches"],
+            ["0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008"],
+        )
         self.assertNotIn("experimental_modes", runtime)
         self.assertEqual(runtime["limits"]["max_model_len"], 262144)
         self.assertEqual(runtime["limits"]["max_num_batched_tokens"], 4096)
@@ -1054,6 +1321,14 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(runtime["cache"]["dtype"], "fp8")
         self.assertTrue(runtime["cache"]["prefix_cache"])
         self.assertFalse(runtime["scheduler"]["enforce_eager"])
+        self.assertFalse(runtime["multimodal"]["language_model_only"])
+        self.assertEqual(
+            runtime["multimodal"]["encoder_attention_backend"], "TRITON_ATTN"
+        )
+        self.assertEqual(
+            runtime["multimodal"]["limit_per_prompt"],
+            {"image": 8, "video": 0},
+        )
         self.assertEqual(
             runtime["compilation_config"]["cudagraph_mode"],
             "FULL_AND_PIECEWISE",
@@ -1066,7 +1341,7 @@ class ProductionProfileTests(unittest.TestCase):
         )
         self.assertEqual(
             profile["stack"]["litellm_aliases"],
-            ["glm-5.3-flash-new-high"],
+            ["glm-5.3-flash-high"],
         )
         self.assertEqual(
             profile["stack"]["claude_settings"]["env"][
@@ -1076,7 +1351,7 @@ class ProductionProfileTests(unittest.TestCase):
         )
 
         request = {
-            "model": "glm-5.3-flash-new-high",
+            "model": "glm-5.3-flash-high",
             "tools": [{"name": "Read", "input_schema": {"type": "object"}}],
         }
         self.assertTrue(enforce_glm53_strict_tools(request)["tools"][0]["strict"])
@@ -1555,14 +1830,16 @@ class ProductionProfileTests(unittest.TestCase):
 
     def test_launcher_cli_defaults_to_the_full_stack(self) -> None:
         command_parser = cli.parser()
-        start_args = command_parser.parse_args(
-            ["launcher", "start", "glm53-flash"]
-        )
+        default_start_args = command_parser.parse_args(["launcher", "start"])
+        start_args = command_parser.parse_args(["launcher", "start", "glm53-flash"])
         stop_args = command_parser.parse_args(["launcher", "stop"])
         runtime_only_args = command_parser.parse_args(
             ["launcher", "start", "glm53-flash", "--runtime-only"]
         )
 
+        self.assertEqual(DEFAULT_PROFILE, "glm53-flash")
+        self.assertEqual(DEFAULT_STACK_PRESET, DEFAULT_PROFILE)
+        self.assertEqual(default_start_args.profile, DEFAULT_PROFILE)
         self.assertTrue(start_args.with_litellm)
         self.assertTrue(stop_args.with_litellm)
         self.assertFalse(runtime_only_args.with_litellm)

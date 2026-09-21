@@ -51,8 +51,10 @@ def main() -> None:
     rank = int(os.environ["RANK"])
     local_rank = int(os.environ["LOCAL_RANK"])
     world = int(os.environ["WORLD_SIZE"])
-    if world != 2:
-        raise RuntimeError("link benchmark requires exactly two ranks")
+    if args.mode == "ping-pong" and world != 2:
+        raise RuntimeError("ping-pong benchmark requires exactly two ranks")
+    if world < 2:
+        raise RuntimeError("collective benchmark requires at least two ranks")
 
     torch.cuda.set_device(local_rank)
     dist.init_process_group("nccl")
@@ -77,14 +79,24 @@ def main() -> None:
 
             if rank == 0:
                 seconds = elapsed / args.iterations
-                transferred = payload_bytes if args.mode == "allreduce" else 2 * payload_bytes
+                algorithmic_bytes = payload_bytes
+                bus_factor = 2 * (world - 1) / world
+                transferred = (
+                    algorithmic_bytes * bus_factor
+                    if args.mode == "allreduce"
+                    else 2 * payload_bytes
+                )
                 print(
                     json.dumps(
                         {
                             "mode": args.mode,
+                            "world_size": world,
                             "payload_bytes": payload_bytes,
                             "iterations": args.iterations,
                             "mean_microseconds": seconds * 1e6,
+                            "algorithmic_gigabytes_per_second": (
+                                algorithmic_bytes / seconds / 1e9
+                            ),
                             "effective_gigabytes_per_second": transferred / seconds / 1e9,
                         },
                         sort_keys=True,

@@ -1,0 +1,131 @@
+{
+  "schema_version": 1,
+  "platform": {
+    "os": "Ubuntu 26.04",
+    "python": "3.12",
+    "python_build": "cpython-3.12.13",
+    "gpu_arch": "gfx1201",
+    "reference_gpu_count": 8
+  },
+  "environment": {
+    "venv": ".runtime/recipes/vllm_glm53_v0.32/venv",
+    "source_root": ".runtime/recipes/vllm_glm53_v0.32/src",
+    "constraints": "constraints/rocm-10.0-py312.txt",
+    "constraints_sha256": "5b658cd3e1fdc7566014624017b4884136e86c24878f85410c6ead76ac5b59b3",
+    "constraint_overlays": [
+      {
+        "path": "constraints/vllm-glm53-flash-v032-py312.override.txt",
+        "sha256": "c20e532940b05bd99980d2536fe797522900c31f3cc424b992ad63417fc2f305"
+      }
+    ],
+    "rocm_version": "10.0.0",
+    "rocm_index_url": "https://stable.repo.amd.com/rocm/whl-next/",
+    "torch_version": "2.13.0+rocm10.0.0",
+    "torchvision_version": "0.28.0+rocm10.0.0",
+    "amdsmi_version": "27.0.0+6b0e43f3",
+    "amdsmi_from_rocm_sdk": true,
+    "amdsmi_source_commit": "6b0e43f341195e203754e08f850e437ff2fc09f9",
+    "huggingface_hub_version": "1.31.0",
+    "pip_version": "26.2.1",
+    "setuptools_version": "79.0.1",
+    "wheel_version": "0.47.0"
+  },
+  "kernel_driver": {
+    "version": "10.0.0-4",
+    "filename": "rocm-installer-10.0.0-4.run",
+    "url": "https://repo.radeon.com/rocm/installer/rocm-runfile-installer/rocm-rel-10.0/rocm-installer-10.0.0-4.run",
+    "sha256": "367355d25f59835ff6e23fe1067e13070ea8deced9e056db2973557dc07bef9c"
+  },
+  "sources": {
+    "aiter": {
+      "repository": "https://github.com/ROCm/aiter.git",
+      "commit": "7ff5155f3ba772e534b6cf8dddc0099932327b9b",
+      "version": "0.1.21+git.7ff5155f3",
+      "expected_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "patches": []
+    },
+    "vllm": {
+      "repository": "https://github.com/vllm-project/vllm.git",
+      "commit": "3bb782621492711485dc86791b5978128783814a",
+      "version": "v0.32-main-3bb782621",
+      "official_glm53_support": "https://github.com/vllm-project/vllm/pull/53906",
+      "glm_decode_cleanup": "https://github.com/vllm-project/vllm/pull/55736",
+      "glm_dflash_candidate": "https://github.com/vllm-project/vllm/pull/56983",
+      "expected_diff_sha256": "94c9df844dbe85ec297c98b5966f9df9ee101713e096310c62a49dc9be5ad360",
+      "full_index_diff": true,
+      "apply_intent_to_add": true,
+      "reuse_existing_native_build": true,
+      "accepted_previous_images": [
+        {
+          "sha256": "187104edee9019572bb3075beee0932cf3cb7d6aeb7b0c0742dbc69c80a3d64c",
+          "patch_count": 1
+        },
+        {
+          "sha256": "d7756a8bcd362a70ba0328e94483c1fbe7bd7216a9d4063e0bb36eaebb978680",
+          "patch_count": 2
+        },
+        {
+          "sha256": "cfa1e0d1433c8150075741ef57fc1c01bcc3e612369bf77f57071d7fc85676d2",
+          "patch_count": 3
+        },
+        {
+          "sha256": "b53227365f99b917d1053e3edcf370d2ceee5a3b7d5e6986e30b895b7a123a4f",
+          "patch_count": 4
+        },
+        {
+          "sha256": "fd85439f2c044dcc752c1ba3eaca07d655a4b480b532b2c176d30a7cc8a1feaf",
+          "patch_count": 5
+        },
+        {
+          "sha256": "c9d2d5baf9f3bbf839d467443047cf02605b7201969268a1163c1d58a63ff476",
+          "patch_count": 6
+        },
+        {
+          "sha256": "2f499614172d3d7c41574e9c71af084bd60ae1bc5db42334066caab2095a9b95",
+          "patch_count": 7
+        }
+      ],
+      "patches": [
+        {
+          "path": "patches/vllm_glm53_v0.32/0001-respect-explicit-runtime-platform.patch",
+          "sha256": "f16648cc5ac8b22de3c424a75fc90c7d901c9503fcbf6e6cdd014e66273afb8f"
+        },
+        {
+          "path": "patches/vllm_glm53_v0.32/0002-route-glm-kpool-indexer-to-amd-native.patch",
+          "sha256": "cce42add9fec5e025ad343ba86a9e8e2f71a13de540ffc5bdc1db82cba661f77"
+        },
+        {
+          "path": "patches/vllm_glm53_v0.32/0003-add-rocm-sparse-mla-topk-ready-hook.patch",
+          "sha256": "e61ee19986c88966ce47567190ca7abfc6e3878f29269af3164f63496defabc9"
+        },
+        {
+          "path": "patches/vllm_glm53_v0.32/0004-fix-rocm-lazy-tilelang-warmup-compile.patch",
+          "sha256": "cea68b62fdd271531998811e5f6bdee049774954b60473a1e36c00645daedbb7"
+        },
+        {
+          "path": "patches/vllm_glm53_v0.32/0005-fix-rocm-fp8-quant-fallback-dispatch.patch",
+          "sha256": "128378f9090053517691d5363a45a0dd02f4b57f923798d51c0dc9337f7d646d"
+        },
+        {
+          "path": "patches/vllm_glm53_v0.32/0006-add-rdna4-fused-fp8-glm-sparse-mla.patch",
+          "sha256": "385b7d2aafde8f79b8cb311c77c93503b2ebbb56c5506fcffd751b14b26fad96"
+        },
+        {
+          "path": "patches/vllm_glm53_v0.32/0007-align-rocm-glm-kpool-pages.patch",
+          "sha256": "10364d711e276dedbb175722ec92398ec3bdd3e58557572b0254406ebc111db0"
+        },
+        {
+          "path": "patches/vllm_glm53_v0.32/0008-enable-glm53-dflash2.patch",
+          "sha256": "3555a05af6a1c1cfbe745e01733d7aced5d4e7adc41811a00ace578d16651a7e"
+        }
+      ]
+    },
+    "triton-kernels": {
+      "repository": "https://github.com/ROCm/triton.git",
+      "commit": "0f380657dbf3ee86eb57558ff71df24f03b5d4e7",
+      "version": "vllm-0.32-rocm10-kernels",
+      "expected_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "patches": []
+    }
+  }
+}

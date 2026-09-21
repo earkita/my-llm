@@ -1,0 +1,34 @@
+diff --git a/tests/v1/attention/test_rocm_glm5next_sparse.py b/tests/v1/attention/test_rocm_glm5next_sparse.py
+--- a/tests/v1/attention/test_rocm_glm5next_sparse.py
++++ b/tests/v1/attention/test_rocm_glm5next_sparse.py
+@@ -61,6 +61,12 @@ def test_fit_kpool_indices_rejects_narrow_input():
+         )
+ 
+ 
++def test_rocm_sparse_impl_accepts_common_topk_ready_hook():
++    impl = object.__new__(sparse_mod.ROCMAiterMLASparseImpl)
++
++    assert impl.record_logical_topk_ready() is None
++
++
+ @pytest.mark.parametrize(
+     (
+         "kv_cache_dtype",
+diff --git a/vllm/v1/attention/backends/mla/rocm_aiter_mla_sparse.py b/vllm/v1/attention/backends/mla/rocm_aiter_mla_sparse.py
+--- a/vllm/v1/attention/backends/mla/rocm_aiter_mla_sparse.py
++++ b/vllm/v1/attention/backends/mla/rocm_aiter_mla_sparse.py
+@@ -776,6 +776,14 @@ class ROCMAiterMLASparseImpl(
+     supports_dense_mha_prefill = False
+     supports_dcp = False
+ 
++    def record_logical_topk_ready(self) -> None:
++        """Satisfy the sparse-MLA hook used by the shared model layer.
++
++        The ROCm backend consumes the indexer's shared top-k buffer directly
++        and does not use ``SparseMLAIndexGroup`` side-stream conversion, so it
++        has no readiness event to record.
++        """
++
+     def __init__(
+         self,
+         num_heads: int,

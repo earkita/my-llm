@@ -12,6 +12,7 @@
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "qwen3.8-27b-workers-fast",
     "ANTHROPIC_DEFAULT_SONNET_MODEL": "qwen3.8-27b-workers-thinking",
     "ANTHROPIC_DEFAULT_OPUS_MODEL": "qwen3.8-27b-workers-thinking",
+    "ANTHROPIC_DEFAULT_FABLE_MODEL": "qwen3.8-27b-workers-thinking",
     "DISABLE_PROMPT_CACHING": "0",
     "CLAUDE_CODE_TODO_REMINDER_MODE": "off",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",

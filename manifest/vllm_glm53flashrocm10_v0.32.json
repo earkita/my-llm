@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "platform": {
+    "os": "Ubuntu 26.04",
+    "python": "3.12",
+    "python_build": "cpython-3.12.13",
+    "gpu_arch": "gfx1201",
+    "reference_gpu_count": 8
+  },
+  "environment": {
+    "venv": ".runtime/recipes/vllm_glm53flashrocm10_v0.32/venv",
+    "source_root": ".runtime/recipes/vllm_glm53flashrocm10_v0.32/src",
+    "constraints": "constraints/rocm-10.0-py312.txt",
+    "constraints_sha256": "5b658cd3e1fdc7566014624017b4884136e86c24878f85410c6ead76ac5b59b3",
+    "constraint_overlays": [
+      {
+        "path": "constraints/vllm-glm53-flash-v032-py312.override.txt",
+        "sha256": "c20e532940b05bd99980d2536fe797522900c31f3cc424b992ad63417fc2f305"
+      }
+    ],
+    "rocm_version": "10.0.0",
+    "rocm_index_url": "https://stable.repo.amd.com/rocm/whl-next/",
+    "torch_version": "2.13.0+rocm10.0.0",
+    "torchvision_version": "0.28.0+rocm10.0.0",
+    "amdsmi_version": "27.0.0+6b0e43f3",
+    "amdsmi_from_rocm_sdk": true,
+    "amdsmi_source_commit": "6b0e43f341195e203754e08f850e437ff2fc09f9",
+    "huggingface_hub_version": "1.31.0",
+    "pip_version": "26.2.1",
+    "setuptools_version": "79.0.1",
+    "wheel_version": "0.47.0"
+  },
+  "kernel_driver": {
+    "version": "10.0.0-4",
+    "filename": "rocm-installer-10.0.0-4.run",
+    "url": "https://repo.radeon.com/rocm/installer/rocm-runfile-installer/rocm-rel-10.0/rocm-installer-10.0.0-4.run",
+    "sha256": "367355d25f59835ff6e23fe1067e13070ea8deced9e056db2973557dc07bef9c"
+  },
+  "sources": {
+    "aiter": {
+      "repository": "https://github.com/ROCm/aiter.git",
+      "commit": "7ff5155f3ba772e534b6cf8dddc0099932327b9b",
+      "version": "0.1.21+git.7ff5155f3",
+      "expected_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "patches": []
+    },
+    "vllm": {
+      "repository": "https://github.com/vllm-project/vllm.git",
+      "commit": "031f5810c1957b6ec2a7666f65a3fe68c1f7e534",
+      "version": "v0.32-main-031f5810c",
+      "official_glm53_support": "https://github.com/vllm-project/vllm/pull/53906",
+      "glm_decode_cleanup": "https://github.com/vllm-project/vllm/pull/55736",
+      "glm_dflash_open_pr": "https://github.com/vllm-project/vllm/pull/55423",
+      "expected_diff_sha256": "6f1b27d1ee32f0d1c8b3b0fa510b4b91e3dee0bb33201ae7ebee09a8009c6ee3",
+      "full_index_diff": true,
+      "apply_intent_to_add": true,
+      "reuse_existing_native_build": true,
+      "accepted_previous_images": [
+        {
+          "sha256": "aec50870f60ab9446c94b1d75c7c11338dad39ba873c106108d8e723ceb988cc",
+          "patch_count": 1
+        },
+        {
+          "sha256": "530114da9437abfd4b58f80480a3aeb2e5021a9a7b8fc571bd36608c55f69eaf",
+          "patch_count": 2
+        },
+        {
+          "sha256": "234f33585531325b50d3a9fd8f1a395a2b3e21fba53b8c8d6e9f2a0755ba85a3",
+          "patch_count": 3
+        },
+        {
+          "sha256": "9e7e47a71edabb664f9a8d32d0683e1263f9e87fcce5063e0273b0d9804d131d",
+          "patch_count": 4
+        }
+      ],
+      "patches": [
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.32/0001-port-glm53-r9700-delta-to-upstream-main.patch",
+          "sha256": "04885aa628dbefe85d482dd144e036d4a1b5a457bb49e099b19750bd22d99b02"
+        },
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.32/0002-fix-rocm-sparse-mla-topk-ready-hook.patch",
+          "sha256": "e61ee19986c88966ce47567190ca7abfc6e3878f29269af3164f63496defabc9"
+        },
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.32/0003-fix-rocm-lazy-tilelang-warmup-compile.patch",
+          "sha256": "cea68b62fdd271531998811e5f6bdee049774954b60473a1e36c00645daedbb7"
+        },
+        {
+          "path": "patches/vllm_glm53flashrocm10_v0.32/0004-fix-compress-GLM-indexer-decode-workspace.patch",
+          "sha256": "a5f0f9f077ff536a36203d93142f4b8de9012aab19f69989232b318cea3f0259"
+        }
+      ]
+    },
+    "triton-kernels": {
+      "repository": "https://github.com/ROCm/triton.git",
+      "commit": "0f380657dbf3ee86eb57558ff71df24f03b5d4e7",
+      "version": "vllm-0.32-rocm10-kernels",
+      "expected_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "patches": []
+    }
+  }
+}

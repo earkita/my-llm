@@ -431,6 +431,7 @@
       "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-5.3-flash-high",
       "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.3-flash-high",
       "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.3-flash-high",
+      "ANTHROPIC_DEFAULT_FABLE_MODEL": "glm-5.3-flash-high",
         "DISABLE_PROMPT_CACHING": "1",
         "CLAUDE_CODE_TODO_REMINDER_MODE": "off",
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",

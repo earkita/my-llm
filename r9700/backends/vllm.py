@@ -10,6 +10,87 @@ from ..manifest import recipe_venv
 from .common import base_environment, rocm_root, visible_devices
 
 
+def _rocprofiler_environment(
+    runtime: dict[str, Any], rocm_home: Path, inherited: dict[str, str]
+) -> dict[str, str]:
+    profiling = runtime.get("profiling")
+    if profiling is None:
+        return {}
+    if not isinstance(profiling, dict) or not profiling.get("kernel_trace"):
+        raise ConfigurationError(
+            "vLLM profiling requires profiling.kernel_trace=true"
+        )
+
+    output_value = profiling.get("output_path")
+    if not isinstance(output_value, str) or not output_value:
+        raise ConfigurationError("vLLM profiling requires profiling.output_path")
+    output_path = Path(output_value)
+    if output_path.is_absolute() or ".." in output_path.parts:
+        raise ConfigurationError(
+            "vLLM profiling.output_path must be repository-relative"
+        )
+    resolved_output = (ROOT / output_path).resolve()
+    profiles_root = (ROOT / "logs" / "profiles").resolve()
+    if not resolved_output.is_relative_to(profiles_root):
+        raise ConfigurationError(
+            "vLLM profiling.output_path must be below logs/profiles"
+        )
+
+    delay_seconds = profiling.get("delay_seconds", 0)
+    duration_seconds = profiling.get("duration_seconds")
+    repeat = profiling.get("repeat", 1)
+    if (
+        not isinstance(delay_seconds, int)
+        or delay_seconds < 0
+        or not isinstance(duration_seconds, int)
+        or duration_seconds <= 0
+        or not isinstance(repeat, int)
+        or repeat <= 0
+    ):
+        raise ConfigurationError(
+            "vLLM profiling delay/duration/repeat must be non-negative integers"
+        )
+
+    tool = rocm_home / "lib" / "rocprofiler-sdk" / "librocprofiler-sdk-tool.so"
+    sdk = rocm_home / "lib" / "librocprofiler-sdk.so"
+    register = rocm_home / "lib" / "librocprofiler-sdk.so.1"
+    missing = [str(path) for path in (tool, sdk, register) if not path.is_file()]
+    if missing:
+        raise ConfigurationError(
+            "ROCm profiler libraries are absent: " + ", ".join(missing)
+        )
+
+    preload = f"{tool}:{sdk}"
+    if inherited.get("LD_PRELOAD"):
+        preload = f"{preload}:{inherited['LD_PRELOAD']}"
+    environment = {
+        "ROCPROFILER_LIBRARY_CTOR": "1",
+        "LD_PRELOAD": preload,
+        "ROCP_TOOL_LIBRARIES": str(tool),
+        "ROCPROFILER_REGISTER_LIBRARY": str(register),
+        "ROCPROF_OUTPUT_FILE_NAME": str(
+            profiling.get("output_file", "vllm-%pid%")
+        ),
+        "ROCPROF_OUTPUT_PATH": str(resolved_output),
+        "ROCPROF_OUTPUT_FORMAT": str(profiling.get("output_format", "csv")),
+        "ROCPROF_KERNEL_TRACE": "1",
+        "ROCPROF_SIGNAL_HANDLERS": (
+            "1" if profiling.get("signal_handlers", False) else "0"
+        ),
+        "ROCPROF_COLLECTION_PERIOD": (
+            f"{delay_seconds * 1_000_000_000}:"
+            f"{duration_seconds * 1_000_000_000}:{repeat}"
+        ),
+    }
+    if profiling.get("memory_copy_trace", True):
+        environment["ROCPROF_MEMORY_COPY_TRACE"] = "1"
+    if profiling.get("rccl_trace", True):
+        environment["ROCPROF_RCCL_API_TRACE"] = "1"
+    if profiling.get("stats", True):
+        environment["ROCPROF_STATS"] = "1"
+    return environment
+
+
 def environment(runtime: dict[str, Any]) -> dict[str, str]:
     env = base_environment(runtime)
     rocm_home = rocm_root(runtime)
@@ -44,6 +125,7 @@ def environment(runtime: dict[str, Any]) -> dict[str, str]:
     env.update(
         {key: str(value) for key, value in runtime.get("environment", {}).items()}
     )
+    env.update(_rocprofiler_environment(runtime, rocm_home, env))
     partition = runtime["parallel"].get("pipeline_layers")
     if partition:
         env["VLLM_PP_LAYER_PARTITION"] = str(partition)
@@ -108,6 +190,11 @@ def command(
         if cache.get("prefix_cache")
         else "--no-enable-prefix-caching"
     )
+    if cache.get("prefix_caching_hash_algo") is not None:
+        args += [
+            "--prefix-caching-hash-algo",
+            str(cache["prefix_caching_hash_algo"]),
+        ]
     if runtime.get("enable_prompt_tokens_details"):
         args.append("--enable-prompt-tokens-details")
     if cache.get("prefix_cache_retention_interval") is not None:
