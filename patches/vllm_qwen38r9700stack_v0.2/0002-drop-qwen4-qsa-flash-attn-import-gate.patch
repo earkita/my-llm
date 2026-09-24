@@ -1,0 +1,13 @@
+diff --git a/vllm/models/qwen4_exp/amd/qsa.py b/vllm/models/qwen4_exp/amd/qsa.py
+index 079cfed..d06b695 100644
+--- a/vllm/models/qwen4_exp/amd/qsa.py
++++ b/vllm/models/qwen4_exp/amd/qsa.py
+@@ -104,8 +104,6 @@ class Qwen4ExpQSAFlashAttentionImpl(FlashAttentionImpl):
+ 
+     def __init__(self, *args, **kwargs) -> None:
+         super().__init__(*args, **kwargs)
+-        if not is_flash_attn_varlen_func_available():
+-            raise NotImplementedError("Qwen4Exp QSA requires FlashAttention")
+         if self.dcp_world_size != 1:
+             raise NotImplementedError(
+                 "Qwen4Exp QSA does not support decode context parallelism"

@@ -5,6 +5,11 @@ AMD Radeon AI PRO R9700. Nie zależy od innych checkoutów: receptury,
 środowiska `.runtime`, stan usług i logi są lokalne. Checkpointy pozostają na
 dedykowanym magazynie modeli wskazanym przez profile produkcyjne.
 
+Aktualnym źródłem referencyjnym do lookupów, dokumentacji i śledzenia zmian
+stosu R9700 jest [earkita/r9700-stack](https://github.com/earkita/r9700-stack).
+Receptury buildów nadal korzystają z jawnie przypiętego repozytorium i commita
+zapisanego w manifeście; zmiana źródła receptury wymaga ponownej instalacji.
+
 ## Profile
 
 | Profil | Backend | GPU | Równoległość | Kontekst | Spekulacja |

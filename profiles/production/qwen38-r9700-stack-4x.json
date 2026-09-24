@@ -1,0 +1,199 @@
+{
+  "schema_version": 1,
+  "name": "qwen38-r9700-stack-4x",
+  "status": "production-ready",
+  "description": "Four Qwen3.8-27B NVFP4 replicas, each spanning two R9700 GPUs through the native r9700-stack plugin",
+  "model": {
+    "schema_version": 1,
+    "name": "qwen38-27b-nvfp4-r9700-stack",
+    "family": "qwen4_exp",
+    "format": "safetensors",
+    "repository": "unsloth/Qwen3.8-27B-NVFP4",
+    "revision": "f0b7c9e722f5565102fff8481c99e4d86ae099c7",
+    "default_directory": "/mnt/ai/models/qwen/Qwen3.8-27B-NVFP4",
+    "served_name": "qwen3.8-27b-r9700-stack",
+    "expected_shards": 2,
+    "weight_pattern": "model.safetensors",
+    "checkpoint_weight_bytes": 23417339744,
+    "required_files": [
+      "config.json",
+      "generation_config.json",
+      "model.safetensors",
+      "model.safetensors.index.json",
+      "model_mtp.safetensors",
+      "tokenizer.json",
+      "tokenizer_config.json",
+      "chat_template.jinja",
+      "vocab.json"
+    ],
+    "allow_patterns": [
+      "*.json",
+      "*.safetensors",
+      "*.jinja",
+      "tokenizer*",
+      "vocab.json",
+      "README.md"
+    ],
+    "supports_dspark": false,
+    "supports_mtp": true,
+    "supports_dflash": true,
+    "supports_qsa": false,
+    "auxiliary_artifacts": [
+      {
+        "name": "qwen38-27b-dflash2-fp8",
+        "repository": "tcclaviger/Qwen3.8-27B-DFlash2-FP8",
+        "revision": "ee0cb26a8279b7910cc28d82a8a3e15e4728d56f",
+        "filename": "model.safetensors",
+        "path": "/mnt/ai/models/qwen/Qwen3.8-27B-DFlash2-FP8/model.safetensors",
+        "size_bytes": 2118882784,
+        "sha256": "7dbb99a8d0120f502e66b256aa7c0866d933ceeee4a02463d9db591811e8404e"
+      }
+    ],
+    "vllm": {
+      "tokenizer_mode": "auto",
+      "tool_call_parser": "qwen3_coder",
+      "reasoning_parser": "qwen3",
+      "enable_auto_tool_choice": true,
+      "trust_remote_code": false,
+      "language_model_only": true,
+      "quantization": "compressed-tensors"
+    }
+  },
+  "runtime": {
+    "schema_version": 1,
+    "name": "qwen38-27b-nvfp4-r9700stack-rocm10-8xr9700-tp2-dp4-dflash2-k7",
+    "status": "production-ready",
+    "recipe": "vllm_qwen38r9700stack_v0.2",
+    "description": "Four local TP2 Qwen3.8-27B replicas using native gfx1201 MXFP4, paged-attention and two-rank all-reduce kernels",
+    "required_model_family": "qwen4_exp",
+    "required_patches": [],
+    "gpu_order": [0, 1, 2, 3, 7, 4, 5, 6],
+    "gpu_bdfs": [
+      "0000:e3:00.0",
+      "0000:e6:00.0",
+      "0000:e9:00.0",
+      "0000:ec:00.0",
+      "0000:c3:00.0",
+      "0000:c6:00.0",
+      "0000:c9:00.0",
+      "0000:cc:00.0"
+    ],
+    "parallel": {
+      "tensor": 2,
+      "pipeline": 1,
+      "data": 4,
+      "enable_expert_parallel": false,
+      "disable_custom_all_reduce": false
+    },
+    "limits": {
+      "max_model_len": 262144,
+      "max_num_seqs": 8,
+      "max_num_batched_tokens": 4096,
+      "gpu_memory_utilization": 0.94,
+      "kv_cache_memory_bytes": 9663676416
+    },
+    "cache": {
+      "dtype": "auto",
+      "block_size": 16,
+      "prefix_cache": true,
+      "cpu_offload_gb": 0,
+      "prefix_cache_retention_interval": 1648
+    },
+    "scheduler": {
+      "async": true,
+      "enforce_eager": false
+    },
+    "multimodal": {
+      "language_model_only": true
+    },
+    "loading": {
+      "format": "safetensors",
+      "max_parallel_workers": 1
+    },
+    "transport": {
+      "p2p_disable": 0,
+      "shm_disable": 1,
+      "socket_ifname": "lo",
+      "runtime_connect": 1,
+      "hsa_legacy_ipc": 0
+    },
+    "shutdown": {
+      "request_timeout_seconds": 0,
+      "worker_timeout_seconds": 60,
+      "process_grace_seconds": 120
+    },
+    "attention_backend": "CUSTOM",
+    "speculative_config": {
+      "model_artifact": "qwen38-27b-dflash2-fp8",
+      "method": "dflash",
+      "num_speculative_tokens": 7,
+      "draft_tensor_parallel_size": 2,
+      "attention_backend": "CUSTOM"
+    },
+    "environment": {
+      "VLLM_TARGET_DEVICE": "rocm",
+      "VLLM_USE_V2_MODEL_RUNNER": "1",
+      "VLLM_ROCM_USE_AITER": "0",
+      "VLLM_DISABLE_PYNCCL": "1",
+      "VLLM_KV_CACHE_LAYOUT": "LBHNC",
+      "R9K_FOLD": "1",
+      "R9K_NVFP4": "mxfp4",
+      "R9K_FP8_TO_MXFP4": "1",
+      "R9K_BF16_TO_MXFP4": "in_proj_ba",
+      "R9K_AR_IMPL": "r9k",
+      "R9K_AR_QUANT": "1",
+      "R9K_PAGED_ATTN": "r9k",
+      "R9K_EXPERT_CACHE_SLOTS": "270",
+      "R9K_TARGET_LMHEAD": "fp8",
+      "R9K_DRAFT_LMHEAD": "fp8",
+      "GPU_MAX_HW_QUEUES": "1",
+      "HSA_ENABLE_MWAITX": "1",
+      "SAFETENSORS_FAST_GPU": "1",
+      "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"
+    },
+    "hardware_topology": {
+      "captured_on": "2026-09-23",
+      "motherboard": "ASUS Pro WS WRX90E-SAGE SE",
+      "note": "Eight gfx1201 R9700 devices form four adjacent TP2 groups. Validate physical peer pairing and P2P bandwidth before first production use."
+    }
+  },
+  "stack": {
+    "description": "Four native R9700-stack Qwen3.8 TP2 replicas for concurrent coding agents",
+    "litellm_aliases": [
+      "qwen3.8-r9700-thinking",
+      "qwen3.8-r9700-low",
+      "qwen3.8-r9700-fast"
+    ],
+    "claude_settings": {
+      "apiKeyHelper": "bash -c 'exec \"${MY_LLM_REPO_ROOT:-$HOME/ai/my-llm}/scripts/claude-litellm-key.sh\"'",
+      "totalTokensReminder": "off",
+      "effortLevel": "high",
+      "teammateMode": "in-process",
+      "permissions": {
+        "defaultMode": "acceptEdits"
+      },
+      "env": {
+        "ANTHROPIC_BASE_URL": "http://127.0.0.1:4000",
+        "ANTHROPIC_MODEL": "qwen3.8-r9700-thinking",
+        "ANTHROPIC_SMALL_FAST_MODEL": "qwen3.8-r9700-fast",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "qwen3.8-r9700-fast",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "qwen3.8-r9700-thinking",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "qwen3.8-r9700-thinking",
+        "ANTHROPIC_DEFAULT_FABLE_MODEL": "qwen3.8-r9700-thinking",
+        "DISABLE_PROMPT_CACHING": "0",
+        "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+        "CLAUDE_CODE_TODO_REMINDER_MODE": "off",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+        "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
+        "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "262144",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "262144",
+        "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "85"
+      }
+    }
+  },
+  "verification": {
+    "scope": "configuration-only",
+    "verified_context": 0,
+    "notes": "Pinned to earkita/r9700-stack 0.2.0 commit 51c7826 with TP4 Flash-Next and side-by-side server support, while this profile keeps the documented Qwen3.8-27B NVFP4 TP2 settings. Install, TP2 peer grouping, four-replica routing, correctness, 256K stability and local throughput remain to be measured."
+  }
+}

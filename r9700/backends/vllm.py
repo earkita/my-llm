@@ -185,6 +185,10 @@ def command(
         args.append("--disable-custom-all-reduce")
     if limits.get("kv_cache_memory_bytes") is not None:
         args += ["--kv-cache-memory-bytes", str(limits["kv_cache_memory_bytes"])]
+    if cache.get("cpu_offload_gb", 0):
+        args += ["--cpu-offload-gb", str(cache["cpu_offload_gb"])]
+        for parameter in cache.get("cpu_offload_params", []):
+            args += ["--cpu-offload-params", str(parameter)]
     args.append(
         "--enable-prefix-caching"
         if cache.get("prefix_cache")

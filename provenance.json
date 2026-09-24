@@ -106,7 +106,7 @@
       "source_runtime": "profiles/runtime/production/qwen38-flash-next-fp8-8x-cache-safe-mtp2.json",
       "source_runtime_sha256": "22b4431b0c4ecfd74cb08b89ab815292bf4ce78ab2d0b71aab0ca446484f9f04",
       "target_profile": "profiles/production/qwen38-flash.json",
-      "target_profile_sha256": "387ae161af218e90e51feabc71b8585fc47e10b57066c8666bf512a439b840b5",
+      "target_profile_sha256": "9be23a48feb7229c1ef86ee321cab5838e0d1b85866131873f4e02589547b09e",
       "intentional_changes": [
         "replaced the historical upstream FP8 deployment with the locally present tcclaviger MXFP4/FP8 checkpoint",
         "assigned the main model to the first four fast-path R9700/gfx1201 GPUs with TP4 and EP4, leaving four GPUs for the 1+1+1+1 side allocation",
@@ -123,7 +123,7 @@
       "source_runtime": "profiles/runtime/production/qwen38-flash-next-fp8-8x-cache-safe-mtp2.json",
       "source_runtime_sha256": "22b4431b0c4ecfd74cb08b89ab815292bf4ce78ab2d0b71aab0ca446484f9f04",
       "target_profile": "profiles/production/qwen38-flash-uncensored.json",
-      "target_profile_sha256": "b04de26bb8999508c0b7962a754e10521f0108c56715c9c7119f095c39b63cca",
+      "target_profile_sha256": "6426e010765ebf9e6b24c4b8cf4a6ff91244cfdb5de1c81e07a815affe993624",
       "intentional_changes": [
         "converted the UNCENSORED FP8 checkpoint locally to the reference MXFP4/FP8 tensor schema without copying reference weights or scales",
         "assigned the main model to the first four fast-path R9700/gfx1201 GPUs with TP4 and EP4, leaving four GPUs for the 1+1+1+1 side allocation",
@@ -141,7 +141,7 @@
       "source_runtime": "https://github.com/vllm-project/vllm/pull/48606",
       "source_runtime_sha256": "52d2d48d01025f21a7010901bae31a49c86acac3",
       "target_profile": "profiles/production/qwen38-4x27b.json",
-      "target_profile_sha256": "f16650eba8a373b9e8421d33783a4e7f50b5a5b1d41caf97e2d2b0f654d4f1a1",
+      "target_profile_sha256": "53597061c1dd0f2acbb5e34b235b106888a4f664aba729e5819da4c2d5b795c6",
       "intentional_changes": [
         "adapted the upstream Quark W4A16 linear scheme to the pinned Qwen runtime and selected the gfx1201 RDNAHybridW4A16 kernel",
         "assigned the four GPUs outside the primary Qwen allocation as four independent TP1 data-parallel replicas",
@@ -161,7 +161,7 @@
       "source_runtime": "manifest/vllm_qwen38flash_pr53896.json",
       "source_runtime_sha256": "54e4576ecf3ef5591acf8b9f69c410154bfc4bbe72cbd2b398b58fb6dc226f4c",
       "target_profile": "profiles/production/qwen-multi.json",
-      "target_profile_sha256": "1895e9d5361c66b2e8acce34e112e5d6752be0225f956befcf44567a0b455603",
+      "target_profile_sha256": "d76ebd6b8e62f56d46da99c60ece293586afa02ec1a49556a5dd9578566484f5",
       "intentional_changes": [
         "composed the pinned Qwen Flash UNCENSORED TP4/EP4 primary and Qwen3.8-27B DP4/TP1 worker pool without profile inheritance",
         "pinned the worker component to the W4A16 DFlash2 K4 profile with FP8 E4M3 target and draft KV while preserving earlier BF16 and MTP results as historical evidence",

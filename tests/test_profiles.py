@@ -442,6 +442,7 @@ class ProductionProfileTests(unittest.TestCase):
             "vllm_glm53flashrocm10_v0.32",
             "vllm_glm53_v0.32",
             "vllm_qwen38flash_pr53896",
+            "vllm_qwen38r9700stack_v0.2",
         }
         self.assertEqual(set(recipe_names()), expected)
         for recipe in expected:
@@ -660,7 +661,11 @@ class ProductionProfileTests(unittest.TestCase):
                 expected["env"]["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = str(
                     min(context_tokens, 1_000_000)
                 )
-                expected["env"]["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"] = "90"
+                expected["env"]["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"] = (
+                    profile["stack"]["claude_settings"]["env"].get(
+                        "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "90"
+                    )
+                )
                 self.assertEqual(template, expected)
                 aliases = profile["stack"]["litellm_aliases"]
                 model_names = {template["env"][key] for key in model_keys}
@@ -831,23 +836,26 @@ class ProductionProfileTests(unittest.TestCase):
                     self.assertIn("preserve_thinking: false", block)
                     self.assertIn("supports_low_reasoning_effort: true", block)
 
-    def test_no_production_profile_enables_cpu_offload(self) -> None:
+    def test_production_cpu_offload_is_explicitly_scoped(self) -> None:
         for name in PROFILE_NAMES:
             with self.subTest(profile=name):
                 runtime = load_profile(name)["runtime"]
-                self.assertEqual(runtime["cache"].get("cpu_offload_gb", 0), 0)
+                cache = runtime["cache"]
+                if cache.get("cpu_offload_gb", 0):
+                    self.assertEqual(cache.get("cpu_offload_params"), ["experts"])
                 self.assertNotIn("weight_offload", runtime)
 
-    def test_profile_loader_rejects_cpu_offload(self) -> None:
+    def test_profile_loader_rejects_unbudgeted_cpu_offload_params(self) -> None:
         path = ROOT / "tests" / "invalid-offload-profile.json"
         source = json.loads(
             (ROOT / "profiles" / "production" / "qwen38-flash.json").read_text()
         )
         source["name"] = path.stem
-        source["runtime"]["cache"]["cpu_offload_gb"] = 1
+        source["runtime"]["cache"]["cpu_offload_gb"] = 0
+        source["runtime"]["cache"]["cpu_offload_params"] = ["experts"]
         path.write_text(json.dumps(source))
         try:
-            with self.assertRaisesRegex(ConfigurationError, "cannot use CPU offload"):
+            with self.assertRaisesRegex(ConfigurationError, "requires cpu_offload_gb"):
                 load_profile(str(path))
         finally:
             path.unlink(missing_ok=True)
@@ -857,7 +865,7 @@ class ProductionProfileTests(unittest.TestCase):
             "deepseek-v4-flash": ("--pipeline-parallel-size", "6"),
             GLM_PROFILE: ("--quantization", "quark"),
             "glm53-flash-new": ("--quantization", "compressed-tensors"),
-            "qwen38-4x27b": ("--data-parallel-size", "4"),
+            "qwen38-4x27b": ("--data-parallel-size", "2"),
             "qwen38-flash": ("--tensor-parallel-size", "4"),
             "qwen38-flash-uncensored": ("--tensor-parallel-size", "4"),
         }
@@ -878,7 +886,7 @@ class ProductionProfileTests(unittest.TestCase):
                         command[1:3], ["-m", "r9700.vllm_entrypoint"]
                     )
 
-    def test_qwen_27b_worker_pool_uses_four_disjoint_tp1_replicas(self) -> None:
+    def test_qwen_27b_worker_pool_uses_two_disjoint_tp2_replicas(self) -> None:
         profile = load_profile("qwen38-4x27b")
         model = profile["model"]
         runtime = profile["runtime"]
@@ -886,9 +894,9 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(
             runtime["parallel"],
             {
-                "tensor": 1,
+                "tensor": 2,
                 "pipeline": 1,
-                "data": 4,
+                "data": 2,
                 "enable_expert_parallel": False,
                 "disable_custom_all_reduce": True,
             },
@@ -896,10 +904,10 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(
             runtime["gpu_bdfs"],
             [
-                "0000:07:00.0",
-                "0000:0a:00.0",
-                "0000:23:00.0",
-                "0000:e6:00.0",
+                "0000:c3:00.0",
+                "0000:c6:00.0",
+                "0000:c9:00.0",
+                "0000:cc:00.0",
             ],
         )
         primary_bdfs = {
@@ -925,7 +933,7 @@ class ProductionProfileTests(unittest.TestCase):
             speculative["model_artifact"], "qwen38-27b-dflash2-w4a16"
         )
         self.assertEqual(speculative["num_speculative_tokens"], 4)
-        self.assertEqual(speculative["draft_tensor_parallel_size"], 1)
+        self.assertEqual(speculative["draft_tensor_parallel_size"], 2)
         self.assertEqual(speculative["attention_backend"], "TRITON_ATTN")
         self.assertEqual(speculative["draft_sample_method"], "probabilistic")
         self.assertEqual(runtime["cache"]["dtype"], "fp8")
@@ -941,8 +949,8 @@ class ProductionProfileTests(unittest.TestCase):
             model, runtime, Path("/models/qwen38-27b"), "127.0.0.1", 8100
         )
         for option, value in (
-            ("--tensor-parallel-size", "1"),
-            ("--data-parallel-size", "4"),
+            ("--tensor-parallel-size", "2"),
+            ("--data-parallel-size", "2"),
             ("--quantization", "quark"),
             ("--max-model-len", "131072"),
         ):
@@ -958,9 +966,71 @@ class ProductionProfileTests(unittest.TestCase):
             "/mnt/ai/models/qwen/Qwen3.8-27B-DFlash2-W4A16",
         )
 
+    def test_qwen_r9700_stack_uses_four_tp2_replicas(self) -> None:
+        profile = load_profile("qwen38-r9700-stack-4x")
+        model = profile["model"]
+        runtime = profile["runtime"]
+
+        self.assertEqual(profile["status"], "production-ready")
+        self.assertEqual(runtime["recipe"], "vllm_qwen38r9700stack_v0.2")
+        self.assertEqual(
+            runtime["parallel"],
+            {
+                "tensor": 2,
+                "pipeline": 1,
+                "data": 4,
+                "enable_expert_parallel": False,
+                "disable_custom_all_reduce": False,
+            },
+        )
+        self.assertEqual(len(runtime["gpu_order"]), 8)
+        self.assertEqual(len(runtime["gpu_bdfs"]), 8)
+        self.assertEqual(model["expected_shards"], 2)
+        self.assertEqual(model["checkpoint_weight_bytes"], 23417339744)
+        self.assertEqual(model["vllm"]["quantization"], "compressed-tensors")
+        self.assertEqual(runtime["attention_backend"], "CUSTOM")
+        self.assertEqual(runtime["limits"]["max_model_len"], 262144)
+        self.assertEqual(
+            profile["stack"]["claude_settings"]["env"][
+                "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"
+            ],
+            "85",
+        )
+        self.assertEqual(runtime["environment"]["R9K_AR_IMPL"], "r9k")
+        self.assertEqual(runtime["environment"]["R9K_NVFP4"], "mxfp4")
+        self.assertEqual(
+            runtime["cache"]["prefix_cache_retention_interval"], 1648
+        )
+        self.assertEqual(
+            runtime["speculative_config"]["num_speculative_tokens"], 7
+        )
+        self.assertEqual(
+            runtime["speculative_config"]["draft_tensor_parallel_size"], 2
+        )
+
+        command = build_command(
+            model,
+            runtime,
+            Path("/models/Qwen3.8-27B-NVFP4"),
+            "127.0.0.1",
+            8000,
+        )
+        self.assertEqual(
+            command[command.index("--tensor-parallel-size") + 1], "2"
+        )
+        self.assertEqual(
+            command[command.index("--data-parallel-size") + 1], "4"
+        )
+        self.assertEqual(
+            command[command.index("--attention-backend") + 1], "CUSTOM"
+        )
+        self.assertEqual(
+            command[command.index("--max-model-len") + 1], "262144"
+        )
+
     def test_qwen_multi_pins_primary_and_worker_components(self) -> None:
         profile = load_profile("qwen-multi")
-        primary = load_profile("qwen38-flash-uncensored")
+        primary = load_profile("qwen38-flash")
         workers = load_profile("qwen38-4x27b")
         components = profile["components"]
 
@@ -2030,17 +2100,15 @@ class ProductionProfileTests(unittest.TestCase):
 
         managed_runtime.assert_called_once_with()
 
-    def test_proxy_maps_legacy_state_without_profile_by_runtime(self) -> None:
+    def test_proxy_rejects_ambiguous_legacy_state_without_profile(self) -> None:
         profile = load_profile("qwen38-flash")
-        self.assertEqual(
+        with self.assertRaisesRegex(ConfigurationError, "cannot be mapped"):
             proxy._active_profile_name(
                 {
                     "model": profile["model"]["name"],
                     "runtime": profile["runtime"]["name"],
                 }
-            ),
-            "qwen38-flash",
-        )
+            )
 
     def test_proxy_resolves_explicit_development_profile_path(self) -> None:
         profile_path = ROOT / "profiles/dev/glm53-flash-rocm10-gluon.json"

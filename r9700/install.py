@@ -549,6 +549,50 @@ def _install_vllm(
             manifest["sources"]["vllm"].get("reuse_existing_native_build")
         ),
     )
+    if "r9700-stack" in manifest["sources"]:
+        plugin = _prepare_source(
+            "r9700-stack", sources / "r9700-stack", manifest
+        )
+        kernel_dir = plugin / "kernels"
+        kernel_build = kernel_dir / "build.sh"
+        if not kernel_build.is_file():
+            raise ConfigurationError(
+                f"R9700 plugin kernel builder is absent: {kernel_build}"
+            )
+        run(
+            ["bash", kernel_build],
+            cwd=kernel_dir,
+            env=dict(build_env, GFX_ARCH=arch),
+        )
+        built_library = kernel_dir / "libr9k.so"
+        package_kernel_dir = plugin / "r9700_vllm" / "kernels"
+        if not built_library.is_file() or not package_kernel_dir.is_dir():
+            raise ConfigurationError(
+                "R9700 plugin build did not produce its packaged kernel library"
+            )
+        shutil.copy2(built_library, package_kernel_dir / built_library.name)
+        run(
+            [
+                *pip,
+                "install",
+                "--no-deps",
+                "--no-build-isolation",
+                plugin,
+            ],
+            env=build_env,
+        )
+        run(
+            [
+                python,
+                "-c",
+                (
+                    "from importlib.metadata import entry_points; "
+                    "assert any(e.name == 'r9700' for e in "
+                    "entry_points(group='vllm.general_plugins'))"
+                ),
+            ],
+            env=build_env,
+        )
     _make_venv_entrypoints_relocatable(venv)
     write_install_manifest(recipe_name)
     record = recipe_record(recipe_name)

@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "platform": {
+    "os": "Ubuntu 26.04",
+    "python": "3.12",
+    "python_build": "cpython-3.12.13",
+    "gpu_arch": "gfx1201",
+    "reference_gpu_count": 8
+  },
+  "environment": {
+    "venv": ".runtime/recipes/vllm_qwen38r9700stack_v0.2/venv",
+    "source_root": ".runtime/recipes/vllm_qwen38r9700stack_v0.2/src",
+    "constraints": "constraints/rocm-10.0-py312.txt",
+    "constraints_sha256": "5b658cd3e1fdc7566014624017b4884136e86c24878f85410c6ead76ac5b59b3",
+    "constraint_overlays": [
+      {
+        "path": "constraints/vllm-qwen38-r9700-stack-py312.override.txt",
+        "sha256": "27daaf90e717555f9176a853ec8cb57f23a5aed397ea2c82d3b7c82ad7afd53b"
+      }
+    ],
+    "rocm_version": "10.0.0",
+    "rocm_index_url": "https://stable.repo.amd.com/rocm/whl-next/",
+    "torch_version": "2.13.0+rocm10.0.0",
+    "torchvision_version": "0.28.0+rocm10.0.0",
+    "amdsmi_version": "27.0.0+6b0e43f3",
+    "amdsmi_from_rocm_sdk": true,
+    "amdsmi_source_commit": "6b0e43f341195e203754e08f850e437ff2fc09f9",
+    "huggingface_hub_version": "1.31.0",
+    "pip_version": "26.2.1",
+    "setuptools_version": "79.0.1",
+    "wheel_version": "0.47.0"
+  },
+  "kernel_driver": {
+    "version": "10.0.0-4",
+    "filename": "rocm-installer-10.0.0-4.run",
+    "url": "https://repo.radeon.com/rocm/installer/rocm-runfile-installer/rocm-rel-10.0/rocm-installer-10.0.0-4.run",
+    "sha256": "367355d25f59835ff6e23fe1067e13070ea8deced9e056db2973557dc07bef9c"
+  },
+  "sources": {
+    "aiter": {
+      "repository": "https://github.com/ROCm/aiter.git",
+      "commit": "7ff5155f3ba772e534b6cf8dddc0099932327b9b",
+      "version": "0.1.21+git.7ff5155f3",
+      "expected_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "patches": []
+    },
+    "vllm": {
+      "repository": "https://github.com/vllm-project/vllm.git",
+      "commit": "dee37d89115db4c94a820a79a78a7828e141c910",
+      "version": "nightly-rocm100-dee37d891",
+      "expected_diff_sha256": "7047281d069485b465a98e53d89b26dfe1594506caf1e2af81c0724478d292c8",
+      "full_index_diff": true,
+      "apply_intent_to_add": true,
+      "reuse_existing_native_build": true,
+      "patches": [
+        {
+          "path": "patches/vllm_qwen38r9700stack_v0.2/0001-respect-explicit-runtime-platform.patch",
+          "sha256": "f16648cc5ac8b22de3c424a75fc90c7d901c9503fcbf6e6cdd014e66273afb8f"
+        },
+        {
+          "path": "patches/vllm_qwen38r9700stack_v0.2/0002-drop-qwen4-qsa-flash-attn-import-gate.patch",
+          "sha256": "c53c269feaad60b1f6c0151f6b938e328bf97779cf41d7eb029f32ada62cce69"
+        },
+        {
+          "path": "patches/vllm_qwen38r9700stack_v0.2/0003-fix-rocm-qsa-kv-cache-op-import.patch",
+          "sha256": "96e4fc72430114433e62131dd575d925e5a2d90b94c9afbf784988cededac794"
+        }
+      ]
+    },
+    "triton-kernels": {
+      "repository": "https://github.com/ROCm/triton.git",
+      "commit": "0f380657dbf3ee86eb57558ff71df24f03b5d4e7",
+      "version": "vllm-rocm10-kernels",
+      "expected_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "patches": []
+    },
+    "r9700-stack": {
+      "repository": "https://github.com/earkita/r9700-stack.git",
+      "commit": "51c782616cdde9dc79bf6bdc301a5ac4a18856f8",
+      "version": "0.2.0",
+      "expected_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "patches": []
+    }
+  }
+}

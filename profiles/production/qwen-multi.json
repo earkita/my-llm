@@ -2,30 +2,28 @@
   "schema_version": 1,
   "name": "qwen-multi",
   "status": "production-ready",
-  "description": "Combined Qwen3.8 Flash-Next UNCENSORED primary and four independent Qwen3.8-27B R9700 workers with W4A16 DFlash2 K4",
+  "description": "Qwen3.8 Flash-Next GPTQ TP4 primary plus two independent Qwen3.8-27B TP2 workers on eight R9700 GPUs",
   "model": {
     "schema_version": 1,
-    "name": "qwen38-flash-next-uncensored-mxfp4-fp8",
+    "name": "qwen38-flash-next-mxfp4-fp8-gptq",
     "family": "qwen4_exp",
     "format": "safetensors",
-    "repository": "dealignai/Qwen3.8-Flash-Next-UNCENSORED-FP8",
-    "revision": "0df192cfd5b20fcd109fb63a5e1f663afa0341d8",
-    "default_directory": "/mnt/ai/models/qwen/Qwen3.8-Flash-Next-UNCENSORED-MXFP4-FP8",
-    "served_name": "qwen3.8-flash-next-uncensored-mxfp4-fp8",
-    "expected_shards": 131,
+    "repository": "tcclaviger/Qwen3.8-Flash-Next-MXFP4-FP8-GPTQ",
+    "revision": "2a052b4728c7b7331f5385f1b25c9d2896386c2f",
+    "default_directory": "/mnt/ai/models/qwen/Qwen3.8-Flash-Next-MXFP4-FP8-GPTQ",
+    "served_name": "qwen3.8-flash-next-mxfp4-fp8-gptq",
+    "expected_shards": 21,
     "index_file": "model.safetensors.index.json",
-    "checkpoint_weight_bytes": 125789603090,
+    "checkpoint_weight_bytes": 116527272352,
     "required_files": [
       "config.json",
-      "conversion-provenance.json",
       "generation_config.json",
       "model.safetensors.index.json",
       "tokenizer.json",
       "tokenizer_config.json",
       "chat_template.jinja",
-      "merges.txt",
       "vocab.json",
-      "LICENSE"
+      "merges.txt"
     ],
     "allow_patterns": [
       "*.json",
@@ -33,7 +31,6 @@
       "*.jinja",
       "tokenizer*",
       "vocab.json",
-      "merges.txt",
       "LICENSE",
       "README.md"
     ],
@@ -49,61 +46,54 @@
       "language_model_only": true
     },
     "file_sha256": {
-      "README.md": "dd9ca91fb9fb4f63d8cc4615971b263e49770891c8706ce71cb4c8866d7f289d",
+      "README.md": "dfb46cd0f689998f55f2efb31ed95a7356de627e3fd6fb404105988e6032730d",
       "chat_template.jinja": "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041",
-      "config.json": "fe82c6474b3ce4f7a5d1e236a716f2088b8f17bcb03d08e54298d3a2ce62b132",
-      "conversion-provenance.json": "03dababea02f125e6c9607255b0b7e506c5825b92da6cffaa6e69c4b24d9b17f",
-      "model.safetensors.index.json": "44957661ab0f3d00a636fc2cd5c7083bc3f844ee3026ab3e024793cffe3f6e3f",
+      "config.json": "28ad9cdf24e1d59627696a6c657ed30d68ebcf744745ab35244711bec35c8cdd",
+      "generation_config.json": "e70c136c1b78ddc1fb0905bac8e733a4dc448d4f852a5dd75143fffc70be550e",
+      "model.safetensors.index.json": "a2619d12ec995d25d197b210ce652289a7dfe7f05441bc227687802d82eb250c",
       "tokenizer.json": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3",
       "tokenizer_config.json": "b11349aafa7cdc6a320767cf7ceb29ed82f7eda5d65e8e0819e76f0ce947bf27"
     }
   },
   "runtime": {
     "schema_version": 1,
-    "name": "qwen38-flash-next-uncensored-mxfp4-fp8-4xr9700-tp4-ep4-mtp2",
+    "name": "qwen38-flash-next-mxfp4-fp8-4xr9700-tp4-r9700stack-mtp3",
     "status": "production-ready",
-    "recipe": "vllm_qwen38flash_pr53896",
-    "description": "Qwen3.8 Flash-Next UNCENSORED compressed-tensors MXFP4/FP8 on four gfx1201 R9700 GPUs with TP4/EP4, CPU-resident FP8 PLE, BF16 KV cache, and MTP2",
+    "recipe": "vllm_qwen38r9700stack_v0.2",
+    "description": "Qwen3.8 Flash-Next MXFP4/FP8 on four gfx1201 R9700 GPUs with the native r9700-stack TP4 MoE path, host-resident int6 PLE, and MTP3",
     "required_model_family": "qwen4_exp",
-    "required_patches": [
-      "0010",
-      "0011",
-      "0012",
-      "0013",
-      "0014",
-      "0015",
-      "0016"
-    ],
+    "required_patches": [],
     "gpu_order": [0, 1, 2, 3],
     "gpu_bdfs": [
       "0000:e3:00.0",
-      "0000:c3:00.0",
-      "0000:c6:00.0",
-      "0000:03:00.0"
+      "0000:e6:00.0",
+      "0000:e9:00.0",
+      "0000:ec:00.0"
     ],
     "parallel": {
       "tensor": 4,
       "pipeline": 1,
       "data": 1,
-      "enable_expert_parallel": true,
+      "enable_expert_parallel": false,
       "disable_custom_all_reduce": true
     },
     "limits": {
       "max_model_len": 262144,
-      "max_num_seqs": 1,
-      "max_num_batched_tokens": 2048,
-      "gpu_memory_utilization": 0.95
+      "max_num_seqs": 16,
+      "max_num_batched_tokens": 4096,
+      "gpu_memory_utilization": 0.94
     },
     "cache": {
       "dtype": "auto",
       "block_size": 16,
       "prefix_cache": true,
-      "cpu_offload_gb": 0,
-      "prefix_cache_retention_interval": 800
+      "cpu_offload_gb": 34,
+      "cpu_offload_params": ["experts"],
+      "prefix_cache_retention_interval": 832
     },
     "scheduler": {
-      "async": false,
-      "enforce_eager": true
+      "async": true,
+      "enforce_eager": false
     },
     "multimodal": {"language_model_only": true},
     "loading": {"format": "safetensors", "max_parallel_workers": 1},
@@ -119,20 +109,19 @@
       "worker_timeout_seconds": 60,
       "process_grace_seconds": 120
     },
-    "moe_backend": "triton",
-    "linear_backend": "emulation",
-    "speculative_config": {"method": "mtp", "num_speculative_tokens": 2},
+    "speculative_config": {"method": "mtp", "num_speculative_tokens": 3},
     "environment": {
+      "VLLM_TARGET_DEVICE": "rocm",
       "VLLM_USE_V2_MODEL_RUNNER": "1",
       "VLLM_ROCM_USE_AITER": "0",
-      "VLLM_DSPARK_PP_EXPERIMENTAL": "0",
-      "VLLM_DSPARK_PREFILL_CACHE_ONLY": "0",
-      "VLLM_DSPARK_PREFILL_LATE_MATERIALIZE": "0",
-      "VLLM_DSPARK_PREFILL_SKIP_PP_BROADCAST": "0",
       "VLLM_DISABLE_PYNCCL": "1",
-      "VLLM_ROCM_USE_AITER_MOE": "0",
-      "VLLM_KV_CACHE_LAYOUT": "BLHNC",
-      "VLLM_PLE_CPU_OFFLOAD": "1",
+      "R9K_FOLD": "1",
+      "R9K_AR_QUANT": "1",
+      "R9K_EXPERT_CACHE_SLOTS": "270",
+      "R9K_TARGET_LMHEAD": "fp8",
+      "R9K_DRAFT_LMHEAD": "fp8",
+      "GPU_MAX_HW_QUEUES": "1",
+      "HSA_ENABLE_MWAITX": "1",
       "SAFETENSORS_FAST_GPU": "1",
       "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
       "ROCBLAS_USE_HIPBLASLT": "0"
@@ -145,17 +134,17 @@
   },
   "components": {
     "primary": {
-      "compatible_profile": "qwen38-flash-uncensored",
-      "profile_sha256": "0722bb7fa5d9b9ec48bc5f613a42bfb8d573f0a99cacf3bc47910a95f809f51b"
+      "compatible_profile": "qwen38-flash",
+      "profile_sha256": "08407a6c24980ec4bfb949fd9ed6a10c4193b43f7a55a6b27e99e069f46d851d"
     },
     "worker_pool": {
       "profile": "qwen38-4x27b",
-      "profile_sha256": "f5f003ca5543e08991eba245eb98c1cf3e8bb5f93f6fdf9810b4bbf572eefd20",
+      "profile_sha256": "34f8a32b5c2cbb7c07ff4335e1039ef4f84da5f4941643917cc7dd53541f3591",
       "url": "http://127.0.0.1:8100"
     }
   },
   "stack": {
-    "description": "Combined production Qwen primary and four single-R9700 coding workers using W4A16 DFlash2 K4 with FP8 KV",
+    "description": "Flash-Next TP4 lead plus two Qwen3.8-27B TP2 coding workers using W4A16 DFlash2 K4 with FP8 KV",
     "litellm_aliases": [
       "qwen3.8-flash-next-thinking",
       "qwen3.8-flash-next-fast",
@@ -189,9 +178,9 @@
     },
     "claude_agents": {
       "qwen-team-lead": {
-        "description": "Primary Qwen Flash-Next architect, core implementer, and integrator for a five-agent coding workflow.",
+        "description": "Primary Qwen Flash-Next architect, core implementer, and integrator for a three-agent coding workflow.",
         "model": "qwen3.8-flash-next-thinking",
-        "prompt": "You are the primary Qwen Flash-Next team lead, architect, core implementer, and final integrator. You are not a passive dispatcher. For substantial tasks, analyze the full request, define interfaces and file ownership, keep the cross-cutting or highest-risk implementation work for yourself, and spawn exactly four teammates using qwen-worker-explorer, qwen-worker-implementer-a, qwen-worker-implementer-b, and qwen-worker-verifier. Give every teammate a stable unique name and a bounded task, and prevent overlapping edits. Launch all four Agent tasks in the background by setting run_in_background to true on every call; issue all four launches before waiting for any result. Never serialize independent worker launches. Continue useful implementation while teammates work. Wait for all four results, inspect their actual changes and test evidence, integrate or correct them, run the repository's final validation, and only then report completion. The sole exception is an explicit headless launch-only qualification: after all four background starts are accepted, return its requested launch marker without waiting. For a tiny task that cannot usefully be split, explain briefly why parallel execution would add no value before proceeding yourself. Preserve existing user changes and repository rules. Never let a teammate claim user approval or broaden the requested scope."
+        "prompt": "You are the primary Qwen Flash-Next team lead, architect, core implementer, and final integrator. You are not a passive dispatcher. For substantial tasks, analyze the full request, define interfaces and file ownership, keep the cross-cutting or highest-risk implementation work for yourself, and spawn two bounded teammates using qwen-worker-implementer-a and qwen-worker-verifier. Launch both Agent tasks in the background before waiting, continue useful implementation while they work, inspect their actual changes and evidence, integrate or correct them, and run final validation. For a tiny task that cannot usefully be split, explain briefly why parallel execution would add no value. Preserve existing user changes and repository rules."
       },
       "qwen-worker-explorer": {
         "description": "Read-only Qwen 27B worker for repository discovery, dependency tracing, and implementation evidence.",

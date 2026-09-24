@@ -2,7 +2,7 @@
   "schema_version": 1,
   "name": "qwen38-4x27b",
   "status": "production-ready",
-  "description": "Four local TP1 Qwen3.8-27B Quark AWQ INT4 worker replicas on the secondary R9700 GPU pool",
+  "description": "Two local TP2 Qwen3.8-27B Quark AWQ INT4 worker replicas on the secondary four-card R9700 pool",
   "model": {
     "schema_version": 1,
     "name": "qwen38-27b-quark-awq-int4-w4a16",
@@ -86,11 +86,11 @@
   },
   "runtime": {
     "schema_version": 1,
-    "name": "qwen38-27b-quark-awq-int4-4xr9700-dp4-tp1-dflash2-k4",
+    "name": "qwen38-27b-quark-awq-int4-4xr9700-dp2-tp2-dflash2-k4",
     "status": "production-ready",
     "role": "worker-pool",
     "recipe": "vllm_qwen38flash_pr53896",
-    "description": "Four local Qwen3.8-27B W4A16 replicas with the gfx1201 hybrid INT4 kernel, FP8 KV, native prefix cache, and W4A16 DFlash2 K4",
+    "description": "Two TP2 Qwen3.8-27B W4A16 replicas with the gfx1201 hybrid INT4 kernel, FP8 KV, native prefix cache, and W4A16 DFlash2 K4",
     "required_model_family": "qwen3_5",
     "required_patches": [
       "0008",
@@ -99,21 +99,21 @@
       "0018"
     ],
     "gpu_order": [
-      1,
-      2,
-      3,
-      7
+      7,
+      4,
+      5,
+      6
     ],
     "gpu_bdfs": [
-      "0000:07:00.0",
-      "0000:0a:00.0",
-      "0000:23:00.0",
-      "0000:e6:00.0"
+      "0000:c3:00.0",
+      "0000:c6:00.0",
+      "0000:c9:00.0",
+      "0000:cc:00.0"
     ],
     "parallel": {
-      "tensor": 1,
+      "tensor": 2,
       "pipeline": 1,
-      "data": 4,
+      "data": 2,
       "enable_expert_parallel": false,
       "disable_custom_all_reduce": true
     },
@@ -158,7 +158,7 @@
       "model_artifact": "qwen38-27b-dflash2-w4a16",
       "method": "dflash",
       "num_speculative_tokens": 4,
-      "draft_tensor_parallel_size": 1,
+      "draft_tensor_parallel_size": 2,
       "attention_backend": "TRITON_ATTN",
       "draft_sample_method": "probabilistic",
       "kv_cache_dtype": "fp8",
@@ -176,11 +176,11 @@
     "hardware_topology": {
       "captured_on": "2026-09-11",
       "motherboard": "ASUS Pro WS WRX90E-SAGE SE",
-      "note": "Secondary pool only: physical cards 1,2,3,7 / BDFs 07:00.0,0a:00.0,23:00.0,e6:00.0; disjoint from the primary TP4 allocation."
+      "note": "Secondary pool only: physical cards 7,4,5,6 / BDFs c3:00.0,c6:00.0,c9:00.0,cc:00.0; two adjacent TP2 replicas disjoint from the primary TP4 allocation."
     }
   },
   "stack": {
-    "description": "Qwen3.8-27B DP4 worker pool with thinking, low-effort, and fast LiteLLM routes",
+    "description": "Qwen3.8-27B DP2/TP2 worker pool with thinking, low-effort, and fast LiteLLM routes",
     "litellm_aliases": [
       "qwen3.8-27b-workers-thinking",
       "qwen3.8-27b-workers-low",

@@ -34,13 +34,9 @@ def _profile(name: str) -> dict[str, Any]:
         raise ConfigurationError(
             f"profile {name} is not marked as a worker-pool deployment"
         )
-    if (
-        parallel["tensor"] != 1
-        or parallel["pipeline"] != 1
-        or parallel.get("data", 1) < 2
-    ):
+    if parallel["pipeline"] != 1 or parallel.get("data", 1) < 2:
         raise ConfigurationError(
-            "worker-pool requires TP1, PP1 and at least two local DP replicas"
+            "worker-pool requires PP1 and at least two local DP replicas"
         )
     return profile
 

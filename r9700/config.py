@@ -523,12 +523,10 @@ def validate_runtime(profile: dict[str, Any]) -> None:
         raise ConfigurationError("parallel.enable_expert_parallel must be boolean")
     world_size = parallel["tensor"] * parallel["pipeline"] * parallel.get("data", 1)
     if role == "worker-pool" and (
-        parallel["tensor"] != 1
-        or parallel["pipeline"] != 1
-        or parallel.get("data", 1) < 2
+        parallel["pipeline"] != 1 or parallel.get("data", 1) < 2
     ):
         raise ConfigurationError(
-            "worker-pool runtime requires TP1, PP1 and data parallel size >= 2"
+            "worker-pool runtime requires PP1 and data parallel size >= 2"
         )
     gpu_order = profile.get("gpu_order")
     if not isinstance(gpu_order, list) or len(gpu_order) < world_size:
@@ -538,8 +536,18 @@ def validate_runtime(profile: dict[str, Any]) -> None:
     if len(set(gpu_order)) != len(gpu_order):
         raise ConfigurationError("gpu_order contains duplicate devices")
     cache = profile["cache"]
-    if cache.get("cpu_offload_gb", 0) != 0 or "weight_offload" in profile:
-        raise ConfigurationError("production profiles cannot use CPU offload")
+    cpu_offload_gb = cache.get("cpu_offload_gb", 0)
+    cpu_offload_params = cache.get("cpu_offload_params", [])
+    if not isinstance(cpu_offload_gb, (int, float)) or cpu_offload_gb < 0:
+        raise ConfigurationError("cache.cpu_offload_gb must be non-negative")
+    if not isinstance(cpu_offload_params, list) or not all(
+        isinstance(value, str) and value for value in cpu_offload_params
+    ):
+        raise ConfigurationError("cache.cpu_offload_params must be a list of names")
+    if cpu_offload_params and not cpu_offload_gb:
+        raise ConfigurationError("cache.cpu_offload_params requires cpu_offload_gb")
+    if "weight_offload" in profile:
+        raise ConfigurationError("legacy weight_offload is not supported")
     hash_algorithm = cache.get("prefix_caching_hash_algo")
     if hash_algorithm is not None:
         supported_hash_algorithms = {

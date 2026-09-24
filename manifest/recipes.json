@@ -14,6 +14,12 @@
       "install_path": ".runtime/recipes/vllm_qwen38flash_pr53896/install.json",
       "smoke_profile": "qwen38-flash"
     },
+    "vllm_qwen38r9700stack_v0.2": {
+      "backend": "vllm",
+      "path": "manifest/vllm_qwen38r9700stack_v0.2.json",
+      "install_path": ".runtime/recipes/vllm_qwen38r9700stack_v0.2/install.json",
+      "smoke_profile": "qwen38-r9700-stack-4x"
+    },
     "vllm_glm53flashrocm10_v0.29": {
       "backend": "vllm",
       "path": "manifest/vllm_glm53flashrocm10_v0.29.json",
