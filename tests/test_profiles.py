@@ -655,11 +655,21 @@ class ProductionProfileTests(unittest.TestCase):
                 expected = json.loads(
                     json.dumps(profile["stack"]["claude_settings"])
                 )
+                configured_context = int(
+                    expected["env"].get(
+                        "CLAUDE_CODE_MAX_CONTEXT_TOKENS", context_tokens
+                    )
+                )
                 expected["env"]["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = str(
-                    context_tokens
+                    min(configured_context, context_tokens)
+                )
+                configured_compact = int(
+                    expected["env"].get(
+                        "CLAUDE_CODE_AUTO_COMPACT_WINDOW", context_tokens
+                    )
                 )
                 expected["env"]["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = str(
-                    min(context_tokens, 1_000_000)
+                    min(configured_compact, context_tokens, 1_000_000)
                 )
                 expected["env"]["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"] = (
                     profile["stack"]["claude_settings"]["env"].get(
