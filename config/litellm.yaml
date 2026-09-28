@@ -1,4 +1,14 @@
 model_list:
+  - model_name: mimo-v2.6-flash
+    litellm_params:
+      model: os.environ/HOSTED_INFERENCE_OPENAI_MODEL
+      api_base: os.environ/HOSTED_INFERENCE_API_BASE
+      api_key: os.environ/HOSTED_INFERENCE_API_KEY
+    model_info:
+      max_input_tokens: 1048576
+      supports_reasoning: true
+      supports_vision: true
+
   - model_name: deepseek-v4-flash-thinking
     litellm_params:
       model: hosted_vllm/deepseek-v4-flash-0731

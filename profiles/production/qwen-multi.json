@@ -135,11 +135,11 @@
   "components": {
     "primary": {
       "compatible_profile": "qwen38-flash",
-      "profile_sha256": "08407a6c24980ec4bfb949fd9ed6a10c4193b43f7a55a6b27e99e069f46d851d"
+      "profile_sha256": "ee3b2a946d63cca8c8ffd964be14890472ce11cab6dcc00abfc8bd3a3821e7a1"
     },
     "worker_pool": {
       "profile": "qwen38-4x27b",
-      "profile_sha256": "34f8a32b5c2cbb7c07ff4335e1039ef4f84da5f4941643917cc7dd53541f3591",
+      "profile_sha256": "3d52bb50d73bd51414429117421e17069bc3738a52585f0a1faf5b2dfecdeacc",
       "url": "http://127.0.0.1:8100"
     }
   },
@@ -169,7 +169,8 @@
         "DISABLE_PROMPT_CACHING": "0",
         "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
         "CLAUDE_CODE_TODO_REMINDER_MODE": "off",
-        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "CLAUDE_CODE_AUTO_MODE_SERVER": "0",
         "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
         "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "261120",
         "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "248000",

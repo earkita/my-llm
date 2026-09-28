@@ -9,7 +9,8 @@
 ./run install --profile deepseek-v4-flash
 ```
 
-Analogicznie użyj `glm53-flash`, `glm53-flash-new` albo `qwen38-flash`.
+Analogicznie użyj `glm53-flash`, `glm53-flash-new`, `mimo-v26-flash` albo
+`qwen38-flash`.
 Dry-run sprawdza hashe constraints i patchy bez pobierania źródeł.
 
 Przed instalacją proxy ustaw niepusty, losowy `LITELLM_MASTER_KEY` w lokalnym

@@ -47,6 +47,7 @@ REQUIRED_PROFILE_NAMES = {
     "glm53-flash",
     "glm53-flash-new",
     "glm53-flash-uncensored",
+    "mimo-v26-flash",
     "qwen38-flash",
     "qwen38-flash-uncensored",
     "qwen38-4x27b",
@@ -74,6 +75,74 @@ GLM53_UPSTREAM_MINIMAL = str(
 
 
 class ProductionProfileTests(unittest.TestCase):
+    def test_mimo_v26_baseline_is_tp8_eager_and_uses_native_r9700_moe(self) -> None:
+        profile = load_profile("mimo-v26-flash")
+        model = profile["model"]
+        runtime = profile["runtime"]
+
+        self.assertEqual(model["served_name"], "mimo-v2.6-flash")
+        self.assertEqual(model["expected_shards"], 65)
+        self.assertEqual(model["checkpoint_weight_bytes"], 172923364096)
+        self.assertTrue(model["supports_mtp"])
+        self.assertTrue(model["supports_dflash"])
+        self.assertNotIn("quantization", model["vllm"])
+        self.assertEqual(model["vllm"]["tool_call_parser"], "mimo")
+        self.assertEqual(model["vllm"]["reasoning_parser"], "mimo")
+        self.assertEqual(runtime["recipe"], "vllm_mimov26r9700_v0.1")
+        self.assertEqual(runtime["parallel"]["tensor"], 8)
+        self.assertTrue(runtime["parallel"]["disable_custom_all_reduce"])
+        self.assertFalse(runtime["parallel"]["enable_expert_parallel"])
+        self.assertEqual(runtime["limits"]["max_model_len"], 1048576)
+        self.assertEqual(runtime["limits"]["max_num_batched_tokens"], 8192)
+        self.assertEqual(runtime["limits"]["max_num_seqs"], 1)
+        self.assertEqual(runtime["cache"]["dtype"], "auto")
+        self.assertFalse(runtime["cache"]["prefix_cache"])
+        self.assertTrue(runtime["scheduler"]["enforce_eager"])
+        self.assertFalse(runtime["scheduler"]["async"])
+        self.assertEqual(runtime["attention_backend"], "TRITON_ATTN_DIFFKV")
+        self.assertEqual(runtime["environment"]["R9K_FOLD"], "0")
+        self.assertFalse(model["vllm"]["language_model_only"])
+        self.assertFalse(runtime["multimodal"]["language_model_only"])
+        self.assertEqual(
+            runtime["multimodal"]["encoder_attention_backend"], "TRITON_ATTN"
+        )
+        self.assertEqual(runtime["multimodal"]["encoder_tp_mode"], "weights")
+        self.assertEqual(
+            runtime["multimodal"]["limit_per_prompt"],
+            {"image": 8, "video": 0, "audio": 0},
+        )
+
+        command = build_command(
+            model, runtime, Path("/models/mimo-v26"), "127.0.0.1", 8000
+        )
+        for option, value in (
+            ("--tensor-parallel-size", "8"),
+            ("--max-model-len", "1048576"),
+            ("--max-num-seqs", "1"),
+            ("--kv-cache-dtype", "auto"),
+            ("--attention-backend", "TRITON_ATTN_DIFFKV"),
+            ("--reasoning-parser", "mimo"),
+            ("--tool-call-parser", "mimo"),
+        ):
+            self.assertEqual(command[command.index(option) + 1], value)
+        self.assertIn("--disable-custom-all-reduce", command)
+        self.assertIn("--enforce-eager", command)
+        self.assertIn("--no-async-scheduling", command)
+        self.assertIn("--no-enable-prefix-caching", command)
+        self.assertNotIn("--language-model-only", command)
+        self.assertEqual(
+            command[command.index("--limit-mm-per-prompt") + 1],
+            '{"image":8,"video":0,"audio":0}',
+        )
+        self.assertEqual(
+            command[command.index("--mm-encoder-attn-backend") + 1],
+            "TRITON_ATTN",
+        )
+        self.assertEqual(
+            command[command.index("--mm-encoder-tp-mode") + 1], "weights"
+        )
+        self.assertNotIn("--speculative-config", command)
+
     def test_directory_qualified_profile_name_resolves_below_profiles(self) -> None:
         profile = load_profile("dev/glm53-flash-rocm10-gluon")
 
@@ -441,6 +510,7 @@ class ProductionProfileTests(unittest.TestCase):
             "vllm_glm53flashrocm10_v0.31",
             "vllm_glm53flashrocm10_v0.32",
             "vllm_glm53_v0.32",
+            "vllm_mimov26r9700_v0.1",
             "vllm_qwen38flash_pr53896",
             "vllm_qwen38r9700stack_v0.2",
         }
@@ -1854,6 +1924,9 @@ class ProductionProfileTests(unittest.TestCase):
                 self.assertEqual(
                     settings["env"]["CLAUDE_CODE_TODO_REMINDER_MODE"], "off"
                 )
+                self.assertEqual(
+                    settings["env"]["CLAUDE_CODE_AUTO_MODE_SERVER"], "0"
+                )
                 self.assertNotIn(
                     "CLAUDE_CODE_TOTAL_TOKENS_REMINDER", settings["env"]
                 )
@@ -1867,6 +1940,9 @@ class ProductionProfileTests(unittest.TestCase):
                 self.assertEqual(settings["totalTokensReminder"], "off")
                 self.assertEqual(
                     settings["env"]["CLAUDE_CODE_TODO_REMINDER_MODE"], "off"
+                )
+                self.assertEqual(
+                    settings["env"]["CLAUDE_CODE_AUTO_MODE_SERVER"], "0"
                 )
                 self.assertNotIn(
                     "CLAUDE_CODE_TOTAL_TOKENS_REMINDER", settings["env"]

@@ -1,17 +1,18 @@
 {
   "apiKeyHelper": "bash -c 'exec \"${MY_LLM_REPO_ROOT:-$HOME/ai/my-llm}/scripts/claude-litellm-key.sh\"'",
   "totalTokensReminder": "off",
+  "effortLevel": "high",
   "permissions": {
     "defaultMode": "acceptEdits"
   },
   "env": {
     "ANTHROPIC_BASE_URL": "http://127.0.0.1:4000",
-    "ANTHROPIC_MODEL": "deepseek-v4-flash-thinking",
-    "ANTHROPIC_SMALL_FAST_MODEL": "deepseek-v4-flash-thinking",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-v4-flash-thinking",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-v4-flash-thinking",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4-flash-thinking",
-    "ANTHROPIC_DEFAULT_FABLE_MODEL": "deepseek-v4-flash-thinking",
+    "ANTHROPIC_MODEL": "mimo-v2.6-flash",
+    "ANTHROPIC_SMALL_FAST_MODEL": "mimo-v2.6-flash",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "mimo-v2.6-flash",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "mimo-v2.6-flash",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "mimo-v2.6-flash",
+    "ANTHROPIC_DEFAULT_FABLE_MODEL": "mimo-v2.6-flash",
     "DISABLE_PROMPT_CACHING": "1",
     "CLAUDE_CODE_TODO_REMINDER_MODE": "off",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
@@ -19,6 +20,6 @@
     "CLAUDE_CODE_ATTRIBUTION_HEADER": "0",
     "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "1048576",
     "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000",
-    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "90"
+    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "70"
   }
 }

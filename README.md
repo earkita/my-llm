@@ -18,6 +18,7 @@ zapisanego w manifeście; zmiana źródła receptury wymaga ponownej instalacji.
 | `glm53-flash` | vLLM `main` `7fbd44c`, ROCm 10 | 8 | TP8/no-EP | 786,432 | packed MXFP4 GEMV + DFlash2 K4, FP8 KV |
 | `glm53-flash-new` | vLLM `main` `7fbd44c`, ROCm 10 | 8 | TP8/no-EP | 262,144 | W4A16 + DFlash2 K4, FP8 KV, HIP graphs |
 | `glm53-flash-uncensored` | vLLM `main` `7fbd44c`, ROCm 10 | 8 | TP8/no-EP | 786,432 | packed MXFP4 GEMV + DFlash2 K4, FP8 KV |
+| `mimo-v26-flash` | vLLM `main` `dee37d8` + r9700-stack, ROCm 10 | 8 | TP8/no-EP | 1,048,576 | Triton DiffKV, BF16 KV, eager, vision |
 | `qwen38-flash` | vLLM 0.28 | 4 | TP4/EP4 | 262,144 | MTP K2, FP8 KV |
 | `qwen38-flash-uncensored` | vLLM 0.28 | 4 | TP4/EP4 | 262,144 | MTP K2, BF16 KV |
 | `qwen38-4x27b` | vLLM 0.28 | 4 | DP4/TP1 | 131,072 | Quark W4A16 + DFlash2 K4, FP8 KV |
