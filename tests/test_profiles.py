@@ -75,7 +75,7 @@ GLM53_UPSTREAM_MINIMAL = str(
 
 
 class ProductionProfileTests(unittest.TestCase):
-    def test_mimo_v26_baseline_is_tp8_eager_and_uses_native_r9700_moe(self) -> None:
+    def test_mimo_v26_uses_diffkv_dflash_and_native_r9700_moe(self) -> None:
         profile = load_profile("mimo-v26-flash")
         model = profile["model"]
         runtime = profile["runtime"]
@@ -94,13 +94,26 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertFalse(runtime["parallel"]["enable_expert_parallel"])
         self.assertEqual(runtime["limits"]["max_model_len"], 1048576)
         self.assertEqual(runtime["limits"]["max_num_batched_tokens"], 8192)
-        self.assertEqual(runtime["limits"]["max_num_seqs"], 1)
+        self.assertEqual(runtime["limits"]["max_num_seqs"], 2)
         self.assertEqual(runtime["cache"]["dtype"], "auto")
-        self.assertFalse(runtime["cache"]["prefix_cache"])
+        self.assertTrue(runtime["cache"]["prefix_cache"])
+        self.assertEqual(
+            runtime["cache"]["prefix_cache_retention_interval"], 1280
+        )
         self.assertTrue(runtime["scheduler"]["enforce_eager"])
         self.assertFalse(runtime["scheduler"]["async"])
         self.assertEqual(runtime["attention_backend"], "TRITON_ATTN_DIFFKV")
+        self.assertIn("0004", runtime["required_patches"])
         self.assertEqual(runtime["environment"]["R9K_FOLD"], "0")
+        self.assertEqual(
+            runtime["environment"]["VLLM_DIFFKV_PREFILL_BLOCK_M"], "64"
+        )
+        speculative = runtime["speculative_config"]
+        self.assertEqual(speculative["method"], "dflash")
+        self.assertEqual(speculative["model_artifact"], "dflash-drafter")
+        self.assertEqual(speculative["num_speculative_tokens"], 7)
+        self.assertEqual(speculative["draft_tensor_parallel_size"], 8)
+        self.assertEqual(speculative["kv_cache_dtype"], "auto")
         self.assertFalse(model["vllm"]["language_model_only"])
         self.assertFalse(runtime["multimodal"]["language_model_only"])
         self.assertEqual(
@@ -118,7 +131,7 @@ class ProductionProfileTests(unittest.TestCase):
         for option, value in (
             ("--tensor-parallel-size", "8"),
             ("--max-model-len", "1048576"),
-            ("--max-num-seqs", "1"),
+            ("--max-num-seqs", "2"),
             ("--kv-cache-dtype", "auto"),
             ("--attention-backend", "TRITON_ATTN_DIFFKV"),
             ("--reasoning-parser", "mimo"),
@@ -128,7 +141,11 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertIn("--disable-custom-all-reduce", command)
         self.assertIn("--enforce-eager", command)
         self.assertIn("--no-async-scheduling", command)
-        self.assertIn("--no-enable-prefix-caching", command)
+        self.assertIn("--enable-prefix-caching", command)
+        self.assertEqual(
+            command[command.index("--prefix-cache-retention-interval") + 1],
+            "1280",
+        )
         self.assertNotIn("--language-model-only", command)
         self.assertEqual(
             command[command.index("--limit-mm-per-prompt") + 1],
@@ -141,7 +158,33 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(
             command[command.index("--mm-encoder-tp-mode") + 1], "weights"
         )
-        self.assertNotIn("--speculative-config", command)
+        speculative_value = json.loads(
+            command[command.index("--speculative-config") + 1]
+        )
+        self.assertEqual(speculative_value["method"], "dflash")
+        self.assertEqual(speculative_value["num_speculative_tokens"], 7)
+        self.assertEqual(
+            speculative_value["model"],
+            "/home/ea/models/mimo/MiMo-V2.6-Flash-RL/dflash",
+        )
+
+    def test_mimo_v26_rollback_profile_disables_measured_optimizations(self) -> None:
+        profile = load_profile("dev/mimo-v26-flash-baseline")
+        runtime = profile["runtime"]
+
+        self.assertEqual(profile["status"], "development")
+        self.assertEqual(runtime["status"], "diagnostic-only")
+        self.assertEqual(runtime["limits"]["max_num_seqs"], 1)
+        self.assertEqual(runtime["limits"]["gpu_memory_utilization"], 0.92)
+        self.assertFalse(runtime["cache"]["prefix_cache"])
+        self.assertNotIn("speculative_config", runtime)
+        self.assertEqual(
+            runtime["environment"]["VLLM_DIFFKV_FULL_ATTN_SEGMENTS"], "16"
+        )
+        self.assertEqual(
+            runtime["environment"]["VLLM_DIFFKV_PREFILL_BLOCK_M"], "16"
+        )
+        self.assertIn("0004", runtime["required_patches"])
 
     def test_directory_qualified_profile_name_resolves_below_profiles(self) -> None:
         profile = load_profile("dev/glm53-flash-rocm10-gluon")

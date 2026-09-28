@@ -1,0 +1,469 @@
+diff --git a/vllm/model_executor/models/mimo_v2_omni.py b/vllm/model_executor/models/mimo_v2_omni.py
+index d74edd6..bda5529 100644
+--- a/vllm/model_executor/models/mimo_v2_omni.py
++++ b/vllm/model_executor/models/mimo_v2_omni.py
+@@ -56,6 +56,7 @@ from vllm.transformers_utils.processors.mimo_v2_omni import (
+ 
+ from .interfaces import (
+     MultiModalEmbeddings,
++    SupportsEagle3,
+     SupportsMultiModal,
+     SupportsPP,
+     SupportsQuant,
+@@ -1220,7 +1221,9 @@ class MiMoV2OmniDummyInputsBuilder(BaseDummyInputsBuilder[MiMoV2OmniProcessingIn
+     info=MiMoV2OmniProcessingInfo,
+     dummy_inputs=MiMoV2OmniDummyInputsBuilder,
+ )
+-class MiMoV2OmniForCausalLM(nn.Module, SupportsMultiModal, SupportsPP, SupportsQuant):
++class MiMoV2OmniForCausalLM(
++    nn.Module, SupportsMultiModal, SupportsPP, SupportsQuant, SupportsEagle3
++):
+     # To ensure correct weight loading and mapping.
+     hf_to_vllm_mapper = WeightsMapper(
+         orig_to_new_prefix={
+diff --git a/vllm/v1/attention/backends/triton_attn_diffkv.py b/vllm/v1/attention/backends/triton_attn_diffkv.py
+index ddbd066..c7ce598 100644
+--- a/vllm/v1/attention/backends/triton_attn_diffkv.py
++++ b/vllm/v1/attention/backends/triton_attn_diffkv.py
+@@ -7,6 +7,8 @@ are packed along the last dim in the logical shape
+ ``[num_blocks, num_kv_heads, block_size, head_size_qk + head_size_v]``.
+ """
+ 
++import os
++from dataclasses import dataclass, replace
+ from typing import ClassVar
+ 
+ import torch
+@@ -16,13 +18,19 @@ from vllm.config.cache import CacheDType
+ from vllm.logger import init_logger
+ from vllm.utils.math_utils import next_power_of_2
+ from vllm.utils.torch_utils import is_quantized_kv_cache
+-from vllm.v1.attention.backend import AttentionLayer, AttentionType
++from vllm.v1.attention.backend import (
++    AttentionCGSupport,
++    AttentionLayer,
++    AttentionType,
++    CommonAttentionMetadata,
++)
+ from vllm.v1.attention.backends.triton_attn import (
+     TritonAttentionBackend,
+     TritonAttentionImpl,
+     TritonAttentionMetadata,
+     TritonAttentionMetadataBuilder,
+ )
++from vllm.v1.attention.backends.utils import split_decodes_and_prefills
+ from vllm.v1.attention.ops.triton_reshape_and_cache_flash import (
+     triton_reshape_and_cache_flash_diffkv,
+ )
+@@ -34,6 +42,13 @@ from vllm.v1.kv_cache_interface import AttentionSpec
+ logger = init_logger(__name__)
+ 
+ 
++@dataclass
++class TritonAttentionDiffKVMetadata(TritonAttentionMetadata):
++    """DiffKV metadata with optional decode/prefill partitions."""
++
++    partitions: tuple[TritonAttentionMetadata, ...] = ()
++
++
+ class TritonAttentionDiffKVMetadataBuilder(TritonAttentionMetadataBuilder):
+     """Override the parent's softmax buffer last-dim to head_size_v.
+ 
+@@ -43,6 +58,11 @@ class TritonAttentionDiffKVMetadataBuilder(TritonAttentionMetadataBuilder):
+     re-allocate with ``next_power_of_2(head_size_v)`` instead.
+     """
+ 
++    _cudagraph_support: ClassVar[AttentionCGSupport] = (
++        AttentionCGSupport.UNIFORM_BATCH
++    )
++    supports_varlen_decode_cudagraph: ClassVar[bool] = True
++
+     def __init__(
+         self,
+         kv_cache_spec: AttentionSpec,
+@@ -51,6 +71,28 @@ class TritonAttentionDiffKVMetadataBuilder(TritonAttentionMetadataBuilder):
+         device: torch.device,
+     ):
+         super().__init__(kv_cache_spec, layer_names, vllm_config, device)
++        self._init_reorder_batch_threshold(1, supports_spec_as_decode=True)
++
++        # Global attention benefits from additional KV splits for long-context
++        # decode and multi-token DFlash verification. SWA remains loop-bounded.
++        full_attn_segments = int(
++            os.environ.get("VLLM_DIFFKV_FULL_ATTN_SEGMENTS", "64")
++        )
++        if (
++            getattr(kv_cache_spec, "sliding_window", None) is None
++            and full_attn_segments > self.num_par_softmax_segments
++        ):
++            self.num_par_softmax_segments = full_attn_segments
++            self.softmax_segm_max = torch.empty(
++                (self.seq_threshold_3D, self.num_heads_q, full_attn_segments),
++                dtype=torch.float32,
++                device=device,
++            )
++            self.softmax_segm_expsum = torch.empty(
++                (self.seq_threshold_3D, self.num_heads_q, full_attn_segments),
++                dtype=torch.float32,
++                device=device,
++            )
+ 
+         head_size_v = TritonAttentionDiffKVBackend.head_size_v
+         head_size_v_padded = next_power_of_2(head_size_v)
+@@ -65,15 +107,70 @@ class TritonAttentionDiffKVMetadataBuilder(TritonAttentionMetadataBuilder):
+             device=device,
+         )
+ 
++    def build(
++        self,
++        common_prefix_len: int,
++        common_attn_metadata: CommonAttentionMetadata,
++        fast_build: bool = False,
++    ) -> TritonAttentionDiffKVMetadata:
++        base = super().build(common_prefix_len, common_attn_metadata, fast_build)
++        metadata = TritonAttentionDiffKVMetadata(**vars(base))
++        capacity = min(
++            self.seq_threshold_3D,
++            self.softmax_segm_output.shape[0],
++            self.softmax_segm_max.shape[0],
++            self.softmax_segm_expsum.shape[0],
++        )
++        assert self.reorder_batch_threshold is not None
++        if (
++            base.num_actual_tokens <= capacity
++            or base.max_query_len <= self.reorder_batch_threshold
++        ):
++            return metadata
++        num_decodes, _, num_decode_tokens, num_prefill_tokens = (
++            split_decodes_and_prefills(
++                common_attn_metadata,
++                decode_threshold=self.reorder_batch_threshold,
++            )
++        )
++        if not (0 < num_decode_tokens <= capacity and num_prefill_tokens > 0):
++            return metadata
++        decode = replace(
++            base,
++            num_actual_tokens=num_decode_tokens,
++            max_query_len=int(
++                (
++                    common_attn_metadata.query_start_loc_cpu[1 : num_decodes + 1]
++                    - common_attn_metadata.query_start_loc_cpu[:num_decodes]
++                ).max()
++            ),
++            query_start_loc=base.query_start_loc[: num_decodes + 1],
++            seq_lens=base.seq_lens[:num_decodes],
++            block_table=base.block_table[:num_decodes],
++            slot_mapping=base.slot_mapping[:num_decode_tokens],
++        )
++        prefill = replace(
++            base,
++            num_actual_tokens=num_prefill_tokens,
++            query_start_loc=base.query_start_loc[num_decodes:] - num_decode_tokens,
++            seq_lens=base.seq_lens[num_decodes:],
++            block_table=base.block_table[num_decodes:],
++            slot_mapping=base.slot_mapping[num_decode_tokens:],
++        )
++        metadata.partitions = (decode, prefill)
++        return metadata
++
+ 
+ class TritonAttentionDiffKVBackend(TritonAttentionBackend):
+     # V head dim — set per layer via ``set_head_size_v`` before instantiation.
+     head_size_v: int = 128
+ 
+-    # No FP8 / int8 KV cache for the DiffKV path yet; require fp16/bf16/fp32.
++    # Packed DiffKV supports unquantized cache and per-tensor E4M3 scales.
+     supported_kv_cache_dtypes: ClassVar[list[CacheDType]] = [
+         "auto",
+         "bfloat16",
++        "fp8",
++        "fp8_e4m3",
+     ]
+ 
+     @classmethod
+@@ -110,9 +207,13 @@ class TritonAttentionDiffKVImpl(TritonAttentionImpl):
+ 
+     def __init__(self, *args, **kwargs) -> None:
+         super().__init__(*args, **kwargs)
+-        if is_quantized_kv_cache(self.kv_cache_dtype):
++        self.supports_quant_query_input = False
++        if is_quantized_kv_cache(self.kv_cache_dtype) and self.kv_cache_dtype not in (
++            "fp8",
++            "fp8_e4m3",
++        ):
+             raise NotImplementedError(
+-                "TritonAttentionDiffKVBackend does not yet support quantized "
++                "TritonAttentionDiffKVBackend only supports per-tensor E4M3 "
+                 f"KV cache (got kv_cache_dtype={self.kv_cache_dtype!r})."
+             )
+         if self._is_per_token_head_quant:
+@@ -185,35 +286,43 @@ class TritonAttentionDiffKVImpl(TritonAttentionImpl):
+             "Cascade attention not supported for TritonAttentionDiffKVImpl"
+         )
+ 
+-        num_actual_tokens = attn_metadata.num_actual_tokens
+         head_size_qk = self.head_size
+         head_size_v = TritonAttentionDiffKVBackend.head_size_v
+ 
+         # Triton DiffKV kernels consume (B, N, H, D) cache views.
+         kv_cache = kv_cache.transpose(1, 2)
++        if is_quantized_kv_cache(self.kv_cache_dtype):
++            kv_cache = kv_cache.view(self.fp8_dtype)
+         key_cache = kv_cache[..., :head_size_qk]
+         value_cache = kv_cache[..., head_size_qk : head_size_qk + head_size_v]
+ 
+-        unified_attention_diffkv(
+-            q=query[:num_actual_tokens],
+-            k=key_cache,
+-            v=value_cache,
+-            out=output[:num_actual_tokens],
+-            cu_seqlens_q=attn_metadata.query_start_loc,
+-            seqused_k=attn_metadata.seq_lens,
+-            softmax_scale=self.scale,
+-            causal=True,
+-            alibi_slopes=self.alibi_slopes,
+-            use_alibi_sqrt=self.use_alibi_sqrt,
+-            window_size=self.sliding_window,
+-            block_table=attn_metadata.block_table,
+-            softcap=self.logits_soft_cap,
+-            sinks=self.sinks,
+-            max_seqlen_q=attn_metadata.max_query_len,
+-            seq_threshold_3D=attn_metadata.seq_threshold_3D,
+-            num_par_softmax_segments=attn_metadata.num_par_softmax_segments,
+-            softmax_segm_output=attn_metadata.softmax_segm_output,
+-            softmax_segm_max=attn_metadata.softmax_segm_max,
+-            softmax_segm_expsum=attn_metadata.softmax_segm_expsum,
+-        )
++        partitions = getattr(attn_metadata, "partitions", ()) or (attn_metadata,)
++        token_start = 0
++        for partition in partitions:
++            token_end = token_start + partition.num_actual_tokens
++            unified_attention_diffkv(
++                q=query[token_start:token_end],
++                k=key_cache,
++                v=value_cache,
++                out=output[token_start:token_end],
++                cu_seqlens_q=partition.query_start_loc,
++                seqused_k=partition.seq_lens,
++                softmax_scale=self.scale,
++                k_descale=layer._k_scale,
++                v_descale=layer._v_scale,
++                causal=True,
++                alibi_slopes=self.alibi_slopes,
++                use_alibi_sqrt=self.use_alibi_sqrt,
++                window_size=self.sliding_window,
++                block_table=partition.block_table,
++                softcap=self.logits_soft_cap,
++                sinks=self.sinks,
++                max_seqlen_q=partition.max_query_len,
++                seq_threshold_3D=partition.seq_threshold_3D,
++                num_par_softmax_segments=partition.num_par_softmax_segments,
++                softmax_segm_output=partition.softmax_segm_output,
++                softmax_segm_max=partition.softmax_segm_max,
++                softmax_segm_expsum=partition.softmax_segm_expsum,
++            )
++            token_start = token_end
+         return output
+diff --git a/vllm/v1/attention/ops/triton_unified_attention_diffkv.py b/vllm/v1/attention/ops/triton_unified_attention_diffkv.py
+index eaf62b6..ed527bd 100644
+--- a/vllm/v1/attention/ops/triton_unified_attention_diffkv.py
++++ b/vllm/v1/attention/ops/triton_unified_attention_diffkv.py
+@@ -22,6 +22,7 @@ Both 2D and 3D launches are supported:
+     for decode-only batches whose 2D grid would under-fill the GPU.
+ """
+ 
++import os
+ from typing import Any
+ 
+ import torch
+@@ -46,6 +47,22 @@ logger = init_logger(__name__)
+ 
+ is_batch_invariant = envs.VLLM_BATCH_INVARIANT
+ 
++# Runtime-tunable DiffKV shapes. Defaults preserve the upstream prefill shape
++# while enabling one-program multi-token verify. Production profiles select
++# the gfx1201-qualified prefill values explicitly.
++_SPEC_3D_MAX_Q = int(os.environ.get("VLLM_DIFFKV_SPEC_3D_MAX_Q", "16"))
++_PREFILL_BLOCK_M = int(os.environ.get("VLLM_DIFFKV_PREFILL_BLOCK_M", "16"))
++_PREFILL_NUM_WARPS = int(os.environ.get("VLLM_DIFFKV_PREFILL_NUM_WARPS", "4"))
++_PREFILL_NUM_STAGES = int(os.environ.get("VLLM_DIFFKV_PREFILL_NUM_STAGES", "2"))
++_PREFILL_TILE = int(os.environ.get("VLLM_DIFFKV_PREFILL_TILE", "32"))
++_PREFILL_TILE_FP8_GLOBAL = int(
++    os.environ.get("VLLM_DIFFKV_PREFILL_TILE_FP8_GLOBAL", "32")
++)
++_PREFILL_MIN_Q = int(os.environ.get("VLLM_DIFFKV_PREFILL_MIN_Q", "64"))
++_SPEC_3D_BLOCK_M = int(os.environ.get("VLLM_DIFFKV_SPEC_3D_BLOCK_M", "128"))
++_SPEC_3D_NUM_WARPS = int(os.environ.get("VLLM_DIFFKV_SPEC_3D_NUM_WARPS", "4"))
++_SPEC_3D_TILE = int(os.environ.get("VLLM_DIFFKV_SPEC_3D_TILE", "16"))
++
+ 
+ @triton.jit
+ def kernel_unified_attention_diffkv(
+@@ -61,6 +78,9 @@ def kernel_unified_attention_diffkv(
+     key_cache_ptr,  # view of packed cache: [..., :head_size_qk]
+     value_cache_ptr,  # view of packed cache: [..., head_size_qk:hqk+hv]
+     sink_ptr,
++    k_descale_ptr,
++    v_descale_ptr,
++    FP8_KV_CACHE: tl.constexpr,
+     block_tables_ptr,
+     seq_lens_ptr,
+     alibi_slopes_ptr,
+@@ -154,6 +174,13 @@ def kernel_unified_attention_diffkv(
+         other=0.0,
+     )
+ 
++    if FP8_KV_CACHE:
++        k_descale = tl.load(k_descale_ptr)
++        v_descale = tl.load(v_descale_ptr)
++        # E4M3 converts exactly to fp16. Keeping the tile in fp16 avoids a
++        # wider intermediate and lets gfx1201 lower the dot to native WMMA.
++        Q = Q.to(tl.float16)
++
+     block_table_offset = seq_idx * block_table_stride
+ 
+     M = init_softmax_M(
+@@ -235,7 +262,10 @@ def kernel_unified_attention_diffkv(
+ 
+         # S : (BLOCK_M, TILE_SIZE)
+         S = tl.zeros(shape=(BLOCK_M, TILE_SIZE), dtype=tl.float32)
+-        S += scale * tl.dot(Q, K)
++        if FP8_KV_CACHE:
++            S += (scale * k_descale) * tl.dot(Q, K)
++        else:
++            S += scale * tl.dot(Q, K)
+ 
+         if USE_SOFTCAP:
+             S = apply_softcap(S, softcap)
+@@ -259,7 +289,10 @@ def kernel_unified_attention_diffkv(
+                 V,
+                 0.0,
+             )
+-        acc += tl.dot(P.to(V.dtype), V)
++        if FP8_KV_CACHE:
++            acc += tl.dot(P.to(V.dtype), V) * v_descale
++        else:
++            acc += tl.dot(P.to(V.dtype), V)
+ 
+     # ---- Epilogue --------------------------------------------------------
+     if IS_3D:
+@@ -276,6 +309,9 @@ def kernel_unified_attention_diffkv(
+             acc,
+             mask=dim_mask_v[None, :] & query_mask_0[:, None] & query_mask_1[:, None],
+         )
++        # A segment may contain no visible key for an early verify row.
++        # Mark it empty so the reduction cannot select a synthetic zero max.
++        M = tl.where(L > 0.0, M, float("-inf"))
+         store_segm_reduce_scalars(
+             segm_max_ptr,
+             segm_expsum_ptr,
+@@ -403,8 +439,19 @@ def unified_attention_diffkv(
+     softmax_segm_output: torch.Tensor | None = None,
+     softmax_segm_max: torch.Tensor | None = None,
+     softmax_segm_expsum: torch.Tensor | None = None,
++    k_descale: torch.Tensor | None = None,
++    v_descale: torch.Tensor | None = None,
+ ):
+     assert causal, "Only causal attention is supported"
++    fp8_dtypes = (torch.float8_e4m3fn, torch.float8_e4m3fnuz)
++    fp8_kv_cache = k.dtype in fp8_dtypes
++    if fp8_kv_cache:
++        if v.dtype != k.dtype or q.dtype not in (torch.float16, torch.bfloat16):
++            raise ValueError("FP8 DiffKV requires matching E4M3 K/V and FP16/BF16 Q")
++        if k_descale is None or v_descale is None:
++            raise ValueError("FP8 DiffKV requires separate K and V descale tensors")
++        if k_descale.numel() != 1 or v_descale.numel() != 1:
++            raise ValueError("FP8 DiffKV only supports per-tensor K/V scales")
+ 
+     if sinks is not None:
+         assert sinks.shape[0] == q.shape[1], "Sinks must be num_query_heads size"
+@@ -422,29 +469,65 @@ def unified_attention_diffkv(
+     BLOCK_M = (
+         16 if num_queries_per_kv <= 16 else triton.next_power_of_2(num_queries_per_kv)
+     )
+-    BLOCK_Q = BLOCK_M // num_queries_per_kv
+-
+-    total_num_q_blocks = q.shape[0] // BLOCK_Q + num_seqs
+-
++    launch_kw: dict[str, int] = {}
++    prefill_tile = None
++    if (
++        max_seqlen_q >= _PREFILL_MIN_Q
++        and _PREFILL_BLOCK_M > BLOCK_M
++        and _PREFILL_BLOCK_M % num_queries_per_kv == 0
++    ):
++        BLOCK_M = _PREFILL_BLOCK_M
++        launch_kw["num_warps"] = _PREFILL_NUM_WARPS
++        if _PREFILL_NUM_STAGES > 0:
++            launch_kw["num_stages"] = _PREFILL_NUM_STAGES
++        prefill_tile = _PREFILL_TILE
+     sliding_window_val = 1 + window_size[0] if window_size[0] >= 0 else 0
+ 
+     # Decide between 2D and 3D launch.  Mirrors the standard launcher:
+     # 3D requires preallocated softmax buffers, decode-only batches, and
+     # a small number of sequences (otherwise 2D already saturates the SM).
++    spec_3d = (
++        1 < max_seqlen_q <= _SPEC_3D_MAX_Q
++        and sliding_window_val == 0
++        and softmax_segm_output is not None
++        and q.shape[0] <= softmax_segm_output.shape[0]
++    )
+     use_3d = not (
+         seq_threshold_3D is None
+         or num_par_softmax_segments is None
+         or softmax_segm_output is None
+         or softmax_segm_max is None
+         or softmax_segm_expsum is None
+-        or max_seqlen_q > 1
++        or (max_seqlen_q > 1 and not spec_3d)
+         or num_seqs > seq_threshold_3D
+         or is_batch_invariant
+     )
+ 
++    spec_tile = None
++    if use_3d and spec_3d and _SPEC_3D_BLOCK_M > BLOCK_M:
++        spec_bm = min(
++            _SPEC_3D_BLOCK_M,
++            triton.next_power_of_2(max_seqlen_q * num_queries_per_kv),
++        )
++        if spec_bm > BLOCK_M and spec_bm % num_queries_per_kv == 0:
++            BLOCK_M = spec_bm
++            launch_kw["num_warps"] = (
++                _SPEC_3D_NUM_WARPS if BLOCK_M >= 128 else 4
++            )
++            spec_tile = _SPEC_3D_TILE
++
++    BLOCK_Q = BLOCK_M // num_queries_per_kv
++    total_num_q_blocks = q.shape[0] // BLOCK_Q + num_seqs
++
+     # Tile size: 32 for prefill-class kernels.  Decode (small Q) prefers
+     # smaller tiles to expose more parallelism along the KV dim.
+     tile_size = 32 if not use_3d else (16 if q.element_size() >= 2 else 32)
++    if spec_tile is not None:
++        tile_size = spec_tile
++    if prefill_tile is not None and not use_3d:
++        tile_size = prefill_tile
++        if fp8_kv_cache and sliding_window_val == 0:
++            tile_size = _PREFILL_TILE_FP8_GLOBAL
+ 
+     grid: tuple[Any, ...]
+     if use_3d:
+@@ -471,6 +554,9 @@ def unified_attention_diffkv(
+         key_cache_ptr=k,
+         value_cache_ptr=v,
+         sink_ptr=sinks,
++        k_descale_ptr=k_descale,
++        v_descale_ptr=v_descale,
++        FP8_KV_CACHE=fp8_kv_cache,
+         block_tables_ptr=block_table,
+         seq_lens_ptr=seqused_k,
+         alibi_slopes_ptr=alibi_slopes,
+@@ -508,6 +594,7 @@ def unified_attention_diffkv(
+         BLOCK_M=BLOCK_M,
+         NUM_SEGMENTS_PER_SEQ=num_segments,
+         IS_3D=use_3d,
++        **launch_kw,
+     )
+ 
+     if use_3d:
