@@ -48,7 +48,7 @@
       "repository": "https://github.com/vllm-project/vllm.git",
       "commit": "dee37d89115db4c94a820a79a78a7828e141c910",
       "version": "nightly-rocm100-dee37d891-mimo-tp8",
-      "expected_diff_sha256": "0c15f04158503805ea13278dc2cf172a30fcbc8a4f7290e30ddb0105f9c14d2b",
+      "expected_diff_sha256": "1b63ce44c5dc5efe7d0dec568eadc8cf1d6ee9573a59c433cd5b3e4150449466",
       "full_index_diff": true,
       "reuse_existing_native_build": true,
       "patches": [
@@ -63,6 +63,10 @@
         {
           "path": "patches/vllm_mimov26r9700_v0.1/0004-port-diffbot-diffkv-fp8-and-verify-to-rocm.patch",
           "sha256": "9dd9a1fed315667dccf7a3e18fdee5b04477903fb3619931dfe56e0c3daafe11"
+        },
+        {
+          "path": "patches/vllm_mimov26r9700_v0.1/0005-tune-r9700-mimo-w8a8-fp8-gemms.patch",
+          "sha256": "509f0419d23e36828578b205508c2dccc14900ca98c6a5128d60e17be1debefd"
         }
       ]
     },

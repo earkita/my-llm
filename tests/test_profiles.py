@@ -103,7 +103,9 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertTrue(runtime["scheduler"]["enforce_eager"])
         self.assertFalse(runtime["scheduler"]["async"])
         self.assertEqual(runtime["attention_backend"], "TRITON_ATTN_DIFFKV")
-        self.assertIn("0004", runtime["required_patches"])
+        self.assertEqual(
+            runtime["required_patches"], ["0001", "0002", "0003", "0004", "0005"]
+        )
         self.assertEqual(runtime["environment"]["R9K_FOLD"], "0")
         self.assertEqual(
             runtime["environment"]["VLLM_DIFFKV_PREFILL_BLOCK_M"], "64"
@@ -184,7 +186,9 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(
             runtime["environment"]["VLLM_DIFFKV_PREFILL_BLOCK_M"], "16"
         )
-        self.assertIn("0004", runtime["required_patches"])
+        self.assertEqual(
+            runtime["required_patches"], ["0001", "0002", "0003", "0004", "0005"]
+        )
 
     def test_directory_qualified_profile_name_resolves_below_profiles(self) -> None:
         profile = load_profile("dev/glm53-flash-rocm10-gluon")

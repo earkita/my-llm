@@ -1,0 +1,361 @@
+diff --git a/vllm/model_executor/layers/quantization/utils/configs/N=1856,K=4096,device_name=AMD_Radeon_R9700,dtype=fp8_w8a8,block_shape=[128,128].json b/vllm/model_executor/layers/quantization/utils/configs/N=1856,K=4096,device_name=AMD_Radeon_R9700,dtype=fp8_w8a8,block_shape=[128,128].json
+new file mode 100644
+index 0000000000000000000000000000000000000000..64c353e47ea97a96d656e53588ed82687493147f
+--- /dev/null
++++ b/vllm/model_executor/layers/quantization/utils/configs/N=1856,K=4096,device_name=AMD_Radeon_R9700,dtype=fp8_w8a8,block_shape=[128,128].json
+@@ -0,0 +1,114 @@
++{
++  "1": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 8,
++    "num_stages": 2
++  },
++  "2": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 8,
++    "num_stages": 2
++  },
++  "4": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 8,
++    "num_stages": 2
++  },
++  "8": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 8,
++    "num_stages": 2
++  },
++  "16": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 8,
++    "num_stages": 2
++  },
++  "32": {
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 8,
++    "num_stages": 1
++  },
++  "64": {
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 8,
++    "num_stages": 1
++  },
++  "128": {
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 8,
++    "num_stages": 1
++  },
++  "256": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 8,
++    "num_stages": 2
++  },
++  "512": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 8,
++    "num_stages": 2
++  },
++  "1024": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 4,
++    "num_stages": 2
++  },
++  "2048": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 4,
++    "num_stages": 1
++  },
++  "4096": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 8,
++    "num_stages": 2
++  },
++  "8192": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 4,
++    "num_stages": 1
++  }
++}
+diff --git a/vllm/model_executor/layers/quantization/utils/configs/N=4096,K=2048,device_name=AMD_Radeon_R9700,dtype=fp8_w8a8,block_shape=[128,128].json b/vllm/model_executor/layers/quantization/utils/configs/N=4096,K=2048,device_name=AMD_Radeon_R9700,dtype=fp8_w8a8,block_shape=[128,128].json
+new file mode 100644
+index 0000000000000000000000000000000000000000..51d5d9065fc1661459c64eefc0ff1180fd5f27b7
+--- /dev/null
++++ b/vllm/model_executor/layers/quantization/utils/configs/N=4096,K=2048,device_name=AMD_Radeon_R9700,dtype=fp8_w8a8,block_shape=[128,128].json
+@@ -0,0 +1,114 @@
++{
++  "1": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 64,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 2
++  },
++  "2": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 8,
++    "num_stages": 2
++  },
++  "4": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 1
++  },
++  "8": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 8,
++    "num_stages": 2
++  },
++  "16": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 4,
++    "num_stages": 1
++  },
++  "32": {
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 8,
++    "num_stages": 2
++  },
++  "64": {
++    "BLOCK_SIZE_M": 128,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 8,
++    "num_stages": 1
++  },
++  "128": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 8,
++    "num_stages": 2
++  },
++  "256": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 4,
++    "num_stages": 2
++  },
++  "512": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 4,
++    "num_stages": 2
++  },
++  "1024": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 4,
++    "num_stages": 1
++  },
++  "2048": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 8,
++    "num_stages": 2
++  },
++  "4096": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 2
++  },
++  "8192": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 1
++  }
++}
+diff --git a/vllm/model_executor/layers/quantization/utils/configs/N=4096,K=4096,device_name=AMD_Radeon_R9700,dtype=fp8_w8a8,block_shape=[128,128].json b/vllm/model_executor/layers/quantization/utils/configs/N=4096,K=4096,device_name=AMD_Radeon_R9700,dtype=fp8_w8a8,block_shape=[128,128].json
+new file mode 100644
+index 0000000000000000000000000000000000000000..f46f9c8974fe9863bee836e2d355e139fce765d9
+--- /dev/null
++++ b/vllm/model_executor/layers/quantization/utils/configs/N=4096,K=4096,device_name=AMD_Radeon_R9700,dtype=fp8_w8a8,block_shape=[128,128].json
+@@ -0,0 +1,114 @@
++{
++  "1": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 8,
++    "num_stages": 2
++  },
++  "2": {
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 8,
++    "num_stages": 2
++  },
++  "4": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 1
++  },
++  "8": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 4,
++    "num_stages": 1
++  },
++  "16": {
++    "BLOCK_SIZE_M": 16,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 8,
++    "num_stages": 2
++  },
++  "32": {
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 8,
++    "num_stages": 1
++  },
++  "64": {
++    "BLOCK_SIZE_M": 32,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 2
++  },
++  "128": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 8,
++    "num_stages": 2
++  },
++  "256": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 4,
++    "num_stages": 1
++  },
++  "512": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 4,
++    "num_stages": 1
++  },
++  "1024": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 1,
++    "num_warps": 4,
++    "num_stages": 1
++  },
++  "2048": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 128,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 8,
++    "num_stages": 2
++  },
++  "4096": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 8,
++    "num_stages": 2
++  },
++  "8192": {
++    "BLOCK_SIZE_M": 64,
++    "BLOCK_SIZE_N": 256,
++    "BLOCK_SIZE_K": 128,
++    "GROUP_SIZE_M": 32,
++    "num_warps": 8,
++    "num_stages": 1
++  }
++}
+

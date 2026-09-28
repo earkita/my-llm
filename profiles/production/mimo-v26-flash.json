@@ -64,13 +64,14 @@
     "name": "mimo-v26-flash-r9700stack-rocm10-8xr9700-tp8-c2-dflash-k7",
     "status": "production-ready",
     "recipe": "vllm_mimov26r9700_v0.1",
-    "description": "TP8 runtime with tuned gfx1201 Triton DiffKV, DFlash K7 verify, native MXFP4xFP8 experts, BF16 APC and RCCL collectives",
+    "description": "TP8 runtime with tuned gfx1201 Triton DiffKV and bitwise-safe W8A8 GEMMs, DFlash K7 verify, native MXFP4xFP8 experts, BF16 APC and RCCL collectives",
     "required_model_family": "mimo_v2",
     "required_patches": [
       "0001",
       "0002",
       "0003",
-      "0004"
+      "0004",
+      "0005"
     ],
     "gpu_order": [0, 1, 2, 3, 4, 5, 6, 7],
     "gpu_bdfs": [
