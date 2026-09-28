@@ -1,0 +1,52 @@
+diff --git a/tests/parser/engine/test_qwen3.py b/tests/parser/engine/test_qwen3.py
+index 07a0258..bcf7f89 100644
+--- a/tests/parser/engine/test_qwen3.py
++++ b/tests/parser/engine/test_qwen3.py
+@@ -389,6 +389,23 @@ class TestStreaming:
+             )
+         }
+ 
++    def test_streaming_final_parameter_without_close(self, parser, mock_request):
++        """The function close must finalize an unterminated last parameter."""
++        chunks = [
++            "<tool_call>\n",
++            "<function=Bash>\n",
++            '<parameter=command>grep -n "const mediaMode\\|setAudioOnly" index.html',
++            "</function>\n",
++            "</tool_call>",
++        ]
++
++        results = simulate_tool_streaming(parser, mock_request, chunks)
++
++        args_text = collect_tool_arguments(results)
++        assert json.loads(args_text) == {
++            "command": 'grep -n "const mediaMode\\|setAudioOnly" index.html'
++        }
++
+     def test_streaming_text_before_tool(self, parser, mock_request):
+         chunks = [
+             "Let me check ",
+diff --git a/vllm/parser/qwen3.py b/vllm/parser/qwen3.py
+index a11551a..1f270dc 100644
+--- a/vllm/parser/qwen3.py
++++ b/vllm/parser/qwen3.py
+@@ -74,8 +74,17 @@ def _qwen3_arg_converter(raw_args: str, partial: bool) -> str:
+         value = match.group(2)
+         params[name] = _trim_wrapping_newlines(value)
+ 
+-    if partial:
+-        remaining = _PARAM_RE.sub("", raw_args)
++    remaining = _PARAM_RE.sub("", raw_args)
++    # Treat </function> as an implicit end for the last parameter.  Qwen-family
++    # models occasionally omit only the final </parameter> while otherwise
++    # producing a complete tool call.  During streaming we may already have
++    # emitted a safe prefix such as {"command": "...; dropping that parameter
++    # during the final conversion would leave clients with invalid JSON.
++    #
++    # Complete parameters have already been removed above, so accepting the
++    # remaining open parameter in the final pass is unambiguous and matches
++    # the existing recovery for a missing close before the next parameter.
++    if partial or remaining.strip():
+         m = _PARTIAL_PARAM_RE.search(remaining)
+         if m:
+             name = m.group(1)

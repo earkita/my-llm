@@ -4,6 +4,7 @@ model_list:
       model: os.environ/HOSTED_INFERENCE_OPENAI_MODEL
       api_base: os.environ/HOSTED_INFERENCE_API_BASE
       api_key: os.environ/HOSTED_INFERENCE_API_KEY
+      temperature: 0.0
     model_info:
       max_input_tokens: 1048576
       supports_reasoning: true

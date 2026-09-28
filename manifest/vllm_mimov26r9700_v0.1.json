@@ -48,8 +48,9 @@
       "repository": "https://github.com/vllm-project/vllm.git",
       "commit": "dee37d89115db4c94a820a79a78a7828e141c910",
       "version": "nightly-rocm100-dee37d891-mimo-tp8",
-      "expected_diff_sha256": "1b63ce44c5dc5efe7d0dec568eadc8cf1d6ee9573a59c433cd5b3e4150449466",
+      "expected_diff_sha256": "51a587e2fb85d49bddc5dac976367ca5c76e9d8cca117d4fdd05f25452f69360",
       "full_index_diff": true,
+      "apply_intent_to_add": true,
       "reuse_existing_native_build": true,
       "patches": [
         {
@@ -67,6 +68,10 @@
         {
           "path": "patches/vllm_mimov26r9700_v0.1/0005-tune-r9700-mimo-w8a8-fp8-gemms.patch",
           "sha256": "509f0419d23e36828578b205508c2dccc14900ca98c6a5128d60e17be1debefd"
+        },
+        {
+          "path": "patches/vllm_mimov26r9700_v0.1/0006-fix-qwen3-streaming-final-parameter.patch",
+          "sha256": "9a42e321acec47e33e6c660449f5cb158a6f91d9f8fa1e8e10d01cfec2a3ad00"
         }
       ]
     },
