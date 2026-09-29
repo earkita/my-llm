@@ -911,6 +911,9 @@ class ProductionProfileTests(unittest.TestCase):
             "model: os.environ/HOSTED_INFERENCE_OPENAI_MODEL",
             "temperature: 1.0",
             "top_p: 0.95",
+            "parallel_tool_calls: false",
+            'stop:\n        - "</tool_call>"',
+            "include_stop_str_in_output: true",
             "repetition_penalty: 1.05",
         ):
             self.assertIn(expected, block)

@@ -203,6 +203,6 @@
   "verification": {
     "scope": "production-benchmarked",
     "verified_context": 131072,
-    "notes": "Original Xiaomi weights and scales; ROCm DiffKV+DFlash K7, BF16 KV/APC, native libr9k MXFP4xFP8 experts and Qwen3/MiMo streaming parser recovery are active. Direct and LiteLLM generation, streaming, image input, 32K/128K tool calls, 32K C1/C2/C4 throughput and 128K prefill/decode passed. FP8 KV remains disabled because uncalibrated E4M3 scales caused a large prefill regression."
+    "notes": "Original Xiaomi weights and scales; ROCm DiffKV+DFlash K7, BF16 KV/APC, native libr9k MXFP4xFP8 experts, Qwen3/MiMo streaming parser recovery and a one-tool-call generation fence are active. Direct and LiteLLM generation, streaming, image input, 32K/128K tool calls, 32K C1/C2/C4 throughput and 128K prefill/decode passed. FP8 KV remains disabled because uncalibrated E4M3 scales caused a large prefill regression."
   }
 }
