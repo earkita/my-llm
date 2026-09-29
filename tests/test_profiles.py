@@ -104,7 +104,8 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertFalse(runtime["scheduler"]["async"])
         self.assertEqual(runtime["attention_backend"], "TRITON_ATTN_DIFFKV")
         self.assertEqual(
-            runtime["required_patches"], ["0001", "0002", "0003", "0004", "0005"]
+            runtime["required_patches"],
+            ["0001", "0002", "0003", "0004", "0005", "0006"],
         )
         self.assertEqual(runtime["environment"]["R9K_FOLD"], "0")
         self.assertEqual(
@@ -900,6 +901,19 @@ class ProductionProfileTests(unittest.TestCase):
             model,
             "anthropic/qwen3.8-flash-next-uncensored-mxfp4-fp8",
         )
+
+    def test_litellm_mimo_alias_uses_agentic_sampling_recipe(self) -> None:
+        config = (ROOT / "config" / "litellm.yaml").read_text()
+        block = config.split("- model_name: mimo-v2.6-flash", 1)[1].split(
+            "\n  - model_name:", 1
+        )[0]
+        for expected in (
+            "model: os.environ/HOSTED_INFERENCE_OPENAI_MODEL",
+            "temperature: 1.0",
+            "top_p: 0.95",
+            "repetition_penalty: 1.05",
+        ):
+            self.assertIn(expected, block)
 
     def test_litellm_qwen_alias_uses_nonthinking_sampling_recipe(self) -> None:
         config = (ROOT / "config" / "litellm.yaml").read_text()

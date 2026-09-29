@@ -83,7 +83,11 @@ def anthropic_stream(
             }
         ],
         "tools": [bash_tool_anthropic()],
-        "tool_choice": {"type": "tool", "name": "Bash"},
+        "tool_choice": {
+            "type": "tool",
+            "name": "Bash",
+            "disable_parallel_tool_use": True,
+        },
         "max_tokens": 512,
         "stream": True,
     }
@@ -137,6 +141,7 @@ def openai_stream(
         ],
         "tools": [bash_tool_openai()],
         "tool_choice": {"type": "function", "function": {"name": "Bash"}},
+        "parallel_tool_calls": False,
         "max_tokens": 512,
         "stream": True,
     }
