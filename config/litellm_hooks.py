@@ -8,6 +8,10 @@ from litellm.llms.anthropic.count_tokens.transformation import (
     AnthropicCountTokensConfig,
 )
 
+from r9700.litellm_tool_guard import (
+    adaptive_tool_response,
+    adaptive_tool_stream,
+)
 from r9700.litellm_tools import (
     enforce_glm53_strict_tools,
     local_anthropic_count_tokens_endpoint,
@@ -49,6 +53,25 @@ class LocalRequestNormalizationHook(CustomLogger):
         # proxy pre-call hook. Normalize again at the deployment boundary,
         # where reasoning_effort is present and the provider model is selected.
         return normalize_qwen38_reasoning_effort(kwargs)
+
+    async def async_post_call_streaming_iterator_hook(
+        self,
+        user_api_key_dict: Any,
+        response: Any,
+        request_data: dict[str, Any],
+    ) -> Any:
+        del user_api_key_dict
+        async for chunk in adaptive_tool_stream(response, request_data):
+            yield chunk
+
+    async def async_post_call_success_deployment_hook(
+        self,
+        request_data: dict[str, Any],
+        response: Any,
+        call_type: Any,
+    ) -> Any:
+        del call_type
+        return adaptive_tool_response(response, request_data)
 
 
 proxy_handler_instance = LocalRequestNormalizationHook()

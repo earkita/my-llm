@@ -1,0 +1,134 @@
+diff --git a/r9700_vllm/__init__.py b/r9700_vllm/__init__.py
+index 6d682d8..028cf2d 100644
+--- a/r9700_vllm/__init__.py
++++ b/r9700_vllm/__init__.py
+@@ -37,7 +37,8 @@ def register() -> None:
+     ops.register()
+     if not _disabled("quant"):
+         from .quant import ct  # noqa: F401  (registers "compressed-tensors")
+-        done.append("quant:compressed-tensors")
++        from .quant import fp8  # noqa: F401  (registers native "fp8" MXFP4 MoE)
++        done.append("quant:compressed-tensors,fp8-mxfp4")
+     if not _disabled("models"):
+         from vllm import ModelRegistry
+         from .models.qwen4_exp import ARCHS
+
+diff --git a/r9700_vllm/quant/fp8.py b/r9700_vllm/quant/fp8.py
+new file mode 100644
+index 0000000..6f48294
+--- /dev/null
++++ b/r9700_vllm/quant/fp8.py
+@@ -0,0 +1,110 @@
++"""Native vLLM FP8 checkpoints with MXFP4 MoE weights on gfx1201.
++
++MiMo-V2.6 declares ``quant_method=fp8`` and ``store_dtype=mxfp4``. Stock vLLM
++therefore uses its native :class:`Mxfp4MoEMethod`, rather than the
++compressed-tensors override used by the Qwen profiles. On R9700 that path
++otherwise selects the generic MXFP4 emulation backend. This registered config
++changes only native MXFP4 RoutedExperts and preserves stock FP8 handling for
++dense linears, attention, ignored layers, and all non-gfx1201 devices.
++"""
++from __future__ import annotations
++
++import os
++
++import torch
++from torch.nn.parameter import Parameter
++
++from vllm.logger import init_logger
++from vllm.model_executor.layers.fused_moe import RoutedExperts
++from vllm.model_executor.layers.quantization import register_quantization_config
++from vllm.model_executor.layers.quantization.fp8 import Fp8Config
++from vllm.model_executor.layers.quantization.mxfp4 import Mxfp4MoEMethod
++
++from ..moe import prep
++from ..moe.experts import R9700Mxfp4Experts, r9k_available
++
++logger = init_logger("vllm." + __name__)
++
++
++def _moe_disabled() -> bool:
++    disabled = {item.strip() for item in os.environ.get("R9K_DISABLE", "").split(",")}
++    return "moe" in disabled
++
++
++class R9kNativeMxfp4MoEMethod(Mxfp4MoEMethod):
++    """Native MXFP4 loader plus libr9k grouped MXFP4 x FP8 expert GEMMs."""
++
++    def __init__(self, moe):
++        # Keep stock sizing and checkpoint loaders. Only the post-load layout
++        # conversion and expert implementation differ.
++        super().__init__(moe)
++        self.experts_cls = R9700Mxfp4Experts
++
++    def process_weights_after_loading(self, layer: RoutedExperts) -> None:
++        if getattr(layer, "w13_bias", None) is not None or getattr(
++            layer, "w2_bias", None
++        ) is not None:
++            raise NotImplementedError("r9700 native MXFP4 MoE does not support bias")
++
++        w13_param = layer.w13_weight
++        w2_param = layer.w2_weight
++        w13 = prep.permute_in_place(w13_param.data)
++        w2 = prep.permute_in_place(w2_param.data)
++        device = torch.device("cuda", torch.cuda.current_device())
++        s13 = prep.pack_scales_gpu(layer.w13_weight_scale.data, device)
++        s2 = prep.pack_scales_gpu(layer.w2_weight_scale.data, device)
++
++        layer.w13_weight = prep.as_param(w13, w13_param)
++        layer.w2_weight = prep.as_param(w2, w2_param)
++        layer.w13_weight_scale = Parameter(s13, requires_grad=False)
++        layer.w2_weight_scale = Parameter(s2, requires_grad=False)
++
++        from ..kernels.moe import fold_decide
++
++        name = getattr(layer, "layer_name", "") or "moe"
++        layer._r9k_fold = (
++            fold_decide(s13, name + ".w13", logger.info),
++            fold_decide(s2, name + ".w2", logger.info),
++        )
++
++        from vllm.model_executor.layers.fused_moe.config import (
++            mxfp4_w4a16_moe_quant_config,
++        )
++        from vllm.model_executor.layers.fused_moe.oracle.mxfp4 import (
++            make_mxfp4_moe_kernel,
++        )
++
++        self.moe_quant_config = mxfp4_w4a16_moe_quant_config(
++            w1_scale=layer.w13_weight_scale,
++            w2_scale=layer.w2_weight_scale,
++        )
++        self.moe_kernel = make_mxfp4_moe_kernel(
++            moe_quant_config=self.moe_quant_config,
++            moe_config=self.moe,
++            experts_cls=R9700Mxfp4Experts,
++            mxfp4_backend=self.mxfp4_backend,
++            routing_tables=layer._expert_routing_tables(),
++        )
++        self.moe_kernel.fused_experts.process_weights_after_loading(layer)
++        prep.maybe_attach_cache(self, layer)
++        logger.info_once(
++            "r9700: native FP8/MXFP4 MoE -> R9700Mxfp4Experts "
++            "(libr9k grouped MXFP4xFP8)"
++        )
++
++
++@register_quantization_config("fp8")
++class R9kFp8Config(Fp8Config):
++    """Stock FP8 config with a narrow native-MXFP4 MoE override."""
++
++    def get_quant_method(self, layer, prefix):
++        method = super().get_quant_method(layer, prefix)
++        if (
++            isinstance(layer, RoutedExperts)
++            and self.store_dtype == "mxfp4"
++            and isinstance(method, Mxfp4MoEMethod)
++            and r9k_available()
++            and not _moe_disabled()
++        ):
++            return R9kNativeMxfp4MoEMethod(layer.moe_config)
++        return method
+
+
+

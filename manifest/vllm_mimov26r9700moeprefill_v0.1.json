@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "platform": {
+    "os": "Ubuntu 26.04",
+    "python": "3.12",
+    "python_build": "cpython-3.12.13",
+    "gpu_arch": "gfx1201",
+    "reference_gpu_count": 8
+  },
+  "environment": {
+    "venv": ".runtime/recipes/vllm_mimov26r9700moeprefill_v0.1/venv",
+    "source_root": ".runtime/recipes/vllm_mimov26r9700moeprefill_v0.1/src",
+    "constraints": "constraints/rocm-10.0-py312.txt",
+    "constraints_sha256": "5b658cd3e1fdc7566014624017b4884136e86c24878f85410c6ead76ac5b59b3",
+    "constraint_overlays": [
+      {
+        "path": "constraints/vllm-qwen38-r9700-stack-py312.override.txt",
+        "sha256": "27daaf90e717555f9176a853ec8cb57f23a5aed397ea2c82d3b7c82ad7afd53b"
+      }
+    ],
+    "rocm_version": "10.0.0",
+    "rocm_index_url": "https://stable.repo.amd.com/rocm/whl-next/",
+    "torch_version": "2.13.0+rocm10.0.0",
+    "torchvision_version": "0.28.0+rocm10.0.0",
+    "amdsmi_version": "27.0.0+6b0e43f3",
+    "amdsmi_from_rocm_sdk": true,
+    "amdsmi_source_commit": "6b0e43f341195e203754e08f850e437ff2fc09f9",
+    "huggingface_hub_version": "1.31.0",
+    "pip_version": "26.2.1",
+    "setuptools_version": "79.0.1",
+    "wheel_version": "0.47.0"
+  },
+  "kernel_driver": {
+    "version": "10.0.0-4",
+    "filename": "rocm-installer-10.0.0-4.run",
+    "url": "https://repo.radeon.com/rocm/installer/rocm-runfile-installer/rocm-rel-10.0/rocm-installer-10.0.0-4.run",
+    "sha256": "367355d25f59835ff6e23fe1067e13070ea8deced9e056db2973557dc07bef9c"
+  },
+  "sources": {
+    "aiter": {
+      "repository": "https://github.com/ROCm/aiter.git",
+      "commit": "7ff5155f3ba772e534b6cf8dddc0099932327b9b",
+      "version": "0.1.21+git.7ff5155f3",
+      "expected_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "patches": []
+    },
+    "vllm": {
+      "repository": "https://github.com/vllm-project/vllm.git",
+      "commit": "dee37d89115db4c94a820a79a78a7828e141c910",
+      "version": "nightly-rocm100-dee37d891-mimo-tp8",
+      "expected_diff_sha256": "51a587e2fb85d49bddc5dac976367ca5c76e9d8cca117d4fdd05f25452f69360",
+      "full_index_diff": true,
+      "apply_intent_to_add": true,
+      "reuse_existing_native_build": true,
+      "patches": [
+        {
+          "path": "patches/vllm_mimov26r9700moeprefill_v0.1/0001-respect-explicit-runtime-platform.patch",
+          "sha256": "03e0a0a6fae34778c851a117eca54c2b2f6ee73420c6b0307beea081af9b08be"
+        },
+        {
+          "path": "patches/vllm_mimov26r9700moeprefill_v0.1/0002-fix-mimo-tp8-fused-qkv-and-hybrid-cache.patch",
+          "sha256": "8ddf6c7d42d55b833dfb9343833e144f762a86e1f279fb1844bfb0d86c5595bd"
+        },
+        {
+          "path": "patches/vllm_mimov26r9700moeprefill_v0.1/0004-port-diffbot-diffkv-fp8-and-verify-to-rocm.patch",
+          "sha256": "fb53e6d73d6978761ac08002e686464eb7b12fe57b7d094282ed198a3e68e593"
+        },
+        {
+          "path": "patches/vllm_mimov26r9700moeprefill_v0.1/0005-tune-r9700-mimo-w8a8-fp8-gemms.patch",
+          "sha256": "bdbabcd509f632cf3367d5edf9b467c5de9cbf660970f8c1bc709a80438205ff"
+        },
+        {
+          "path": "patches/vllm_mimov26r9700moeprefill_v0.1/0006-fix-qwen3-streaming-final-parameter.patch",
+          "sha256": "3195e158a7992fdb9970a5d37aea811ad4d4eb355e88647af86ccbda1b7ba06e"
+        }
+      ]
+    },
+    "triton-kernels": {
+      "repository": "https://github.com/ROCm/triton.git",
+      "commit": "0f380657dbf3ee86eb57558ff71df24f03b5d4e7",
+      "version": "vllm-rocm10-kernels",
+      "expected_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "patches": []
+    },
+    "r9700-stack": {
+      "repository": "https://github.com/earkita/r9700-stack.git",
+      "commit": "51c782616cdde9dc79bf6bdc301a5ac4a18856f8",
+      "version": "0.2.0-mimo-mxfp4-prefill-backport",
+      "expected_diff_sha256": "8e662d048ca7c13a797a7ee15e3fc865887488a297ea6fa8fc5348b28512a2e3",
+      "full_index_diff": true,
+      "apply_intent_to_add": true,
+      "patches": [
+        {
+          "path": "patches/vllm_mimov26r9700moeprefill_v0.1/0003-route-native-mxfp4-moe-to-r9700.patch",
+          "sha256": "2b188dd3f7eb27aeaf6041136ed065a3da1660657662801c110d603f68cdeee8"
+        },
+        {
+          "path": "patches/vllm_mimov26r9700moeprefill_v0.1/0007-backport-rdna4-moe-prefill-epilogue.patch",
+          "sha256": "538a6f942c376d3b213c4c649a73c37d21fe8a04eb6162a4d082212cf6f7029e"
+        }
+      ]
+    }
+  }
+}

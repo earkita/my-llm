@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "name": "mimo-v26-flash",
-  "status": "production-ready",
-  "description": "MiMo-V2.6-Flash-RL TP8 deployment on eight R9700 GPUs with ROCm DiffKV, DFlash K7, staged native MXFP4 MoE prefill, exact TP8 P2P all-reduce and BF16 prefix caching",
+  "name": "mimo-v26-flash-moe-prefill",
+  "status": "development",
+  "description": "MiMo-V2.6-Flash-RL TP8 A/B profile with isolated RDNA4 MoE prefill epilogue backport",
   "model": {
     "schema_version": 1,
     "name": "mimo-v2.6-flash-rl",
@@ -61,10 +61,10 @@
   },
   "runtime": {
     "schema_version": 1,
-    "name": "mimo-v26-flash-r9700stack-rocm10-8xr9700-tp8-c2-dflash-k7-moe-prefill-ar8",
-    "status": "production-ready",
-    "recipe": "vllm_mimov26r9700ar8_v0.1",
-    "description": "TP8 runtime with tuned gfx1201 Triton DiffKV and bitwise-safe W8A8 GEMMs, DFlash K7 verify, staged native MXFP4xFP8 MoE prefill, BF16 APC and exact gfx1201 P2P all-reduce up to 256 KiB with RCCL fallback",
+    "name": "mimo-v26-flash-r9700stack-rocm10-8xr9700-tp8-c2-dflash-k7-moe-prefill",
+    "status": "experimental",
+    "recipe": "vllm_mimov26r9700moeprefill_v0.1",
+    "description": "Production-equivalent TP8 runtime plus isolated LDS row-scale, staged-store and zero-fill-skip MoE prefill backports",
     "required_model_family": "mimo_v2",
     "required_patches": [
       "0001",
@@ -73,10 +73,18 @@
       "0004",
       "0005",
       "0006",
-      "0007",
-      "0008"
+      "0007"
     ],
-    "gpu_order": [0, 1, 2, 3, 4, 5, 6, 7],
+    "gpu_order": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+    ],
     "gpu_bdfs": [
       "0000:c3:00.0",
       "0000:c6:00.0",
@@ -92,7 +100,7 @@
       "pipeline": 1,
       "data": 1,
       "enable_expert_parallel": false,
-      "disable_custom_all_reduce": false
+      "disable_custom_all_reduce": true
     },
     "limits": {
       "max_model_len": 1048576,
@@ -148,14 +156,11 @@
       "enforce_eager": true
     },
     "environment": {
+      "VLLM_TARGET_DEVICE": "rocm",
       "VLLM_USE_V2_MODEL_RUNNER": "1",
       "VLLM_ROCM_USE_AITER": "0",
       "VLLM_DISABLE_PYNCCL": "1",
       "R9K_DISABLE": "models,gdn,attn,mtp",
-      "R9K_R4D_AR": "1",
-      "R9K_ARN": "1",
-      "R9K_ARN_1S_KB": "16",
-      "R9K_ARN_MAX_KB": "256",
       "R9K_FOLD": "0",
       "GPU_MAX_HW_QUEUES": "1",
       "HSA_ENABLE_MWAITX": "1",
@@ -171,11 +176,11 @@
     "hardware_topology": {
       "captured_on": "2026-09-27",
       "motherboard": "ASUS Pro WS WRX90E-SAGE SE",
-      "note": "Eight gfx1201 devices in ROCm order 0-7; exact N-rank P2P all-reduce handles TP8 messages up to 256 KiB and falls back to RCCL above that threshold."
+      "note": "Eight gfx1201 devices in ROCm order 0-7; stock/r9700 custom TP2 all-reduce is explicitly disabled for TP8."
     }
   },
   "stack": {
-    "description": "MiMo-V2.6-Flash-RL OpenAI endpoint and Claude Code alias",
+    "description": "MiMo-V2.6-Flash-RL kernel A/B endpoint using the production model alias",
     "litellm_aliases": [
       "mimo-v2.6-flash"
     ],
@@ -206,8 +211,8 @@
     }
   },
   "verification": {
-    "scope": "production-benchmarked",
+    "scope": "development-benchmarked",
     "verified_context": 131072,
-    "notes": "Original Xiaomi weights and scales; ROCm DiffKV+DFlash K7, BF16 KV/APC, native libr9k MXFP4xFP8 experts with the gfx1201 staged prefill epilogue, exact TP8 P2P all-reduce up to 256 KiB, Qwen3/MiMo streaming parser recovery and the adaptive LiteLLM tool-call guard are active. Direct and LiteLLM generation, streaming, image input, 32K/128K tool calls, 32K C1/C2/C4 throughput, cold 32K/128K MoE prefill A/B and the TP8 all-reduce A/B passed. FP8 KV remains disabled because uncalibrated E4M3 scales caused a large prefill regression."
+    "notes": "Same model, DFlash, cache and scheduler settings as the pre-backport production control; only the isolated r9700-stack MoE prefill backport differs. Kernel correctness passed all 17 tile configurations. Cache-clean cold A/B improved prefill by 4.29% at 32K and 5.59% at 128K with matching speculative acceptance."
   }
 }

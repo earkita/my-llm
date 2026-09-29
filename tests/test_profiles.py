@@ -88,9 +88,9 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertNotIn("quantization", model["vllm"])
         self.assertEqual(model["vllm"]["tool_call_parser"], "mimo")
         self.assertEqual(model["vllm"]["reasoning_parser"], "mimo")
-        self.assertEqual(runtime["recipe"], "vllm_mimov26r9700_v0.1")
+        self.assertEqual(runtime["recipe"], "vllm_mimov26r9700ar8_v0.1")
         self.assertEqual(runtime["parallel"]["tensor"], 8)
-        self.assertTrue(runtime["parallel"]["disable_custom_all_reduce"])
+        self.assertFalse(runtime["parallel"]["disable_custom_all_reduce"])
         self.assertFalse(runtime["parallel"]["enable_expert_parallel"])
         self.assertEqual(runtime["limits"]["max_model_len"], 1048576)
         self.assertEqual(runtime["limits"]["max_num_batched_tokens"], 8192)
@@ -105,8 +105,22 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(runtime["attention_backend"], "TRITON_ATTN_DIFFKV")
         self.assertEqual(
             runtime["required_patches"],
-            ["0001", "0002", "0003", "0004", "0005", "0006"],
+            [
+                "0001",
+                "0002",
+                "0003",
+                "0004",
+                "0005",
+                "0006",
+                "0007",
+                "0008",
+            ],
         )
+        self.assertNotIn("VLLM_TARGET_DEVICE", runtime["environment"])
+        self.assertEqual(runtime["environment"]["R9K_R4D_AR"], "1")
+        self.assertEqual(runtime["environment"]["R9K_ARN"], "1")
+        self.assertEqual(runtime["environment"]["R9K_ARN_1S_KB"], "16")
+        self.assertEqual(runtime["environment"]["R9K_ARN_MAX_KB"], "256")
         self.assertEqual(runtime["environment"]["R9K_FOLD"], "0")
         self.assertEqual(
             runtime["environment"]["VLLM_DIFFKV_PREFILL_BLOCK_M"], "64"
@@ -141,7 +155,7 @@ class ProductionProfileTests(unittest.TestCase):
             ("--tool-call-parser", "mimo"),
         ):
             self.assertEqual(command[command.index(option) + 1], value)
-        self.assertIn("--disable-custom-all-reduce", command)
+        self.assertNotIn("--disable-custom-all-reduce", command)
         self.assertIn("--enforce-eager", command)
         self.assertIn("--no-async-scheduling", command)
         self.assertIn("--enable-prefix-caching", command)
@@ -189,6 +203,32 @@ class ProductionProfileTests(unittest.TestCase):
         )
         self.assertEqual(
             runtime["required_patches"], ["0001", "0002", "0003", "0004", "0005"]
+        )
+
+    def test_mimo_v26_mopd_reuses_the_qualified_runtime_only(self) -> None:
+        profile = load_profile("dev/mimo-v26-flash-mopd")
+        model = profile["model"]
+        runtime = profile["runtime"]
+
+        self.assertEqual(profile["status"], "development")
+        self.assertEqual(runtime["status"], "diagnostic-only")
+        self.assertEqual(model["repository"], "XiaomiMiMo/MiMo-V2.6-Flash-MOPD")
+        self.assertEqual(
+            model["revision"], "2479e2d0029eca9a34cc7e7f55a121925f81908e"
+        )
+        self.assertEqual(model["expected_shards"], 129)
+        self.assertEqual(model["checkpoint_weight_bytes"], 172923364096)
+        self.assertEqual(model["served_name"], "mimo-v2.6-flash-mopd")
+        self.assertEqual(runtime["recipe"], "vllm_mimov26r9700_v0.1")
+        self.assertEqual(runtime["attention_backend"], "TRITON_ATTN_DIFFKV")
+        self.assertEqual(runtime["speculative_config"]["num_speculative_tokens"], 7)
+        self.assertEqual(
+            model["auxiliary_artifacts"][0]["sha256"],
+            "94d9c02c17e0b469f88699e98424825ebe13a17f07eb3b86727b5e0c8143d287",
+        )
+        self.assertEqual(
+            model["source_evidence"]["sha256"],
+            "d334ef6f35b93537f13f444785f3dc06fe023bc50e99eeb5495ef1c58468c7bd",
         )
 
     def test_directory_qualified_profile_name_resolves_below_profiles(self) -> None:
@@ -559,6 +599,8 @@ class ProductionProfileTests(unittest.TestCase):
             "vllm_glm53flashrocm10_v0.32",
             "vllm_glm53_v0.32",
             "vllm_mimov26r9700_v0.1",
+            "vllm_mimov26r9700ar8_v0.1",
+            "vllm_mimov26r9700moeprefill_v0.1",
             "vllm_qwen38flash_pr53896",
             "vllm_qwen38r9700stack_v0.2",
         }
@@ -911,12 +953,15 @@ class ProductionProfileTests(unittest.TestCase):
             "model: os.environ/HOSTED_INFERENCE_OPENAI_MODEL",
             "temperature: 1.0",
             "top_p: 0.95",
-            "parallel_tool_calls: false",
-            'stop:\n        - "</tool_call>"',
-            "include_stop_str_in_output: true",
             "repetition_penalty: 1.05",
         ):
             self.assertIn(expected, block)
+        for removed_fence in (
+            "parallel_tool_calls: false",
+            'stop:\n        - "</tool_call>"',
+            "include_stop_str_in_output: true",
+        ):
+            self.assertNotIn(removed_fence, block)
 
     def test_litellm_qwen_alias_uses_nonthinking_sampling_recipe(self) -> None:
         config = (ROOT / "config" / "litellm.yaml").read_text()

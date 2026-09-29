@@ -1,0 +1,471 @@
+diff --git a/kernels/build.sh b/kernels/build.sh
+index 2871c5e..9183571 100755
+--- a/kernels/build.sh
++++ b/kernels/build.sh
+@@ -9,7 +9,7 @@ HIPCC=${HIPCC:-hipcc}
+ SRCS=(r9k_moe_mxfp4a8.hip r9k_ple.hip r9k_gemm_fp8.hip r9k_ar.hip r9k_ar_wht.hip r9k_attn.hip third_party/davetha/r4d_lru.hip)
+ $HIPCC -O3 -std=c++17 -fPIC -DNDEBUG --offload-arch="$GFX_ARCH" -ffp-contract=off -shared ${HIPCFLAGS:-} "${SRCS[@]}" -o "$OUT"
+ if grep -q -a hidden_hostcall_buffer "$OUT"; then echo "ERROR: $OUT contains hostcall kernels" >&2; exit 1; fi
+-for sym in r9k_moe_mxfp4a8 r9k_moe_nvfp4a8 r9k_moe_4bit_prefill r9k_moe_prefill_bm r9k_moe_4bit_prefill_at r9k_moe_atiled_bm r9k_quant_rows_fp8 r9k_quant_rows_fp8_tiled r9k_silu_mul_quant_fp8 r9k_moe_block r9k_fold_supported r9k_ple_gather_int6 r9k_gemm_fp8 r9k_gemm_fp8_block r9k_quant_group128_fp8 r4d_lru_manage r4d_lru_gather r4d_lru_fused r9k_ar_oneshot_2rank r9k_ar_max_blocks r9k_ar_ipc_alloc r9k_ar_ipc_open r9k_ar_ipc_handle_size r9k_wht_pack r9k_wht_reduce r9k_wht_reduce_at r9k_ar_push_2rank r9k_wht_group r9k_wht_group_bytes r9k_wht_bytes_for r9k_attn_prefill_paged r9k_attn_prefill_paged_fp8; do
++for sym in r9k_moe_mxfp4a8 r9k_moe_nvfp4a8 r9k_moe_4bit_prefill r9k_moe_prefill_bm r9k_moe_4bit_prefill_at r9k_moe_atiled_bm r9k_quant_rows_fp8 r9k_quant_rows_fp8_tiled r9k_silu_mul_quant_fp8 r9k_moe_block r9k_fold_supported r9k_ple_gather_int6 r9k_gemm_fp8 r9k_gemm_fp8_block r9k_quant_group128_fp8 r4d_lru_manage r4d_lru_gather r4d_lru_fused r9k_ar_oneshot_2rank r9k_ar_oneshot_nrank r9k_ar_twoshot_nrank r9k_ar_max_ranks r9k_ar_max_blocks r9k_ar_ipc_alloc r9k_ar_ipc_open r9k_ar_ipc_handle_size r9k_wht_pack r9k_wht_reduce r9k_wht_reduce_at r9k_ar_push_2rank r9k_wht_group r9k_wht_group_bytes r9k_wht_bytes_for r9k_attn_prefill_paged r9k_attn_prefill_paged_fp8; do
+   nm -D "$OUT" | grep -q " T $sym$" || { echo "MISSING EXPORT: $sym" >&2; exit 1; }
+ done
+ echo "built $(ls -la "$OUT")"
+diff --git a/kernels/r9k_ar.hip b/kernels/r9k_ar.hip
+index 00b1a6e..a0935c9 100644
+--- a/kernels/r9k_ar.hip
++++ b/kernels/r9k_ar.hip
+@@ -40,7 +40,7 @@
+ #include <hip/hip_bf16.h>
+ #include <cstdint>
+ 
+-#define R9K_AR_MAX_BLOCKS 64
++#define R9K_AR_MAX_BLOCKS 256   // prefill-sized two-shot pushes want most CUs issuing stores
+ #define AR_WAVE 32
+ 
+ typedef unsigned int  u32;
+@@ -247,3 +247,265 @@ extern "C" int r9k_ar_ipc_open(const void* handle, long* out_ptr) {
+ }
+ 
+ extern "C" int r9k_ar_ipc_handle_size() { return (int)sizeof(hipIpcMemHandle_t); }
++
++// ---------------------------------------------------------------- one-shot N-rank all-reduce (TP=4)
++// The same one-shot pattern for N <= R9K_AR_MAX_RANKS ranks: every rank pushes its whole input into slot `rank`
++// of every peer's scratch, publishes one flag per peer, waits for the N-1 flags addressed to it, then reduces all
++// N inputs locally. Latency-optimal for decode-sized messages (one handshake, no second pass); for large
++// messages it moves (N-1)x the input per rank, so the caller keeps RCCL above a size threshold.
++//
++// Layout (per rank):  scratch[buf][src rank][slot16 words],  flags[src rank][R9K_AR_MAX_BLOCKS]
++// Every rank sums the N inputs in rank order 0..N-1 in fp32 and rounds once, so all ranks produce bit-identical
++// outputs (the order differs from RCCL's ring, so the result is not bit-equal to RCCL -- it is equal to an
++// fp32-accumulated reference). Double buffering is safe for the same reason as the 2-rank kernel: a rank reaches
++// call s+2 only after every peer has published call s+1, which each peer does only after its call-s kernel
++// (and therefore its reads of buffer s&1) finished in stream order.
++#define R9K_AR_MAX_RANKS 8
++
++struct R9kArPeers {
++  uint4* scratch[R9K_AR_MAX_RANKS];   // scratch[q] = rank q's scratch, mapped into this process (own for q == rank)
++  u32* flags[R9K_AR_MAX_RANKS];       // flags[q]   = rank q's flag array, mapped likewise
++};
++
++template <typename T, int N>
++__global__ void __launch_bounds__(1024) r9k_ar_oneshot_nrank_kernel(
++    R9kArPeers P, int rank, int* __restrict__ seq, long slot16, const uint4* __restrict__ in,
++    uint4* __restrict__ out, long n16, int drain, int acq) {
++  const int b = blockIdx.x, nb = gridDim.x, tid = threadIdx.x, nt = blockDim.x;
++  __shared__ int s_seq;
++  if (tid == 0) s_seq = seq[b]++;
++  __syncthreads();
++  const int s = s_seq;
++  const long base = (long)(s & 1) * N * slot16;
++  const long per = (n16 + nb - 1) / nb;
++  const long lo = per * b, hi = min(lo + per, n16);
++
++  // 1. push our slice into slot `rank` of every peer
++  for (long i = lo + tid; i < hi; i += nt) {
++    const uint4 v = in[i];
++#pragma unroll
++    for (int q = 0; q < N; q++)
++      if (q != rank) P.scratch[q][base + (long)rank * slot16 + i] = v;
++  }
++
++  // 2. publish to each peer; 3. wait for every peer's publish to us
++  __syncthreads();
++  if (drain < 4) ar_release(drain);
++  if (tid < N && tid != rank) {
++    u32* f = &P.flags[tid][rank * R9K_AR_MAX_BLOCKS + b];
++    if (drain >= 4) __hip_atomic_store(f, (u32)(s + 1), __ATOMIC_RELEASE, __HIP_MEMORY_SCOPE_SYSTEM);
++    else __hip_atomic_store(f, (u32)(s + 1), __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_SYSTEM);
++  }
++  if (tid < N && tid != rank) ar_wait(&P.flags[rank][tid * R9K_AR_MAX_BLOCKS + b], s + 1, acq);
++  __syncthreads();
++  ar_acquire(acq);
++
++  // 4. reduce all N in rank order, fp32 accumulate, one rounding
++  constexpr int NE = 16 / sizeof(T);
++  const uint4* own = P.scratch[rank] + base;
++  for (long i = lo + tid; i < hi; i += nt) {
++    float acc[NE];
++#pragma unroll
++    for (int e = 0; e < NE; e++) acc[e] = 0.f;
++#pragma unroll
++    for (int q = 0; q < N; q++) {
++      const uint4 c = q == rank ? in[i] : own[(long)q * slot16 + i];
++      const T* pc = (const T*)&c;
++#pragma unroll
++      for (int e = 0; e < NE; e++) acc[e] += ar_ld(pc[e]);
++    }
++    uint4 r;
++    T* pr = (T*)&r;
++#pragma unroll
++    for (int e = 0; e < NE; e++) ar_st(pr[e], acc[e]);
++    out[i] = r;
++  }
++}
++
++extern "C" int r9k_ar_max_ranks() { return R9K_AR_MAX_RANKS; }
++
++// scratch_ptrs / flag_ptrs: host arrays of `nranks` device pointers (own + opened peer mappings), indexed by rank.
++extern "C" int r9k_ar_oneshot_nrank(const long* scratch_ptrs, const long* flag_ptrs, int nranks, int rank,
++                                    long seq, long slot16, long in, long out, long numel, int dtype,
++                                    long stream, int nblocks, int nthreads, int drain, int acq) {
++  const int esz = dtype == 2 ? 4 : 2;
++  const long nbytes = numel * esz;
++  if (nbytes % 16) return -1;
++  const long n16 = nbytes / 16;
++  if (nblocks <= 0 || nblocks > R9K_AR_MAX_BLOCKS) return -2;
++  if (nranks < 2 || nranks > R9K_AR_MAX_RANKS || rank < 0 || rank >= nranks) return -5;
++  if (n16 <= 0) return 0;
++  if (n16 > slot16) return -7;
++  if (nthreads <= 0) {
++    const long per = (n16 + nblocks - 1) / nblocks;
++    long t = ((per + AR_WAVE - 1) / AR_WAVE) * AR_WAVE;
++    nthreads = (int)(t < AR_WAVE ? AR_WAVE : (t > 1024 ? 1024 : t));
++  }
++  if (nthreads < R9K_AR_MAX_RANKS) nthreads = AR_WAVE;    // the flag lanes are tid < nranks
++  if (nthreads > 1024 || nthreads % AR_WAVE) return -3;
++  if ((long)nblocks > n16) nblocks = (int)n16;
++  R9kArPeers P{};
++  for (int q = 0; q < nranks; q++) { P.scratch[q] = (uint4*)scratch_ptrs[q]; P.flags[q] = (u32*)flag_ptrs[q]; }
++  hipStream_t st = (hipStream_t)stream;
++#define ARN_LAUNCH(T, N)                                                                                   \
++  hipLaunchKernelGGL((r9k_ar_oneshot_nrank_kernel<T, N>), dim3(nblocks), dim3(nthreads), 0, st, P, rank,  \
++                     (int*)seq, slot16, (const uint4*)in, (uint4*)out, n16, drain, acq)
++#define ARN_DT(N)                                                                                          \
++  switch (dtype) {                                                                                         \
++    case 0: ARN_LAUNCH(__hip_bfloat16, N); break;                                                          \
++    case 1: ARN_LAUNCH(_Float16, N); break;                                                                \
++    case 2: ARN_LAUNCH(float, N); break;                                                                   \
++    default: return -4;                                                                                    \
++  }
++  switch (nranks) {
++    case 2: ARN_DT(2); break;
++    case 4: ARN_DT(4); break;
++    case 8: ARN_DT(8); break;
++    default: return -5;
++  }
++#undef ARN_DT
++#undef ARN_LAUNCH
++  return hipGetLastError() == hipSuccess ? 0 : -6;
++}
++
++// ---------------------------------------------------------------- two-shot N-rank all-reduce
++// Reduce-scatter then all-gather in one kernel, for messages where one-shot's (N-1)x push is bandwidth-bound:
++// each rank moves 2(N-1)/N of the input instead of (N-1)x (1.5x vs 3x at N=4). The message is cut into N
++// chunks of 16-byte words; rank c owns chunk c.
++//   1. push chunk q of our input into slot `rank` of rank q's scratch; publish 2s+1 to every peer
++//   2. wait for 2s+1 from every peer; reduce OUR chunk over all N in rank order (fp32, one rounding)
++//   3. push the reduced chunk into the gather area of every peer (and our own out); publish 2s+2
++//   4. wait for 2s+2 from every peer; copy their reduced chunks from our gather area into out
++// One flag word per (source rank, block) carries both phases: 2s+2 >= 2s+1, so a peer that is already in
++// phase 3 also satisfies a phase-1 wait. Only the chunk's owner reduces it, so all ranks hold identical bits.
++// Double buffering (s & 1) on both areas is safe by the same stream-order argument as the one-shot kernel.
++// Layout (per rank): scratch[buf][ rs: N slots of slot16 | ag: slot16 ] -- the caller sizes it 2*(N+1)*slot16.
++template <typename T, int N>
++__global__ void __launch_bounds__(1024) r9k_ar_twoshot_nrank_kernel(
++    R9kArPeers P, int rank, int* __restrict__ seq, long slot16, const uint4* __restrict__ in,
++    uint4* __restrict__ out, long n16, int drain, int acq) {
++  const int b = blockIdx.x, nb = gridDim.x, tid = threadIdx.x, nt = blockDim.x;
++  __shared__ int s_seq;
++  if (tid == 0) s_seq = seq[b]++;
++  __syncthreads();
++  const int s = s_seq;
++  const long base = (long)(s & 1) * (N + 1) * slot16;
++  const long ag = base + (long)N * slot16;
++  const long csz = (n16 + N - 1) / N;                 // words per chunk (the last one may be short)
++  const long per = (csz + nb - 1) / nb;               // this block's slice of every chunk
++  const long lo = per * b, hi = min(lo + per, csz);
++
++  // 1. scatter: chunk q -> rank q (4 words per lane per iteration so several stores are in flight per lane)
++#pragma unroll
++  for (int q = 0; q < N; q++) {
++    if (q == rank) continue;
++    const long c0 = (long)q * csz, cn = min(csz, n16 - c0), end = min(hi, cn);
++    uint4* dst = P.scratch[q] + base + (long)rank * slot16;
++    long i = lo + tid;
++    for (; i + 3 * nt < end; i += 4 * nt) {
++      const uint4 v0 = in[c0 + i], v1 = in[c0 + i + nt], v2 = in[c0 + i + 2 * nt], v3 = in[c0 + i + 3 * nt];
++      dst[i] = v0; dst[i + nt] = v1; dst[i + 2 * nt] = v2; dst[i + 3 * nt] = v3;
++    }
++    for (; i < end; i += nt) dst[i] = in[c0 + i];
++  }
++  __syncthreads();
++  if (drain < 4) ar_release(drain);
++  auto publish = [&](u32 v) {
++    if (tid < N && tid != rank) {
++      u32* f = &P.flags[tid][rank * R9K_AR_MAX_BLOCKS + b];
++      if (drain >= 4) __hip_atomic_store(f, v, __ATOMIC_RELEASE, __HIP_MEMORY_SCOPE_SYSTEM);
++      else __hip_atomic_store(f, v, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_SYSTEM);
++    }
++  };
++  publish((u32)(2 * s + 1));
++  if (tid < N && tid != rank) ar_wait(&P.flags[rank][tid * R9K_AR_MAX_BLOCKS + b], 2 * s + 1, acq);
++  __syncthreads();
++  ar_acquire(acq);
++
++  // 2+3. reduce our chunk, write it to out and to every peer's gather area
++  constexpr int NE = 16 / sizeof(T);
++  const uint4* own = P.scratch[rank] + base;
++  {
++    const long c0 = (long)rank * csz, cn = min(csz, n16 - c0);
++    for (long i = lo + tid; i < min(hi, cn); i += nt) {
++      float acc[NE];
++#pragma unroll
++      for (int e = 0; e < NE; e++) acc[e] = 0.f;
++#pragma unroll
++      for (int q = 0; q < N; q++) {
++        const uint4 c = q == rank ? in[c0 + i] : own[(long)q * slot16 + i];
++        const T* pc = (const T*)&c;
++#pragma unroll
++        for (int e = 0; e < NE; e++) acc[e] += ar_ld(pc[e]);
++      }
++      uint4 r;
++      T* pr = (T*)&r;
++#pragma unroll
++      for (int e = 0; e < NE; e++) ar_st(pr[e], acc[e]);
++      out[c0 + i] = r;
++#pragma unroll
++      for (int q = 0; q < N; q++)
++        if (q != rank) P.scratch[q][ag + c0 + i] = r;   // gather area is indexed by global word
++    }
++  }
++  __syncthreads();
++  if (drain < 4) ar_release(drain);
++  publish((u32)(2 * s + 2));
++  if (tid < N && tid != rank) ar_wait(&P.flags[rank][tid * R9K_AR_MAX_BLOCKS + b], 2 * s + 2, acq);
++  __syncthreads();
++  ar_acquire(acq);
++
++  // 4. collect the peers' reduced chunks
++  const uint4* gat = P.scratch[rank] + ag;
++#pragma unroll
++  for (int q = 0; q < N; q++) {
++    if (q == rank) continue;
++    const long c0 = (long)q * csz, cn = min(csz, n16 - c0);
++    for (long i = lo + tid; i < min(hi, cn); i += nt) out[c0 + i] = gat[c0 + i];
++  }
++}
++
++// Same arguments as r9k_ar_oneshot_nrank; scratch must be 2*(nranks+1)*slot16 words and the flag values are
++// NOT compatible with the one-shot kernel's, so the two need separate seq counters AND separate flag arrays.
++extern "C" int r9k_ar_twoshot_nrank(const long* scratch_ptrs, const long* flag_ptrs, int nranks, int rank,
++                                    long seq, long slot16, long in, long out, long numel, int dtype,
++                                    long stream, int nblocks, int nthreads, int drain, int acq) {
++  const int esz = dtype == 2 ? 4 : 2;
++  const long nbytes = numel * esz;
++  if (nbytes % 16) return -1;
++  const long n16 = nbytes / 16;
++  if (nblocks <= 0 || nblocks > R9K_AR_MAX_BLOCKS) return -2;
++  if (nranks < 2 || nranks > R9K_AR_MAX_RANKS || rank < 0 || rank >= nranks) return -5;
++  if (n16 <= 0) return 0;
++  if (n16 > slot16) return -7;
++  const long csz = (n16 + nranks - 1) / nranks;
++  if (nthreads <= 0) {
++    const long per = (csz + nblocks - 1) / nblocks;
++    long t = ((per + AR_WAVE - 1) / AR_WAVE) * AR_WAVE;
++    nthreads = (int)(t < AR_WAVE ? AR_WAVE : (t > 1024 ? 1024 : t));
++  }
++  if (nthreads > 1024 || nthreads % AR_WAVE) return -3;
++  if ((long)nblocks > csz) nblocks = (int)csz;
++  R9kArPeers P{};
++  for (int q = 0; q < nranks; q++) { P.scratch[q] = (uint4*)scratch_ptrs[q]; P.flags[q] = (u32*)flag_ptrs[q]; }
++  hipStream_t st = (hipStream_t)stream;
++#define ARN_LAUNCH(T, N)                                                                                   \
++  hipLaunchKernelGGL((r9k_ar_twoshot_nrank_kernel<T, N>), dim3(nblocks), dim3(nthreads), 0, st, P, rank,  \
++                     (int*)seq, slot16, (const uint4*)in, (uint4*)out, n16, drain, acq)
++#define ARN_DT(N)                                                                                          \
++  switch (dtype) {                                                                                         \
++    case 0: ARN_LAUNCH(__hip_bfloat16, N); break;                                                          \
++    case 1: ARN_LAUNCH(_Float16, N); break;                                                                \
++    case 2: ARN_LAUNCH(float, N); break;                                                                   \
++    default: return -4;                                                                                    \
++  }
++  switch (nranks) {
++    case 2: ARN_DT(2); break;
++    case 4: ARN_DT(4); break;
++    case 8: ARN_DT(8); break;
++    default: return -5;
++  }
++#undef ARN_DT
++#undef ARN_LAUNCH
++  return hipGetLastError() == hipSuccess ? 0 : -6;
++}
+diff --git a/r9700_vllm/comm/r4d_ar.py b/r9700_vllm/comm/r4d_ar.py
+index c2d7b6a..2330d99 100644
+--- a/r9700_vllm/comm/r4d_ar.py
++++ b/r9700_vllm/comm/r4d_ar.py
+@@ -138,8 +138,16 @@ class R9kCommunicator(CudaCommunicator):
+             return
+         try:
+             from ..moe.experts import r9k_available
+-            if "tp" in (getattr(self, "unique_name", "") or "") and getattr(self, "world_size", 1) == 2 \
+-                    and r9k_available():
++            ws = getattr(self, "world_size", 1)
++            if "tp" in (getattr(self, "unique_name", "") or "") and ws > 2 and r9k_available() \
++                    and os.environ.get("R9K_ARN", "1") == "1":
++                # TP=4: one-shot N-rank P2P for decode-sized messages (5x lower latency than RCCL at 20 KB);
++                # larger messages fall through to RCCL, whose ring moves fewer bytes per rank.
++                from .r9k_ar import R9kAllReduceN
++                ar = R9kAllReduceN(self.cpu_group, self.device)
++                if not ar.disabled:
++                    self._r9k_ar = ar
++            elif "tp" in (getattr(self, "unique_name", "") or "") and ws == 2 and r9k_available():
+                 # Ours is the default (kernels/r9k_ar.hip + r9k_ar_wht.hip, no libr4d). R9K_AR_IMPL=r4d keeps
+                 # libr4d's for A/B. Together with R9K_PAGED_ATTN=r9k this makes the default configuration
+                 # free of libr4d at runtime -- r4d.so is not loaded at all. Costs ~6% prefill against libr4d's
+diff --git a/r9700_vllm/comm/r9k_ar.py b/r9700_vllm/comm/r9k_ar.py
+index 8f589e5..07cf5a4 100644
+--- a/r9700_vllm/comm/r9k_ar.py
++++ b/r9700_vllm/comm/r9k_ar.py
+@@ -210,3 +210,150 @@ class R9kAllReduce:
+         if rc:
+             raise RuntimeError(f"r9k_wht_reduce_at failed ({rc})")
+         return out
++
++
++class R9kAllReduceN:
++    """P2P all-reduce for TP > 2 (kernels/r9k_ar.hip), same contract as R9kAllReduce. Exact only.
++
++    Three regimes by message size, measured 2026-09-24 on 4x R9700 (two PEX 8747 switches), bf16, HIP graphs
++    (tests/test_ar_nrank.py):
++      <= R9K_ARN_1S_KB  one-shot: every rank pushes its whole input to every peer, one handshake. Latency-optimal
++                        (20 KB: 13.4 us vs RCCL 72.9) but moves (N-1)x the bytes, so it loses above ~190 KB.
++      <= R9K_ARN_MAX_KB two-shot: reduce-scatter + all-gather in one kernel, 2(N-1)/N the bytes, two handshakes.
++      larger            RCCL.
++    Graph-timed, us (tokens x 2560 bf16):  rccl / one-shot / two-shot
++       1 tok    5 KB    59.2 /   6.8 /   9.7
++       4 tok   20 KB    72.6 /  13.4 /  11.3
++      16 tok   80 KB    71.2 /  37.2 /  24.2
++      64 tok  320 KB   102.0 / 130.4 /  73.2
++     128 tok  640 KB   142.1 / 252.0 / 139.9
++    1024 tok    5 MB   770.1 /1965.3 /1140.7   (the switch uplinks are the limit; RCCL's ring spreads it better)"""
++
++    def __init__(self, group, device):
++        self.disabled = True
++        self.world_size = dist.get_world_size(group)
++        self.rank = dist.get_rank(group)
++        L = _lib()
++        if not hasattr(L, "r9k_ar_oneshot_nrank"):
++            logger.warning("r9700: libr9k.so has no r9k_ar_oneshot_nrank; TP=%d stays on RCCL", self.world_size)
++            return
++        L.r9k_ar_max_ranks.restype = ctypes.c_int
++        if self.world_size not in (2, 4, 8) or self.world_size > L.r9k_ar_max_ranks():
++            return
++        at = [ctypes.POINTER(ctypes.c_long)] * 2 + [ctypes.c_int, ctypes.c_int] + \
++            [ctypes.c_long] * 5 + [ctypes.c_int, ctypes.c_long] + [ctypes.c_int] * 4
++        for fn in ("r9k_ar_oneshot_nrank", "r9k_ar_twoshot_nrank"):
++            if hasattr(L, fn):
++                getattr(L, fn).restype = ctypes.c_int
++                getattr(L, fn).argtypes = at
++        self.L = L
++        self.device = torch.device(f"cuda:{device}") if isinstance(device, int) else device
++        torch.cuda.set_device(self.device)
++        kb = lambda k, d: (int(float(os.environ.get(k, d)) * 1024) // 16) * 16
++        self.max1 = kb("R9K_ARN_1S_KB", "16")
++        self.max_bytes = max(self.max1, kb("R9K_ARN_MAX_KB", "512")) if hasattr(L, "r9k_ar_twoshot_nrank") \
++            else self.max1
++        self.max_nb = min(int(os.environ.get("R9K_ARN_MAX_BLOCKS", "16")), L.r9k_ar_max_blocks())
++        self.words_per_block = int(os.environ.get("R9K_ARN_WPB", "512"))
++        self.min_nb = int(os.environ.get("R9K_ARN_MIN_BLOCKS", "2"))
++        self.max_nb2 = min(int(os.environ.get("R9K_ARN2_MAX_BLOCKS", "64")), L.r9k_ar_max_blocks())
++        self.words_per_block2 = int(os.environ.get("R9K_ARN2_WPB", "1024"))
++        N = self.world_size
++        self.slot1 = self.max1 // 16
++        self.slot2 = self.max_bytes // 16
++        one = self._share(group, 2 * N * self.max1, N * L.r9k_ar_max_blocks() * 4)
++        two = self._share(group, 2 * (N + 1) * self.max_bytes, N * L.r9k_ar_max_blocks() * 4) \
++            if self.max_bytes > self.max1 else None
++        if one is None or (self.max_bytes > self.max1 and two is None):
++            logger.warning("r9700: r9k N-rank all-reduce IPC setup failed; staying on RCCL")
++            return
++        self._sp, self._fp = one
++        self._sp2, self._fp2 = two or (None, None)
++        self._seq = torch.zeros(L.r9k_ar_max_blocks(), dtype=torch.int32, device=self.device)
++        self._seq2 = torch.zeros(L.r9k_ar_max_blocks(), dtype=torch.int32, device=self.device)
++        self.drain, self.acq = 4, 2
++        if os.environ.get("R9K_AR_FENCE"):
++            self.drain, self.acq = (int(v) for v in os.environ["R9K_AR_FENCE"].split(",")[:2])
++        # Prefill-sized messages: the compressed hierarchical path (comm/r9k_ar4.py), which beats RCCL's ring 2.2x
++        # at 4 bits / 1.6x at 6 bits (tests/test_ar4.py); the exact kernels cannot on this topology. Default since
++        # 2026-09-25 on two null paired evals at conc=1 (300 short: 96.67 -> 96.00%, p=0.69; 800 chain-of-thought:
++        # 97.62 -> 97.62%, 1/1 discordant, p=1.0, 75% of outputs token-identical). R9K_AR4=0 keeps RCCL.
++        # Its constructor is collective (all ranks must take the same branch): R9K_AR4 is read on every rank.
++        self.ar4 = None
++        if N == 4 and os.environ.get("R9K_AR4", "1") == "1":
++            from .r9k_ar4 import R9kAllReduce4
++            a4 = R9kAllReduce4(group, device)
++            if not a4.disabled:
++                self.ar4 = a4
++        self.disabled = False
++        logger.info("r9700: r9k %d-rank P2P all-reduce installed (rank %d, one-shot <= %d KiB, two-shot <= %d KiB%s)",
++                    N, self.rank, self.max1 >> 10, self.max_bytes >> 10,
++                    f", compressed {self.ar4.bits}-bit above" if self.ar4 is not None else "")
++
++    def _share(self, group, scratch_bytes, flag_bytes):
++        """Allocate fine-grained scratch + flags, exchange IPC handles, open every peer's. Collective."""
++        L, N = self.L, self.world_size
++        hsz = L.r9k_ar_ipc_handle_size()
++
++        def alloc(nbytes):
++            ptr, h = ctypes.c_long(0), (ctypes.c_char * hsz)()
++            rc = L.r9k_ar_ipc_alloc(nbytes, 1, ctypes.byref(ptr), ctypes.byref(h))
++            return (ptr.value, bytes(h)) if rc == 0 else (None, None)
++
++        scratch, sh = alloc(scratch_bytes)
++        flags, fh = alloc(flag_bytes)
++        oks = [None] * N
++        dist.all_gather_object(oks, scratch is not None and flags is not None, group=group)
++        if not all(oks):
++            return None
++        shs, fhs = [None] * N, [None] * N
++        dist.all_gather_object(shs, sh, group=group)
++        dist.all_gather_object(fhs, fh, group=group)
++        sp, fp, good = [0] * N, [0] * N, True
++        for q in range(N):
++            if q == self.rank:
++                sp[q], fp[q] = scratch, flags
++                continue
++            ps, pf = ctypes.c_long(0), ctypes.c_long(0)
++            if L.r9k_ar_ipc_open(shs[q], ctypes.byref(ps)) or L.r9k_ar_ipc_open(fhs[q], ctypes.byref(pf)):
++                good = False
++                break
++            sp[q], fp[q] = ps.value, pf.value
++        goods = [None] * N
++        dist.all_gather_object(goods, good, group=group)
++        if not all(goods):
++            return None
++        return (ctypes.c_long * N)(*sp), (ctypes.c_long * N)(*fp)
++
++    def should(self, x: torch.Tensor) -> bool:
++        if self.disabled or x.dtype not in _DTYPE or not x.is_contiguous():
++            return False
++        n = x.numel() * x.element_size()
++        if n > self.max_bytes:
++            return self.ar4 is not None and self.ar4.should(x)
++        return 0 < n <= self.max_bytes and n % 16 == 0
++
++    def nblocks(self, nbytes: int, two: bool = False) -> int:
++        if two:
++            c16 = nbytes // 16 // self.world_size
++            return max(1, min(max(self.min_nb, min(self.max_nb2, c16 // self.words_per_block2)), max(c16, 1)))
++        n16 = nbytes // 16
++        return max(1, min(max(self.min_nb, min(self.max_nb, n16 // self.words_per_block)), n16))
++
++    def all_reduce(self, x: torch.Tensor, nb: int | None = None, nt: int = 0, mode: int | None = None) -> torch.Tensor:
++        """mode: None = by size, 1 = force one-shot, 2 = force two-shot (tests/benchmarks)."""
++        nbytes = x.numel() * x.element_size()
++        if mode is None and nbytes > self.max_bytes:
++            return self.ar4.all_reduce(x)
++        out = torch.empty_like(x)
++        two = (nbytes > self.max1) if mode is None else mode == 2
++        if two:
++            fn, sp, fp, seq, slot = self.L.r9k_ar_twoshot_nrank, self._sp2, self._fp2, self._seq2, self.slot2
++        else:
++            fn, sp, fp, seq, slot = self.L.r9k_ar_oneshot_nrank, self._sp, self._fp, self._seq, self.slot1
++        rc = fn(sp, fp, self.world_size, self.rank, seq.data_ptr(), slot, x.data_ptr(), out.data_ptr(),
++                x.numel(), _DTYPE[x.dtype], torch.cuda.current_stream().cuda_stream,
++                nb or self.nblocks(nbytes, two), nt, self.drain, self.acq)
++        if rc:
++            raise RuntimeError(f"r9k_ar_{'two' if two else 'one'}shot_nrank failed ({rc})")
++        return out
+

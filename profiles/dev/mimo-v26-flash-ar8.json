@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "name": "mimo-v26-flash",
-  "status": "production-ready",
-  "description": "MiMo-V2.6-Flash-RL TP8 deployment on eight R9700 GPUs with ROCm DiffKV, DFlash K7, staged native MXFP4 MoE prefill, exact TP8 P2P all-reduce and BF16 prefix caching",
+  "name": "mimo-v26-flash-ar8",
+  "status": "development",
+  "description": "Isolated MiMo-V2.6-Flash-RL TP8 A/B profile with exact RDNA4 N-rank P2P all-reduce for decode-sized messages",
   "model": {
     "schema_version": 1,
     "name": "mimo-v2.6-flash-rl",
@@ -62,9 +62,9 @@
   "runtime": {
     "schema_version": 1,
     "name": "mimo-v26-flash-r9700stack-rocm10-8xr9700-tp8-c2-dflash-k7-moe-prefill-ar8",
-    "status": "production-ready",
+    "status": "development",
     "recipe": "vllm_mimov26r9700ar8_v0.1",
-    "description": "TP8 runtime with tuned gfx1201 Triton DiffKV and bitwise-safe W8A8 GEMMs, DFlash K7 verify, staged native MXFP4xFP8 MoE prefill, BF16 APC and exact gfx1201 P2P all-reduce up to 256 KiB with RCCL fallback",
+    "description": "TP8 runtime matching production except for exact gfx1201 N-rank P2P all-reduce up to 256 KiB with RCCL fallback above the threshold",
     "required_model_family": "mimo_v2",
     "required_patches": [
       "0001",
@@ -171,7 +171,7 @@
     "hardware_topology": {
       "captured_on": "2026-09-27",
       "motherboard": "ASUS Pro WS WRX90E-SAGE SE",
-      "note": "Eight gfx1201 devices in ROCm order 0-7; exact N-rank P2P all-reduce handles TP8 messages up to 256 KiB and falls back to RCCL above that threshold."
+      "note": "Eight gfx1201 devices in ROCm order 0-7; experimental exact N-rank P2P all-reduce handles TP8 messages up to 256 KiB and falls back to RCCL above that."
     }
   },
   "stack": {
@@ -206,8 +206,8 @@
     }
   },
   "verification": {
-    "scope": "production-benchmarked",
+    "scope": "experimental-ar8-ab",
     "verified_context": 131072,
-    "notes": "Original Xiaomi weights and scales; ROCm DiffKV+DFlash K7, BF16 KV/APC, native libr9k MXFP4xFP8 experts with the gfx1201 staged prefill epilogue, exact TP8 P2P all-reduce up to 256 KiB, Qwen3/MiMo streaming parser recovery and the adaptive LiteLLM tool-call guard are active. Direct and LiteLLM generation, streaming, image input, 32K/128K tool calls, 32K C1/C2/C4 throughput, cold 32K/128K MoE prefill A/B and the TP8 all-reduce A/B passed. FP8 KV remains disabled because uncalibrated E4M3 scales caused a large prefill regression."
+    "notes": "Isolated A/B candidate. It keeps the production MiMo model, DFlash K7, DiffKV, BF16 KV/APC and MoE prefill path unchanged, and changes only TP8 collectives for messages up to 256 KiB. Standalone eight-rank exactness and HIP Graph replay passed before model integration."
   }
 }

@@ -24,6 +24,18 @@
       "backend": "vllm",
       "path": "manifest/vllm_mimov26r9700_v0.1.json",
       "install_path": ".runtime/recipes/vllm_mimov26r9700_v0.1/install.json",
+      "smoke_profile": "profiles/dev/mimo-v26-flash-baseline.json"
+    },
+    "vllm_mimov26r9700moeprefill_v0.1": {
+      "backend": "vllm",
+      "path": "manifest/vllm_mimov26r9700moeprefill_v0.1.json",
+      "install_path": ".runtime/recipes/vllm_mimov26r9700moeprefill_v0.1/install.json",
+      "smoke_profile": "mimo-v26-flash"
+    },
+    "vllm_mimov26r9700ar8_v0.1": {
+      "backend": "vllm",
+      "path": "manifest/vllm_mimov26r9700ar8_v0.1.json",
+      "install_path": ".runtime/recipes/vllm_mimov26r9700ar8_v0.1/install.json",
       "smoke_profile": "mimo-v26-flash"
     },
     "vllm_glm53flashrocm10_v0.29": {
