@@ -111,14 +111,14 @@ class FakeChunk:
 
 
 class FakeResponse:
-    def __init__(self, chunks: list[FakeChunk]) -> None:
+    def __init__(self, chunks: list[Any]) -> None:
         self.chunks = iter(chunks)
         self.aclose_calls = 0
 
     def __aiter__(self) -> "FakeResponse":
         return self
 
-    async def __anext__(self) -> FakeChunk:
+    async def __anext__(self) -> Any:
         try:
             return next(self.chunks)
         except StopIteration as error:
@@ -169,6 +169,99 @@ def request_data() -> dict[str, Any]:
         "model": "mimo-v2.6-flash",
         "tools": [{"type": "function", "function": {"name": "Read"}}],
     }
+
+
+def sse_event(event: str, payload: dict[str, Any]) -> bytes:
+    data = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    return f"event: {event}\ndata: {data}\n\n".encode()
+
+
+def sse_message_start() -> bytes:
+    return sse_event(
+        "message_start",
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg-test",
+                "type": "message",
+                "role": "assistant",
+                "model": "mimo-v2.6-flash-mopd",
+                "content": [],
+                "stop_reason": None,
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 0},
+            },
+        },
+    )
+
+
+def sse_tool(index: int, name: str, tool_id: str, arguments: str) -> list[bytes]:
+    midpoint = max(1, len(arguments) // 2)
+    return [
+        sse_event(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": index,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": tool_id,
+                    "name": name,
+                    "input": {},
+                },
+            },
+        ),
+        sse_event(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": index,
+                "delta": {
+                    "type": "input_json_delta",
+                    "partial_json": arguments[:midpoint],
+                },
+            },
+        ),
+        sse_event(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": index,
+                "delta": {
+                    "type": "input_json_delta",
+                    "partial_json": arguments[midpoint:],
+                },
+            },
+        ),
+        sse_event(
+            "content_block_stop",
+            {"type": "content_block_stop", "index": index},
+        ),
+    ]
+
+
+def sse_finish() -> list[bytes]:
+    return [
+        sse_event(
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+                "usage": {"output_tokens": 1},
+            },
+        ),
+        sse_event("message_stop", {"type": "message_stop"}),
+    ]
+
+
+def sse_events(chunks: list[Any]) -> list[dict[str, Any]]:
+    raw = b"".join(chunk for chunk in chunks if isinstance(chunk, bytes))
+    events = []
+    for frame in raw.split(b"\n\n"):
+        for line in frame.splitlines():
+            if line.startswith(b"data: "):
+                events.append(json.loads(line.removeprefix(b"data: ")))
+    return events
 
 
 async def collect(response: FakeResponse) -> list[FakeChunk]:
@@ -466,6 +559,150 @@ class AdaptiveToolStreamTests(unittest.IsolatedAsyncioTestCase):
         first = await anext(guarded)
         self.assertEqual(first.choices[0].delta.content, "before")
         await guarded.aclose()
+        self.assertEqual(source.aclose_calls, 1)
+
+
+class AnthropicSSEToolStreamTests(unittest.IsolatedAsyncioTestCase):
+    async def collect_raw(self, chunks: list[Any]) -> tuple[FakeResponse, list[Any]]:
+        source = FakeResponse(chunks)
+        output = [
+            chunk
+            async for chunk in adaptive_tool_stream(source, request_data())
+        ]
+        return source, output
+
+    async def test_text_only_sse_is_byte_for_byte_unchanged(self) -> None:
+        wire = b"".join(
+            [
+                sse_message_start(),
+                sse_event(
+                    "content_block_start",
+                    {
+                        "type": "content_block_start",
+                        "index": 0,
+                        "content_block": {"type": "text", "text": ""},
+                    },
+                ),
+                sse_event(
+                    "content_block_delta",
+                    {
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": {"type": "text_delta", "text": "zażółć"},
+                    },
+                ),
+                sse_event(
+                    "content_block_stop",
+                    {"type": "content_block_stop", "index": 0},
+                ),
+                *sse_finish(),
+            ]
+        )
+        chunks = [wire[:17], wire[17:91], wire[91:]]
+
+        source, output = await self.collect_raw(chunks)
+
+        self.assertEqual(b"".join(output), wire)
+        self.assertEqual(source.aclose_calls, 0)
+
+    async def test_fragmented_mutable_call_is_retained_once(self) -> None:
+        wire = b"".join(
+            [
+                sse_message_start(),
+                *sse_tool(0, "Bash", "tool-a", '{"command":"true"}'),
+                *sse_tool(1, "Bash", "tool-b", '{"command":"false"}'),
+                *sse_finish(),
+            ]
+        )
+        chunks = [wire[offset : offset + 23] for offset in range(0, len(wire), 23)]
+
+        source, output = await self.collect_raw(chunks)
+        events = sse_events(output)
+
+        starts = [
+            event
+            for event in events
+            if event.get("type") == "content_block_start"
+            and event.get("content_block", {}).get("type") == "tool_use"
+        ]
+        self.assertEqual([event["content_block"]["id"] for event in starts], ["tool-a"])
+        self.assertEqual(events[-2]["delta"]["stop_reason"], "tool_use")
+        self.assertEqual(events[-1]["type"], "message_stop")
+        self.assertEqual(source.aclose_calls, 1)
+
+    async def test_fifth_read_is_not_emitted(self) -> None:
+        chunks: list[bytes] = [sse_message_start()]
+        for index in range(5):
+            chunks.extend(
+                sse_tool(
+                    index,
+                    "Read",
+                    f"tool-{index}",
+                    json.dumps({"file_path": str(index)}),
+                )
+            )
+        chunks.extend(sse_finish())
+
+        source, output = await self.collect_raw(chunks)
+        events = sse_events(output)
+        starts = [
+            event
+            for event in events
+            if event.get("type") == "content_block_start"
+            and event.get("content_block", {}).get("type") == "tool_use"
+        ]
+
+        self.assertEqual(len(starts), 4)
+        self.assertEqual(source.aclose_calls, 1)
+
+    async def test_duplicate_read_is_suppressed(self) -> None:
+        chunks = [
+            sse_message_start(),
+            *sse_tool(0, "Read", "tool-a", '{"file_path":"README.md"}'),
+            *sse_tool(1, "Read", "tool-b", '{"file_path":"README.md"}'),
+            *sse_finish(),
+        ]
+
+        source, output = await self.collect_raw(chunks)
+        events = sse_events(output)
+        starts = [
+            event
+            for event in events
+            if event.get("type") == "content_block_start"
+            and event.get("content_block", {}).get("type") == "tool_use"
+        ]
+
+        self.assertEqual([event["content_block"]["id"] for event in starts], ["tool-a"])
+        self.assertEqual(source.aclose_calls, 1)
+
+    async def test_malformed_arguments_fail_closed(self) -> None:
+        chunks = [
+            sse_message_start(),
+            *sse_tool(0, "Read", "tool-a", "{broken"),
+            *sse_finish(),
+        ]
+
+        source, output = await self.collect_raw(chunks)
+        events = sse_events(output)
+
+        self.assertFalse(
+            any(
+                event.get("type") == "content_block_start"
+                and event.get("content_block", {}).get("type") == "tool_use"
+                for event in events
+            )
+        )
+        self.assertEqual(events[-2]["delta"]["stop_reason"], "end_turn")
+        self.assertEqual(source.aclose_calls, 1)
+
+    async def test_client_close_propagates_to_raw_upstream(self) -> None:
+        source = FakeResponse([sse_message_start(), *sse_finish()])
+        guarded = adaptive_tool_stream(source, request_data())
+
+        first = await anext(guarded)
+        self.assertEqual(first, sse_message_start())
+        await guarded.aclose()
+
         self.assertEqual(source.aclose_calls, 1)
 
 

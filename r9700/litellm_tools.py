@@ -10,6 +10,8 @@ GLM53_MODEL_NAMES = frozenset(
     }
 )
 QWEN38_MODEL_PREFIXES = ("qwen3.8-flash-next", "qwen3.8-27b-worker")
+MIMO_MODEL_FRAGMENT = "mimo-v2.6-flash"
+MIMO_MAX_OUTPUT_TOKENS = 32000
 
 
 def local_anthropic_count_tokens_endpoint(api_base: str) -> str:
@@ -29,6 +31,31 @@ def _is_qwen38_model(value: Any) -> bool:
     for provider in ("anthropic/", "hosted_vllm/", "openai/"):
         name = name.removeprefix(provider)
     return name.startswith(QWEN38_MODEL_PREFIXES)
+
+
+def _is_mimo_model(value: Any) -> bool:
+    return isinstance(value, str) and MIMO_MODEL_FRAGMENT in value.lower()
+
+
+def limit_mimo_output_tokens(data: dict[str, Any]) -> dict[str, Any]:
+    """Bound unusually long MiMo generations without changing normal calls."""
+    if not _is_mimo_model(data.get("model")):
+        return data
+
+    updates: dict[str, int] = {}
+    for key in ("max_tokens", "max_completion_tokens"):
+        value = data.get(key)
+        if (
+            isinstance(value, int)
+            and not isinstance(value, bool)
+            and value > MIMO_MAX_OUTPUT_TOKENS
+        ):
+            updates[key] = MIMO_MAX_OUTPUT_TOKENS
+    if not updates:
+        return data
+    updated = dict(data)
+    updated.update(updates)
+    return updated
 
 
 def normalize_qwen38_reasoning_effort(data: dict[str, Any]) -> dict[str, Any]:

@@ -14,6 +14,7 @@ from r9700.litellm_tool_guard import (
 )
 from r9700.litellm_tools import (
     enforce_glm53_strict_tools,
+    limit_mimo_output_tokens,
     local_anthropic_count_tokens_endpoint,
     normalize_qwen38_reasoning_effort,
 )
@@ -41,7 +42,8 @@ class LocalRequestNormalizationHook(CustomLogger):
         data: dict[str, Any],
         call_type: str,
     ) -> dict[str, Any]:
-        normalized = normalize_qwen38_reasoning_effort(data)
+        normalized = limit_mimo_output_tokens(data)
+        normalized = normalize_qwen38_reasoning_effort(normalized)
         return enforce_glm53_strict_tools(normalized)
 
     async def async_pre_call_deployment_hook(
@@ -52,7 +54,8 @@ class LocalRequestNormalizationHook(CustomLogger):
         # Native Anthropic requests are converted to chat completions after the
         # proxy pre-call hook. Normalize again at the deployment boundary,
         # where reasoning_effort is present and the provider model is selected.
-        return normalize_qwen38_reasoning_effort(kwargs)
+        normalized = limit_mimo_output_tokens(kwargs)
+        return normalize_qwen38_reasoning_effort(normalized)
 
     async def async_post_call_streaming_iterator_hook(
         self,

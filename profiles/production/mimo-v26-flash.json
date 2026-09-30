@@ -2,19 +2,18 @@
   "schema_version": 1,
   "name": "mimo-v26-flash",
   "status": "production-ready",
-  "description": "MiMo-V2.6-Flash-RL TP8 deployment on eight R9700 GPUs with ROCm DiffKV, DFlash K7, staged native MXFP4 MoE prefill, exact TP8 P2P all-reduce and BF16 prefix caching",
+  "description": "MiMo-V2.6-Flash-MOPD TP8 deployment on eight R9700 GPUs with ROCm DiffKV, DFlash K7, staged native MXFP4 MoE prefill, exact TP8 P2P all-reduce and BF16 prefix caching",
   "model": {
     "schema_version": 1,
-    "name": "mimo-v2.6-flash-rl",
+    "name": "mimo-v2.6-flash-mopd",
     "family": "mimo_v2",
     "format": "safetensors",
-    "repository": "XiaomiMiMo/MiMo-V2.6-Flash-RL",
-    "revision": "5711b268169967567844e1e560e8a3966da959b1",
-    "source_profile_sha256": "f4e5aff981e358d2fa82e2776acf36dd4d8e1817af617cd859ad153cee4707c3",
-    "default_directory": "/home/ea/models/mimo/MiMo-V2.6-Flash-RL",
+    "repository": "XiaomiMiMo/MiMo-V2.6-Flash-MOPD",
+    "revision": "2479e2d0029eca9a34cc7e7f55a121925f81908e",
+    "default_directory": "/home/ea/models/mimo/MiMo-V2.6-Flash-MOPD",
     "directory_environment": "MODEL_DIR",
-    "served_name": "mimo-v2.6-flash",
-    "expected_shards": 65,
+    "served_name": "mimo-v2.6-flash-mopd",
+    "expected_shards": 129,
     "weight_pattern": "model*.safetensors",
     "checkpoint_weight_bytes": 172923364096,
     "required_files": [
@@ -42,10 +41,10 @@
     "auxiliary_artifacts": [
       {
         "name": "dflash-drafter",
-        "repository": "XiaomiMiMo/MiMo-V2.6-Flash-RL",
-        "revision": "5711b268169967567844e1e560e8a3966da959b1",
+        "repository": "XiaomiMiMo/MiMo-V2.6-Flash-MOPD",
+        "revision": "2479e2d0029eca9a34cc7e7f55a121925f81908e",
         "filename": "dflash_draft_model.safetensors",
-        "path": "/home/ea/models/mimo/MiMo-V2.6-Flash-RL/dflash/dflash_draft_model.safetensors",
+        "path": "/home/ea/models/mimo/MiMo-V2.6-Flash-MOPD/dflash/dflash_draft_model.safetensors",
         "size_bytes": 2936121080,
         "sha256": "94d9c02c17e0b469f88699e98424825ebe13a17f07eb3b86727b5e0c8143d287"
       }
@@ -57,11 +56,16 @@
       "enable_auto_tool_choice": true,
       "trust_remote_code": true,
       "language_model_only": false
+    },
+    "source_evidence": {
+      "kind": "huggingface_tree",
+      "path": ".cache/huggingface/trees/2479e2d0029eca9a34cc7e7f55a121925f81908e.json",
+      "sha256": "d334ef6f35b93537f13f444785f3dc06fe023bc50e99eeb5495ef1c58468c7bd"
     }
   },
   "runtime": {
     "schema_version": 1,
-    "name": "mimo-v26-flash-r9700stack-rocm10-8xr9700-tp8-c2-dflash-k7-moe-prefill-ar8",
+    "name": "mimo-v26-flash-mopd-r9700stack-rocm10-8xr9700-tp8-c2-dflash-k7-moe-prefill-ar8",
     "status": "production-ready",
     "recipe": "vllm_mimov26r9700ar8_v0.1",
     "description": "TP8 runtime with tuned gfx1201 Triton DiffKV and bitwise-safe W8A8 GEMMs, DFlash K7 verify, staged native MXFP4xFP8 MoE prefill, BF16 APC and exact gfx1201 P2P all-reduce up to 256 KiB with RCCL fallback",
@@ -175,7 +179,7 @@
     }
   },
   "stack": {
-    "description": "MiMo-V2.6-Flash-RL OpenAI endpoint and Claude Code alias",
+    "description": "MiMo-V2.6-Flash-MOPD OpenAI endpoint exposed through the stable Claude Code alias",
     "litellm_aliases": [
       "mimo-v2.6-flash"
     ],
@@ -208,6 +212,6 @@
   "verification": {
     "scope": "production-benchmarked",
     "verified_context": 131072,
-    "notes": "Original Xiaomi weights and scales; ROCm DiffKV+DFlash K7, BF16 KV/APC, native libr9k MXFP4xFP8 experts with the gfx1201 staged prefill epilogue, exact TP8 P2P all-reduce up to 256 KiB, Qwen3/MiMo streaming parser recovery and the adaptive LiteLLM tool-call guard are active. Direct and LiteLLM generation, streaming, image input, 32K/128K tool calls, 32K C1/C2/C4 throughput, cold 32K/128K MoE prefill A/B and the TP8 all-reduce A/B passed. FP8 KV remains disabled because uncalibrated E4M3 scales caused a large prefill regression."
+    "notes": "Pinned Xiaomi MOPD weights and original scales; ROCm DiffKV+DFlash K7, BF16 KV/APC, native libr9k MXFP4xFP8 experts with the gfx1201 staged prefill epilogue, exact TP8 P2P all-reduce up to 256 KiB, Qwen3/MiMo streaming parser recovery and the adaptive LiteLLM tool-call guard are active. Direct API identity and usage, LiteLLM basic/streaming/two-turn tool use, 20/20 unguarded direct streaming tool calls, repeated 128-to-512 and 32K-to-256 C1 benchmarks, and a 128K context gate passed. FP8 KV remains disabled because uncalibrated E4M3 scales caused a large prefill regression."
   }
 }

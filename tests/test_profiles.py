@@ -28,6 +28,7 @@ from r9700.install import (
 )
 from r9700.litellm_tools import (
     enforce_glm53_strict_tools,
+    limit_mimo_output_tokens,
     local_anthropic_count_tokens_endpoint,
     normalize_qwen38_reasoning_effort,
 )
@@ -80,8 +81,12 @@ class ProductionProfileTests(unittest.TestCase):
         model = profile["model"]
         runtime = profile["runtime"]
 
-        self.assertEqual(model["served_name"], "mimo-v2.6-flash")
-        self.assertEqual(model["expected_shards"], 65)
+        self.assertEqual(model["served_name"], "mimo-v2.6-flash-mopd")
+        self.assertEqual(model["repository"], "XiaomiMiMo/MiMo-V2.6-Flash-MOPD")
+        self.assertEqual(
+            model["revision"], "2479e2d0029eca9a34cc7e7f55a121925f81908e"
+        )
+        self.assertEqual(model["expected_shards"], 129)
         self.assertEqual(model["checkpoint_weight_bytes"], 172923364096)
         self.assertTrue(model["supports_mtp"])
         self.assertTrue(model["supports_dflash"])
@@ -182,7 +187,7 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(speculative_value["num_speculative_tokens"], 7)
         self.assertEqual(
             speculative_value["model"],
-            "/home/ea/models/mimo/MiMo-V2.6-Flash-RL/dflash",
+            "/home/ea/models/mimo/MiMo-V2.6-Flash-MOPD/dflash",
         )
 
     def test_mimo_v26_rollback_profile_disables_measured_optimizations(self) -> None:
@@ -219,9 +224,16 @@ class ProductionProfileTests(unittest.TestCase):
         self.assertEqual(model["expected_shards"], 129)
         self.assertEqual(model["checkpoint_weight_bytes"], 172923364096)
         self.assertEqual(model["served_name"], "mimo-v2.6-flash-mopd")
-        self.assertEqual(runtime["recipe"], "vllm_mimov26r9700_v0.1")
+        self.assertEqual(runtime["recipe"], "vllm_mimov26r9700ar8_v0.1")
         self.assertEqual(runtime["attention_backend"], "TRITON_ATTN_DIFFKV")
         self.assertEqual(runtime["speculative_config"]["num_speculative_tokens"], 7)
+        self.assertEqual(
+            runtime["required_patches"],
+            ["0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008"],
+        )
+        self.assertFalse(runtime["parallel"]["disable_custom_all_reduce"])
+        self.assertNotIn("VLLM_TARGET_DEVICE", runtime["environment"])
+        self.assertEqual(runtime["environment"]["R9K_ARN_MAX_KB"], "256")
         self.assertEqual(
             model["auxiliary_artifacts"][0]["sha256"],
             "94d9c02c17e0b469f88699e98424825ebe13a17f07eb3b86727b5e0c8143d287",
@@ -933,6 +945,31 @@ class ProductionProfileTests(unittest.TestCase):
             with self.subTest(request=request):
                 self.assertIs(normalize_qwen38_reasoning_effort(request), request)
 
+    def test_mimo_output_limit_clamps_long_requests_without_mutation(self) -> None:
+        request = {
+            "model": "hosted_vllm/mimo-v2.6-flash-mopd",
+            "max_tokens": 64000,
+            "max_completion_tokens": 32768,
+        }
+
+        updated = limit_mimo_output_tokens(request)
+
+        self.assertIsNot(updated, request)
+        self.assertEqual(updated["max_tokens"], 32000)
+        self.assertEqual(updated["max_completion_tokens"], 32000)
+        self.assertEqual(request["max_tokens"], 64000)
+
+    def test_mimo_output_limit_preserves_normal_and_other_requests(self) -> None:
+        requests = [
+            {"model": "mimo-v2.6-flash", "max_tokens": 32000},
+            {"model": "mimo-v2.6-flash", "max_tokens": 2048},
+            {"model": "qwen3.8-flash-next-thinking", "max_tokens": 32000},
+            {"model": "mimo-v2.6-flash"},
+        ]
+        for request in requests:
+            with self.subTest(request=request):
+                self.assertIs(limit_mimo_output_tokens(request), request)
+
     def test_litellm_binds_the_shared_qwen_alias_to_the_active_profile(self) -> None:
         profile_name, model = proxy._active_anthropic_model(
             {"profile": "qwen38-flash-uncensored"}
@@ -953,9 +990,10 @@ class ProductionProfileTests(unittest.TestCase):
             "model: os.environ/HOSTED_INFERENCE_OPENAI_MODEL",
             "temperature: 1.0",
             "top_p: 0.95",
-            "repetition_penalty: 1.05",
+            "enable_thinking: false",
         ):
             self.assertIn(expected, block)
+        self.assertNotIn("repetition_penalty:", block)
         for removed_fence in (
             "parallel_tool_calls: false",
             'stop:\n        - "</tool_call>"',

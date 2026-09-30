@@ -128,6 +128,7 @@ class AdaptiveToolBatch:
         tool_id: str | None,
         name: str | None,
         arguments_delta: str | None,
+        finalize: bool = True,
         now: float | None = None,
     ) -> GuardResult:
         added_bytes = sum(
@@ -155,11 +156,24 @@ class AdaptiveToolBatch:
         if arguments_delta:
             builder.argument_parts.append(arguments_delta)
 
-        if not builder.name or not builder.raw_arguments:
+        if not finalize:
+            return GuardResult(stop=False)
+        return self._finalize_index(index, strict=False)
+
+    def finalize(self, index: int) -> GuardResult:
+        return self._finalize_index(index, strict=True)
+
+    def _finalize_index(self, index: int, *, strict: bool) -> GuardResult:
+        builder = self.builders.get(index)
+        if builder is None or not builder.name or not builder.raw_arguments:
+            if strict:
+                return self._stop("incomplete_arguments")
             return GuardResult(stop=False)
         try:
             arguments = json.loads(builder.raw_arguments)
         except json.JSONDecodeError:
+            if strict:
+                return self._stop("incomplete_arguments")
             return GuardResult(stop=False)
         if not isinstance(arguments, dict):
             return self._stop("arguments_not_object")
@@ -299,13 +313,350 @@ def _synthetic_finish_chunk(
     return type(template)(**payload)
 
 
+@dataclass(frozen=True)
+class _AnthropicSSEFrame:
+    raw: str
+    event: dict[str, Any] | None
+    tool_index: int | None = None
+
+
+def _pop_sse_frames(buffer: str) -> tuple[list[str], str]:
+    frames: list[str] = []
+    while buffer:
+        lf_end = buffer.find("\n\n")
+        crlf_end = buffer.find("\r\n\r\n")
+        candidates = [
+            (position, width)
+            for position, width in ((lf_end, 2), (crlf_end, 4))
+            if position >= 0
+        ]
+        if not candidates:
+            break
+        position, width = min(candidates)
+        end = position + width
+        frames.append(buffer[:end])
+        buffer = buffer[end:]
+    return frames, buffer
+
+
+def _parse_sse_event(frame: str) -> dict[str, Any] | None:
+    data_lines: list[str] = []
+    for line in frame.replace("\r\n", "\n").splitlines():
+        if not line.startswith("data:"):
+            continue
+        value = line[5:]
+        if value.startswith(" "):
+            value = value[1:]
+        data_lines.append(value)
+    if not data_lines:
+        return None
+    try:
+        payload = json.loads("\n".join(data_lines))
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _sse_wire(value: str, *, as_bytes: bool) -> str | bytes:
+    return value.encode("utf-8") if as_bytes else value
+
+
+def _synthetic_anthropic_finish(
+    *, has_tools: bool, as_bytes: bool
+) -> tuple[str | bytes, ...]:
+    stop_reason = "tool_use" if has_tools else "end_turn"
+    delta = json.dumps(
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": stop_reason, "stop_sequence": None},
+            "usage": {"output_tokens": 0},
+        },
+        separators=(",", ":"),
+    )
+    stop = json.dumps({"type": "message_stop"}, separators=(",", ":"))
+    return (
+        _sse_wire(f"event: message_delta\ndata: {delta}\n\n", as_bytes=as_bytes),
+        _sse_wire(f"event: message_stop\ndata: {stop}\n\n", as_bytes=as_bytes),
+    )
+
+
+def _rewrite_anthropic_tool_id(
+    frame: _AnthropicSSEFrame,
+    emitted_ids: dict[int, str],
+) -> str:
+    if frame.tool_index is None or frame.event is None:
+        return frame.raw
+    event = frame.event
+    if event.get("type") != "content_block_start":
+        return frame.raw
+    content = event.get("content_block")
+    if not isinstance(content, dict) or content.get("type") != "tool_use":
+        return frame.raw
+    emitted_id = emitted_ids.get(frame.tool_index)
+    if not emitted_id or content.get("id") == emitted_id:
+        return frame.raw
+    updated = dict(event)
+    updated_content = dict(content)
+    updated_content["id"] = emitted_id
+    updated["content_block"] = updated_content
+    payload = json.dumps(updated, ensure_ascii=False, separators=(",", ":"))
+    return f"event: content_block_start\ndata: {payload}\n\n"
+
+
+async def _adaptive_anthropic_sse_stream(
+    response: AsyncIterator[Any],
+    iterator: AsyncIterator[Any],
+    first_chunk: str | bytes,
+    *,
+    now: Any,
+) -> AsyncGenerator[Any, None]:
+    as_bytes = isinstance(first_chunk, bytes)
+    pending: list[str | bytes] = [first_chunk]
+    text_buffer = ""
+    batch: AdaptiveToolBatch | None = None
+    held: list[_AnthropicSSEFrame] = []
+    initial_inputs: dict[int, dict[str, Any]] = {}
+    active_tools: set[int] = set()
+    request_id = "unknown"
+    closed = False
+    upstream_finished = False
+    stopped_early = False
+    natural_finish = False
+
+    async def close_upstream() -> None:
+        nonlocal closed
+        if closed:
+            return
+        closed = True
+        closer = getattr(response, "aclose", None)
+        if callable(closer):
+            await closer()
+
+    async def emit_held(
+        *, synthetic_finish: bool
+    ) -> AsyncGenerator[str | bytes, None]:
+        if batch is None:
+            return
+        retained = batch.retained_indexes
+        terminal_types = {"message_delta", "message_stop"}
+        for frame in held:
+            event_type = frame.event.get("type") if frame.event else None
+            if frame.tool_index is not None and frame.tool_index not in retained:
+                continue
+            if synthetic_finish and event_type in terminal_types:
+                continue
+            raw = _rewrite_anthropic_tool_id(frame, batch.emitted_ids)
+            yield _sse_wire(raw, as_bytes=as_bytes)
+        if synthetic_finish:
+            for terminal in _synthetic_anthropic_finish(
+                has_tools=bool(batch.retained),
+                as_bytes=as_bytes,
+            ):
+                yield terminal
+
+    def hold_and_process(frame_raw: str) -> GuardResult:
+        nonlocal batch, request_id, natural_finish
+        event = _parse_sse_event(frame_raw)
+        event_type = event.get("type") if event else None
+        if event_type == "message_start":
+            message = event.get("message")
+            if isinstance(message, dict) and isinstance(message.get("id"), str):
+                request_id = message["id"]
+
+        index_value = event.get("index") if event else None
+        index = index_value if isinstance(index_value, int) else None
+        content = event.get("content_block") if event else None
+        is_tool_start = (
+            event_type == "content_block_start"
+            and index is not None
+            and isinstance(content, dict)
+            and content.get("type") == "tool_use"
+        )
+
+        if batch is None and not is_tool_start:
+            return GuardResult(stop=False, reason="passthrough")
+        if batch is None:
+            batch = AdaptiveToolBatch(started_at=now())
+
+        tool_index: int | None = index if index in active_tools else None
+        if is_tool_start:
+            assert index is not None
+            active_tools.add(index)
+            tool_index = index
+            initial = content.get("input")
+            if isinstance(initial, dict):
+                initial_inputs[index] = initial
+            result = batch.feed(
+                index=index,
+                tool_id=(
+                    content.get("id")
+                    if isinstance(content.get("id"), str)
+                    else None
+                ),
+                name=(
+                    content.get("name")
+                    if isinstance(content.get("name"), str)
+                    else None
+                ),
+                arguments_delta=None,
+                finalize=False,
+                now=now(),
+            )
+            held.append(_AnthropicSSEFrame(frame_raw, event, tool_index))
+            return result
+
+        if event_type == "content_block_delta" and index in active_tools:
+            assert index is not None
+            delta = event.get("delta")
+            partial = (
+                delta.get("partial_json")
+                if isinstance(delta, dict) and delta.get("type") == "input_json_delta"
+                else None
+            )
+            held.append(_AnthropicSSEFrame(frame_raw, event, index))
+            if isinstance(partial, str):
+                return batch.feed(
+                    index=index,
+                    tool_id=None,
+                    name=None,
+                    arguments_delta=partial,
+                    finalize=False,
+                    now=now(),
+                )
+            return GuardResult(stop=False)
+
+        if event_type == "content_block_stop" and index in active_tools:
+            assert index is not None
+            held.append(_AnthropicSSEFrame(frame_raw, event, index))
+            builder = batch.builders.get(index)
+            if builder is not None and not builder.raw_arguments:
+                initial = initial_inputs.get(index, {})
+                seed = json.dumps(initial, ensure_ascii=False, separators=(",", ":"))
+                result = batch.feed(
+                    index=index,
+                    tool_id=None,
+                    name=None,
+                    arguments_delta=seed,
+                    finalize=False,
+                    now=now(),
+                )
+                if result.stop:
+                    return result
+            active_tools.discard(index)
+            return batch.finalize(index)
+
+        held.append(_AnthropicSSEFrame(frame_raw, event, tool_index))
+        if event_type == "message_stop":
+            natural_finish = True
+            return batch.finish()
+        return GuardResult(stop=False)
+
+    try:
+        while True:
+            if pending:
+                raw_chunk = pending.pop(0)
+            else:
+                try:
+                    if batch is None:
+                        raw_chunk = await anext(iterator)
+                    else:
+                        remaining = batch.seconds_remaining(now())
+                        if remaining <= 0:
+                            batch._stop("time_limit")
+                            stopped_early = True
+                            break
+                        raw_chunk = await asyncio.wait_for(
+                            anext(iterator), timeout=remaining
+                        )
+                except StopAsyncIteration:
+                    upstream_finished = True
+                    break
+                except TimeoutError:
+                    if batch is not None:
+                        batch._stop("time_limit")
+                    stopped_early = True
+                    break
+
+            if not isinstance(raw_chunk, (str, bytes)):
+                if batch is None:
+                    if text_buffer:
+                        yield _sse_wire(text_buffer, as_bytes=as_bytes)
+                        text_buffer = ""
+                    yield raw_chunk
+                    continue
+                batch._stop("mixed_stream_types")
+                stopped_early = True
+                break
+            try:
+                text_buffer += (
+                    raw_chunk.decode("utf-8")
+                    if isinstance(raw_chunk, bytes)
+                    else raw_chunk
+                )
+            except UnicodeDecodeError:
+                if batch is None:
+                    if text_buffer:
+                        yield _sse_wire(text_buffer, as_bytes=as_bytes)
+                        text_buffer = ""
+                    yield raw_chunk
+                    continue
+                batch._stop("invalid_utf8")
+                stopped_early = True
+                break
+
+            frames, text_buffer = _pop_sse_frames(text_buffer)
+            for frame_raw in frames:
+                result = hold_and_process(frame_raw)
+                if result.reason == "passthrough":
+                    yield _sse_wire(frame_raw, as_bytes=as_bytes)
+                    continue
+                if result.stop:
+                    stopped_early = True
+                    break
+            if stopped_early or natural_finish:
+                break
+
+        if batch is None:
+            if text_buffer:
+                yield _sse_wire(text_buffer, as_bytes=as_bytes)
+            if not upstream_finished:
+                async for trailing in iterator:
+                    yield trailing
+                upstream_finished = True
+            return
+
+        if text_buffer:
+            batch._stop("incomplete_sse_frame")
+            stopped_early = True
+        if not natural_finish and not stopped_early:
+            finish_result = batch.finish()
+            if not finish_result.stop:
+                batch._stop("missing_finish")
+            stopped_early = True
+        if stopped_early and not upstream_finished:
+            await close_upstream()
+        _log_guard(batch, request_id, streamed=True)
+        async for guarded in emit_held(synthetic_finish=stopped_early):
+            yield guarded
+        if natural_finish and not stopped_early:
+            async for trailing in iterator:
+                yield trailing
+            upstream_finished = True
+    finally:
+        if not upstream_finished:
+            await close_upstream()
+
+
 def is_mimo_tool_request(request_data: dict[str, Any]) -> bool:
     model_values = [
         request_data.get("model"),
         (request_data.get("litellm_params") or {}).get("model"),
         (request_data.get("metadata") or {}).get("model_group"),
     ]
-    return bool(request_data.get("tools")) and any(
+    tools = request_data.get("tools") or (request_data.get("litellm_params") or {}).get(
+        "tools"
+    )
+    return bool(tools) and any(
         isinstance(value, str) and "mimo-v2.6-flash" in value.lower()
         for value in model_values
     )
@@ -385,6 +736,24 @@ async def adaptive_tool_stream(
         return
 
     iterator = response.__aiter__()
+    try:
+        first_chunk = await anext(iterator)
+    except StopAsyncIteration:
+        return
+    if isinstance(first_chunk, (str, bytes)):
+        guarded_sse = _adaptive_anthropic_sse_stream(
+            response,
+            iterator,
+            first_chunk,
+            now=now,
+        )
+        try:
+            async for chunk in guarded_sse:
+                yield chunk
+        finally:
+            await guarded_sse.aclose()
+        return
+
     batch: AdaptiveToolBatch | None = None
     buffered: list[Any] = []
     last_tool_chunk: Any | None = None
@@ -410,12 +779,16 @@ async def adaptive_tool_stream(
             if filtered is not None and _finish_reason(filtered) is None:
                 yield filtered
 
+    pending_chunk: Any | None = first_chunk
     stopped_early = False
     natural_finish: Any | None = None
     try:
         while True:
             try:
-                if batch is None:
+                if pending_chunk is not None:
+                    chunk = pending_chunk
+                    pending_chunk = None
+                elif batch is None:
                     chunk = await anext(iterator)
                 else:
                     remaining = batch.seconds_remaining(now())
